@@ -86,25 +86,33 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
-- **2026-07-18 「分身の術」構成(共有インスタンス化)を実装、ビルド未検証で
-  中断**: ユーザー指示「open-cudaとaruaru-llmとRPoemやopen-cosmoや
-  open-raid-zやaruaru-dbなどは...ドメイン毎にインストールする必要は
-  ないように」「管理はopen-easy-webで行なうように」に基づき、
-  `src/tenants.rs`(`TenantRegistry`)を新設し、`main.rs`に
-  `POST /admin/tenants`・`GET /admin/tenants`・
-  `DELETE /admin/tenants/:host`(`x-admin-token`ヘッダ認証)を配線、
-  `/v1/chat`に任意の`tenant`フィールドを追加した。**このパスでは
-  `cargo build`/`cargo test`による実検証が完了していない**
-  (直前にビルド中断・プロセスロックが発生し、ユーザー指示で
-  ビルド確認自体を中止してドキュメント整備を優先したため)。
-  次回以降: (1) `cargo build`/`cargo test`で実際に動くことを確認する
-  (特に`poem::Route`の`.at()`に`post(...).get(...)`のメソッドチェーンが
-  正しいAPIかどうか、`Path<String>`抽出子の使い方に誤りがないか等、
-  未検証のまま残っている点に注意)、(2) `open-easy-web`側から実際に
-  この`/admin/tenants`APIを呼び出す統合(`appserver_registration.rs`の
-  拡張)、(3) `open-cuda`・`RPoem`・`RCosmo`・`open-raid-z`・`aruaru-db`
-  への同パターン展開は本リポジトリの範囲外(それぞれのリポジトリで
-  対応、`open-raid-z/CLAUDE.md`に引き継ぎ事項として記録済み)。
+- **2026-07-18 「分身の術」構成のビルド・実HTTP検証完了**: 前回パスで
+  未検証のまま残っていた`src/tenants.rs`/`main.rs`の変更を実際に
+  ビルド・実行して検証した。`cargo build`成功、`cargo test`
+  **10件全green**(`tenants::tests`4件・`scoring::tests`6件)。
+  さらに実バイナリを起動し、`curl`で実HTTPリクエストにより
+  `/healthz`→`/v1/chat`(tenant無し)→`POST /admin/tenants`→
+  `GET /admin/tenants`(登録確認)→`/v1/chat`(tenant付き)→
+  `DELETE /admin/tenants/:host`→`GET /admin/tenants`(削除確認、
+  空配列)という一連のフローが型チェックだけでなく実際に正しく
+  動作することを確認した(`poem::Route::at().post(...).get(...)`の
+  メソッドチェーン、`Path<String>`抽出子とも問題なし)。
+  **エコシステム内の展開状況調査**: `RPoem`(`crates/
+  open-runo-gateway/src/appserver_tenants.rs`・`open-runo-appserver/src/
+  tenant_bridge.rs`)・`RCosmo`(同様)・`open-web-server`
+  (`crates/open-web-server-gateway/src/tenant_router.rs`・
+  `handlers/tenants.rs`)には**既にこの「分身の術」パターンが実装済み**
+  であることが判明。`open-cuda`・`open-raid-z`はHTTPサービスではなく
+  ライブラリ(GPUランタイム/ストレージ)のため、そもそも「ドメインごとの
+  個別インストール」という概念自体が当てはまらず、path依存として
+  複数プロジェクトから共有される時点で要件を自然に満たしている
+  (追加のTenantRegistry実装は不要と判断)。`aruaru-db`は既存の
+  `aruaru-server`(pgwire)自体が既に「1インスタンスを複数クライアント
+  アプリが接続して共有する」設計であり、HTTPの`/admin/tenants`的な
+  仕組みを別途持つよりSQLデータベース/スキーマ単位のマルチテナント性を
+  活かす方が自然——今回は追加実装を見送り、この判断根拠を記録するに
+  留めた。**残る実装対象は`open-easy-web`側からの管理統合のみ**
+  (`appserver_registration.rs`拡張、次のHANDOFFエントリ参照)。
 
 - **2026-07-18 新規作成**: ユーザー指示により、`e-gov.info`の
   `chat_commerce.rs`と同等のルールベース応答ロジックを、独立したHTTP
