@@ -1,0 +1,22 @@
+[package]
+name = "aruaru-llm"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "aruaru-llm"
+path = "src/main.rs"
+
+[dependencies]
+poem = "3.1"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+anyhow = "1"
+# open-cudaのCPUバックエンドをpath依存として使う(SET構成、CLAUDE.md参照)。
+# デフォルトfeature(winfsp_backend/gpu_accel)を持たないため、WinFsp SDK/dxc
+# 等は不要——rayon+anyhow+thiserror+tracingのみの軽量な依存グラフ。
+opencuda-core = { path = "../open-cuda/crates/opencuda-core" }
+opencuda-cpu = { path = "../open-cuda/crates/opencuda-cpu" }
