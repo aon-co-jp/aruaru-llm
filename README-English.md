@@ -27,9 +27,17 @@ future work.
 
 ## API
 
-- `POST /v1/chat` — `{"message": "..."}` → `{"reply": "...", "engine":
+- `POST /v1/chat` — `{"message": "...", "tenant": "..."(optional)}` → `{"reply": "...", "engine":
   "...", "matched_intent": "..."}`
+- `POST /admin/tenants` / `GET /admin/tenants` / `DELETE /admin/tenants/:host` — tenant registration management (`x-admin-token` header auth)
 - `GET /healthz` — health check
+
+## "Shadow clone" (分身の術) architecture
+
+Following the same design as `open-web-server`: a single running instance
+is shared by multiple domains, with no per-domain install required.
+Management is intended to happen from [open-easy-web](https://github.com/aon-co-jp/open-easy-web)
+(that integration is not yet wired up). See [CLAUDE.md](CLAUDE.md) for details.
 
 ## Tech stack
 
