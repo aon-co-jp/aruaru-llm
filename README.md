@@ -24,9 +24,16 @@ GPUランタイム)の`opencuda-core`/`opencuda-cpu`をpath依存として使い
 
 ## API
 
-- `POST /v1/chat` — `{"message": "..."}` → `{"reply": "...", "engine":
+- `POST /v1/chat` — `{"message": "...", "tenant": "..."(任意)}` → `{"reply": "...", "engine":
   "...", "matched_intent": "..."}`
+- `POST /admin/tenants` / `GET /admin/tenants` / `DELETE /admin/tenants/:host` — テナント登録管理(`x-admin-token`ヘッダ認証)
 - `GET /healthz` — ヘルスチェック
+
+## 「分身の術」構成
+
+`open-web-server`と同じ設計思想で、1インスタンスを複数ドメインが共有する
+(ドメインごとの個別インストール不要)。管理は[open-easy-web](https://github.com/aon-co-jp/open-easy-web)
+側から行う想定(統合は未着手)。詳細は[CLAUDE.md](CLAUDE.md)を参照。
 
 ## 技術スタック
 

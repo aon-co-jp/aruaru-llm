@@ -32,6 +32,17 @@
 パターン。デバイスをリクエストごとに再生成せず、起動時に1回だけ生成して
 `app.data(device)`で共有する。
 
+## 4. 「分身の術」テナント登録パターン(`open-web-server`と共通)
+
+`src/tenants.rs`の`TenantRegistry`(`RwLock<HashMap<String, TenantInfo>>`)
++ `main.rs`の`POST /admin/tenants`・`GET /admin/tenants`・
+`DELETE /admin/tenants/:host`(`x-admin-token`ヘッダ簡易認証)は、
+「1インスタンスを複数ドメインが共有し、ドメインごとの個別インストールを
+不要にする」という`open-web-server`/`open-easy-web`と同じ設計思想の
+最小実装。他プロジェクトへ移植する際は、この3ファイル
+(`tenants.rs`本体、`main.rs`の管理ハンドラ、`check_admin_token`)を
+そのままコピーし、`TenantInfo`のフィールドだけ用途に応じて拡張すること。
+
 ## 注意事項
 
 - 本プロジェクトは「LLM」を名乗るが実際にはニューラル推論を行わない
