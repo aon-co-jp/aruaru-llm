@@ -130,6 +130,54 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-07-20 open-easy-web連携の実地検証・ドキュメント齟齬の是正
+  (ユーザー指示: ドキュメント修正だけで終わらせず実用性・完成度を高める)**:
+  1. **齟齬(1) — CLAUDE.md本文が古いまま**: 下記2026-07-18エントリの
+     「残る実装対象はopen-easy-web側からの管理統合のみ」という記述は、
+     実際には`open-easy-web`側で`server/src/appserver_registration.rs`の
+     `AppServerKind::AruaruLlm`/`register_aruaru_llm()`が2026-07-18に
+     実装され、2026-07-19にWASM側UI配線(`src/profiles.rs`の
+     `appserver_kind_for()`、`src/shell.rs`の`<select>`選択肢)も完了
+     済みであることが、`open-easy-web/CLAUDE.md`のHANDOFFで確認できた
+     (このリポジトリのCLAUDE.mdだけが追記漏れで古いままだった)。
+  2. **実地検証(型チェックだけで終わらせない)**: `cargo build`
+     警告0件、`cargo test` **10件全green**(既存のtenants 4件・
+     scoring 6件、リグレッション無し)。さらに実バイナリを
+     `E_GOV_LLM_ADMIN_TOKEN=test-token`で起動し、`open-easy-web`の
+     `register_aruaru_llm()`が実際に送信するリクエスト形状
+     (`POST /admin/tenants`、`x-admin-token`ヘッダ、
+     `{"host":"...","label":null}`)をそのまま`curl`で再現して検証:
+     トークン無し→`401`、正しいトークン→`200 ok`→
+     `GET /admin/tenants`で`[{"host":"e-gov.info","label":null}]`が
+     返る→`DELETE /admin/tenants/e-gov.info`→削除後`[]`。
+     `POST /v1/chat`(`tenant`付き)も実際に`gov`インテントへ正しく
+     一致し実際の応答文が返ることを確認。これにより、`open-easy-web`
+     側のモックサーバーテスト(`registers_aruaru_llm_tenant_with_
+     expected_shape`)が検証しているリクエスト形状と、このリポジトリの
+     実際の受け口が**双方とも実HTTPで整合している**ことを確認した
+     (両リポジトリのソース突き合わせ+実HTTP、モックのみに頼らない)。
+  3. **見つけた別の問題(このパスで修正済み)**: 作業ツリーに、
+     `README.md`/`README-English.md`へ存在しない10ヶ国語README
+     (`README-Japan.md`/`README-Chinese.md`等、実際にはこのリポジトリに
+     存在しないファイル)へのリンクを追加する未コミットの変更が残って
+     いた——他リポジトリ(`open-easy-web`等)の「10ヶ国語README」運用
+     ルールを誤って本リポジトリに適用しようとした形跡と見られる、
+     リンク切れになる差分だったため`git checkout`で破棄した。
+  4. **個人情報監査**: `src/`・`Cargo.toml`・README/CLAUDE.md/PORTING.md
+     に実メールアドレス・実電話番号・実APIキー等のハードコードは
+     見つからなかった(該当なし、変更不要)。
+  5. **スコープ外として記録(今回は変更していない)**: `e-gov.info`
+     (`F:\open-runo\e-gov.info\src\chat_commerce.rs`)は、いまだに
+     自前のルールベース応答ロジックを直接持ったままで、本サービス
+     (`aruaru-llm`)へのHTTP問い合わせに置き換えられていない
+     (このCLAUDE.mdの2026-07-18エントリで「検討事項」として記載
+     済みのまま未着手)。今回の指示は`aruaru-llm`リポジトリ自身の
+     完成度が対象のため着手しなかったが、次回以降のエコシステム
+     全体の完成度向上の候補として引き続き記録する。
+  - 次にすべきこと: (1) `e-gov.info`側を実際に`aruaru-llm`への
+    HTTP問い合わせに置き換えるかどうかの判断・実装、(2) `open-cuda`の
+    Phase 3(BLAS/Attention)進捗の定期確認。
+
 - **2026-07-18 「分身の術」構成のビルド・実HTTP検証完了**: 前回パスで
   未検証のまま残っていた`src/tenants.rs`/`main.rs`の変更を実際に
   ビルド・実行して検証した。`cargo build`成功、`cargo test`
