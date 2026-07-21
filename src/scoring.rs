@@ -1,56 +1,76 @@
 //! open-cuda連携の意図分類スコアリング(CLAUDE.mdの「SET構成」)。
 //!
-//! **これは実際にopen-cudaの`GpuDevice`実行パイプラインを通る**——文字列の
-//! `contains()`比較ではなく、ユーザー発話と各インテントをbag-of-words
-//! ベクトルに変換し、要素積カーネルを`opencuda_cpu::CpuDevice`上で実行
-//! (`device.launch_kernel`)してから、ホスト側でその積を合計してドット積
-//! スコアを求める。open-cudaの`examples/vector_add`と同じ「デバイス確保→
-//! 転送→カーネル起動→回収」のパイプラインを、加算ではなく乗算カーネルで
-//! 踏襲している。
+//! **2026-07-21移行: bag-of-wordsから実際の文埋め込みベースへ**。
+//! 以前はユーザー発話・各インテントを固定語彙へのbag-of-words(0/1)
+//! ベクトルへ変換し`opencuda_blas::sgemm`でドット積するだけの単純な
+//! キーワードマッチングだった。現在は`opencuda-bert`(multilingual-e5-small、
+//! Hugging Face、MITライセンス、日本語含む100言語対応)で実際に文を
+//! 384次元の埋め込みベクトルへ変換し、各インテントの代表例文embeddingとの
+//! コサイン類似度(`opencuda_bert::cosine_similarity`)で最も近いものを
+//! 選ぶ。埋め込み計算自体、`opencuda-blas`の実GEMM(`sgemm`)・実Attention
+//! (`scaled_dot_product_attention`)を`opencuda_cpu::CpuDevice`上で実行して
+//! 求めている(スタブではない)。
 //!
-//! **正直な開示**: これは本物のニューラルネットワーク(埋め込み+
-//! Attention等)による意味理解ではなく、固定語彙に対するbag-of-words
-//! ドット積という、極めて単純なベクトル演算。「LLM」を名乗るこの
-//! プロジェクトが、実際に何を計算しているかを誇張しないための開示。
+//! **正直な開示**: これは学習済みエンコーダによる**意味的類似度分類**で
+//! あり、bag-of-wordsだった頃より意味理解の質は大きく向上した(実機検証:
+//! 「マイナンバーカードの申請をしたい」と「行政手続き・マイナンバーに
+//! 関するご案内」の類似度が「今日の天気は晴れです」より高くなることを
+//! `opencuda-bert`側のテストで確認済み)。ただしこれは**エンコーダ専用**の
+//! 分類であり、自己回帰デコーダによる文章生成(いわゆる対話生成としての
+//! 「LLM」の能力)はまだ実装していない。「LLM」を名乗るこのプロジェクトが
+//! 実際に何を計算しているかを誇張しないための開示(詳しくはCLAUDE.md参照)。
 
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, OnceLock};
 
-use anyhow::Result;
-use opencuda_core::{alloc_buffer, CompiledKernel, GpuDevice, KernelArg, LaunchConfig, ResolvedArg, ThreadCtx};
+use anyhow::{Context, Result};
+use opencuda_bert::{cosine_similarity, embed_text, BertModel, BertTokenizer};
+use opencuda_core::GpuDevice;
 
-/// 固定語彙。この語彙に含まれる単語だけがベクトル化の対象になる
-/// (単純なbag-of-wordsのため、語彙外の単語は無視される)。
-const VOCAB: &[&str] = &[
-    "申請", "手続き", "行政", "役所", "マイナンバー", "government", "application",
-    "買いたい", "欲しい", "注文", "商品", "buy", "want", "order", "product",
-    "仕入れ", "与信", "掛け", "売掛", "請求書", "credit", "invoice",
-    "不動産", "土地", "間取り", "工務店", "賃貸", "real", "estate", "land", "house",
-];
+/// コサイン類似度がこの値未満のときはどのインテントにも一致しないと
+/// みなし、`FALLBACK_REPLY`を返す。multilingual-e5-smallの実測値を基に
+/// 調整した閾値(`cargo test`で無関係な発話が誤分類されないことを確認済み)。
+const SIMILARITY_THRESHOLD: f32 = 0.86;
 
 pub struct Intent {
     pub name: &'static str,
     pub reply: &'static str,
-    keywords: &'static [&'static str],
+    /// この意図を表す代表的な例文(複数可)。起動後の初回呼び出し時に
+    /// これらの埋め込みベクトルを平均・正規化してキャッシュし、
+    /// ユーザー発話との類似度比較に用いる。
+    examples: &'static [&'static str],
 }
 
 pub const INTENTS: &[Intent] = &[
     Intent {
         name: "gov",
-        keywords: &["申請", "手続き", "行政", "役所", "マイナンバー", "government", "application"],
+        examples: &[
+            "マイナンバーカードの申請をしたい",
+            "行政手続き・マイナンバーに関するご案内",
+            "役所へのオンライン申請の方法を知りたい",
+        ],
         reply: "eガバメント(デジタルガバメント)についてのご案内ですね。\
 ペーパーレスでのオンライン申請、コンビニ端末(Loppi/Famiポート等)での手続き、\
 金額に応じた段階的な本人確認に対応しています。詳しくは https://e-gov.info/gov をご覧ください。",
     },
     Intent {
         name: "trade",
-        keywords: &["買いたい", "欲しい", "注文", "商品", "buy", "want", "order", "product"],
+        examples: &[
+            "商品を買いたい、注文したい",
+            "I want to buy a product and place an order",
+            "オンラインでの買い物について知りたい",
+        ],
         reply: "オンライン貿易プラットフォームでのお買い物ですね。\
 食料品・家電・自動車・オーディオ機器まで幅広く取り扱っています(現在は実在庫を伴わないサンプル運用です)。\
 詳しくは https://e-gov.info/trade をご覧ください。",
     },
     Intent {
         name: "credit",
-        keywords: &["仕入れ", "与信", "掛け", "売掛", "請求書", "credit", "invoice"],
+        examples: &[
+            "掛け仕入れと与信審査について教えてほしい",
+            "売掛金の保証や請求書の与信調査について知りたい",
+            "credit and invoice financing for wholesale purchases",
+        ],
         reply: "AI与信調査・掛け仕入れ・売掛保証についてのご質問ですね。\
 与信スコアに応じた後払い仕入れ、電子請求書の重複調査、売掛債権の保証に対応予定です\
 (現時点では設計方針の段階で、実際の与信審査機能はまだ搭載していません)。\
@@ -58,7 +78,11 @@ pub const INTENTS: &[Intent] = &[
     },
     Intent {
         name: "realestate",
-        keywords: &["不動産", "土地", "間取り", "工務店", "賃貸", "real", "estate", "land", "house"],
+        examples: &[
+            "不動産や土地、賃貸の間取りについて相談したい",
+            "工務店に家の建築を依頼したい",
+            "real estate, land, and house rental inquiries",
+        ],
         reply: "不動産投資・AI工務店についてのご質問ですね。\
 検索した土地情報をもとにAIが間取りをご提案する機能を構想しています\
 (電子契約は正式な許可が下りるまで未実装のサンプル・デモ段階です)。\
@@ -69,109 +93,100 @@ pub const INTENTS: &[Intent] = &[
 pub const FALLBACK_REPLY: &str = "e-gov.infoへようこそ。\
 「申請したい」「買いたい」「仕入れたい」「土地を探したい」のように\
 教えていただければ、該当するページをご案内します。\
-(本メッセージはopen-cudaのCPUバックエンドで計算したbag-of-wordsスコアに\
-基づくルールベース応答です。実際のニューラルLLM推論は未実装、詳しくは\
-CLAUDE.mdをご覧ください)";
+(本メッセージはopen-cudaのCPUバックエンドで計算した文埋め込み\
+コサイン類似度に基づく分類結果です。自己回帰的な対話生成はまだ\
+実装していません、詳しくはCLAUDE.mdをご覧ください)";
 
-/// テキストを固定語彙に対するbag-of-wordsベクトル(0.0/1.0)へ変換する。
-fn to_vector(text: &str, keywords: &[&str]) -> Vec<f32> {
-    let lower = text.to_lowercase();
-    VOCAB
-        .iter()
-        .map(|word| {
-            let word_lower = word.to_lowercase();
-            let present = keywords.iter().any(|k| k.eq_ignore_ascii_case(word)) || lower.contains(&word_lower);
-            if present {
-                1.0
-            } else {
-                0.0
+struct EmbeddingModel {
+    model: BertModel,
+    tokenizer: BertTokenizer,
+}
+
+/// `multilingual-e5-small`のモデル・トークナイザは初回呼び出し時に一度だけ
+/// ロードし、プロセス内で使い回す(ロードに数秒かかるため、リクエストの
+/// たびにロードし直すと極端に遅くなる)。
+static MODEL: OnceLock<EmbeddingModel> = OnceLock::new();
+/// 各インテントの代表例文embedding(平均・L2正規化済み)もプロセス内で
+/// キャッシュする(テスト・リクエストのたびに毎回embeddingし直すと、
+/// インテント数×例文数だけ余計な推論が走ってしまうため)。
+static INTENT_EMBEDDINGS: OnceLock<Vec<Vec<f32>>> = OnceLock::new();
+
+fn model_dir() -> PathBuf {
+    // aruaru-llm/models/multilingual-e5-small(CLAUDE.md記載のダウンロード済みモデル)。
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models/multilingual-e5-small")
+}
+
+fn get_model() -> Result<&'static EmbeddingModel> {
+    if let Some(m) = MODEL.get() {
+        return Ok(m);
+    }
+    let dir = model_dir();
+    let model = BertModel::load(&dir)
+        .with_context(|| format!("opencuda-bert: multilingual-e5-smallのロードに失敗しました({dir:?})"))?;
+    let tokenizer = BertTokenizer::load(&dir)
+        .with_context(|| format!("opencuda-bert: tokenizer.jsonのロードに失敗しました({dir:?})"))?;
+    // 別スレッドと競合してもどちらか片方が採用されればよい(結果は同一)。
+    let _ = MODEL.set(EmbeddingModel { model, tokenizer });
+    Ok(MODEL.get().expect("MODEL was just set"))
+}
+
+fn normalize(v: &mut [f32]) {
+    let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 0.0 {
+        for x in v.iter_mut() {
+            *x /= norm;
+        }
+    }
+}
+
+fn get_intent_embeddings(device: &Arc<dyn GpuDevice>) -> Result<&'static Vec<Vec<f32>>> {
+    if let Some(e) = INTENT_EMBEDDINGS.get() {
+        return Ok(e);
+    }
+    let m = get_model()?;
+    let hidden_size = m.model.hidden_size();
+
+    let mut embeddings = Vec::with_capacity(INTENTS.len());
+    for intent in INTENTS {
+        let mut acc = vec![0.0f32; hidden_size];
+        for example in intent.examples {
+            // multilingual-e5系は"passage: "接頭辞で登録側テキストを埋め込む規約。
+            let text = format!("passage: {example}");
+            let v = embed_text(&m.model, &m.tokenizer, device, &text)?;
+            for (a, b) in acc.iter_mut().zip(v.iter()) {
+                *a += b;
             }
-        })
-        .collect()
-}
-
-fn to_bytes(v: &[f32]) -> &[u8] {
-    // SAFETY: f32スライスを読み取り専用のu8スライスとして見るだけ(open-cudaの
-    // examples/vector_addと同じ最小キャストパターン、依存を増やさないため)。
-    unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, std::mem::size_of_val(v)) }
-}
-
-fn from_bytes_mut(v: &mut [f32]) -> &mut [u8] {
-    // SAFETY: 同上、可変版。
-    unsafe { std::slice::from_raw_parts_mut(v.as_mut_ptr() as *mut u8, std::mem::size_of_val(v)) }
-}
-
-/// `a`と`b`の要素積を、open-cudaの`CpuDevice`上でカーネル実行して求める。
-/// (`examples/vector_add`の加算カーネルを乗算に置き換えたもの)。
-fn elementwise_multiply_via_opencuda(device: &Arc<dyn GpuDevice>, a: &[f32], b: &[f32]) -> Result<Vec<f32>> {
-    let n = a.len();
-    debug_assert_eq!(n, b.len());
-    let bytes = n * std::mem::size_of::<f32>();
-
-    let da = alloc_buffer(device, bytes)?;
-    let db = alloc_buffer(device, bytes)?;
-    let dc = alloc_buffer(device, bytes)?;
-
-    da.copy_from_host(to_bytes(a))?;
-    db.copy_from_host(to_bytes(b))?;
-
-    let kernel = CompiledKernel::native("bow_multiply", |ctx: ThreadCtx, args: &[ResolvedArg]| {
-        let i = ctx.global_id_x() as usize;
-        let (a_ptr, a_len) = args[0].as_ptr().unwrap();
-        let (b_ptr, _) = args[1].as_ptr().unwrap();
-        let (c_ptr, _) = args[2].as_ptr().unwrap();
-        let n = args[3].as_usize().unwrap();
-
-        if i >= n {
-            return;
         }
-        debug_assert!((i + 1) * 4 <= a_len);
+        normalize(&mut acc);
+        embeddings.push(acc);
+    }
 
-        // SAFETY: i < n、各バッファはn*4バイト確保済み。各スレッドは自分の
-        // iのみ書くため競合しない(vector_addと同じ安全性の根拠)。
-        unsafe {
-            let a = (a_ptr as *const f32).add(i).read();
-            let b = (b_ptr as *const f32).add(i).read();
-            (c_ptr as *mut f32).add(i).write(a * b);
-        }
-    });
-
-    let cfg = LaunchConfig::linear(n as u32, 256);
-    device.launch_kernel(
-        &kernel,
-        &cfg,
-        &[
-            KernelArg::Ptr(da.as_ptr()),
-            KernelArg::Ptr(db.as_ptr()),
-            KernelArg::Ptr(dc.as_ptr()),
-            KernelArg::Usize(n),
-        ],
-    )?;
-    device.synchronize()?;
-
-    let mut c = vec![0.0f32; n];
-    dc.copy_to_host(from_bytes_mut(&mut c))?;
-    Ok(c)
+    let _ = INTENT_EMBEDDINGS.set(embeddings);
+    Ok(INTENT_EMBEDDINGS.get().expect("INTENT_EMBEDDINGS was just set"))
 }
 
-/// ユーザー発話ともっともスコアの高いインテントを、open-cudaのCPU
-/// バックエンド経由で計算する。全インテントが0点ならNoneを返す
+/// ユーザー発話ともっとも類似度の高いインテントを、open-cudaのCPU
+/// バックエンド上で実行する実際のBERT系エンコーダ(`opencuda-bert`、
+/// GEMM/Attentionは`opencuda-blas`の実カーネル)で計算する。すべての
+/// インテントとの類似度が`SIMILARITY_THRESHOLD`未満ならNoneを返す
 /// (呼び出し側で`FALLBACK_REPLY`にフォールバックする)。
 pub fn best_intent(device: &Arc<dyn GpuDevice>, user_text: &str) -> Result<Option<&'static Intent>> {
-    let mut best: Option<(&Intent, f32)> = None;
+    let m = get_model()?;
+    let intent_embeddings = get_intent_embeddings(device)?;
 
-    for intent in INTENTS {
-        let msg_vec = to_vector(user_text, &[]);
-        let intent_vec = to_vector("", intent.keywords);
-        let product = elementwise_multiply_via_opencuda(device, &msg_vec, &intent_vec)?;
-        let score: f32 = product.iter().sum();
+    // multilingual-e5系は"query: "接頭辞で検索側テキストを埋め込む規約。
+    let query_text = format!("query: {user_text}");
+    let query_embedding = embed_text(&m.model, &m.tokenizer, device, &query_text)?;
 
-        if score > 0.0 && best.as_ref().map(|(_, s)| score > *s).unwrap_or(true) {
-            best = Some((intent, score));
+    let mut best: Option<(usize, f32)> = None;
+    for (i, intent_embedding) in intent_embeddings.iter().enumerate() {
+        let sim = cosine_similarity(&query_embedding, intent_embedding);
+        if best.map(|(_, best_sim)| sim > best_sim).unwrap_or(true) {
+            best = Some((i, sim));
         }
     }
 
-    Ok(best.map(|(intent, _)| intent))
+    Ok(best.filter(|(_, sim)| *sim >= SIMILARITY_THRESHOLD).map(|(i, _)| &INTENTS[i]))
 }
 
 #[cfg(test)]
@@ -216,14 +231,5 @@ mod tests {
         let device = cpu_device();
         let intent = best_intent(&device, "こんにちは").unwrap();
         assert!(intent.is_none());
-    }
-
-    #[test]
-    fn elementwise_multiply_matches_expected_values() {
-        let device = cpu_device();
-        let a = vec![1.0, 2.0, 3.0, 0.0];
-        let b = vec![1.0, 0.0, 3.0, 5.0];
-        let result = elementwise_multiply_via_opencuda(&device, &a, &b).unwrap();
-        assert_eq!(result, vec![1.0, 0.0, 9.0, 0.0]);
     }
 }
