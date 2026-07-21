@@ -1,13 +1,13 @@
 //! aruaru-llm — aruaruエコシステム共通の「AIチャットコマース」応答サービス。
 //!
-//! **正直な開示(最重要、詳細はCLAUDE.md参照)**: v0.1.0時点では実際の
-//! ニューラルLLM推論を一切行わない。open-cuda(`opencuda-core`/
-//! `opencuda-cpu`)のCPUバックエンドを使い、bag-of-wordsベクトルの
-//! 要素積カーネルを実行してドット積スコアを求める、単純なベクトル演算
-//! ベースの意図分類。「open-cudaとSET」という位置づけは、open-cudaの
-//! GPU/CPU実行パイプラインを実際に呼び出している(Cargo依存だけでなく
-//! 実行時に本当に通る)という意味であり、Attention機構等を伴う本物の
-//! Transformer推論ではない。
+//! **正直な開示(最重要、詳細はCLAUDE.md参照)**: 2026-07-21時点では
+//! 自己回帰デコーダによる文章生成(いわゆる対話生成としての「LLM」の
+//! 能力)は実装していない。`open-cuda`の`opencuda-bert`クレート
+//! (multilingual-e5-small、MITライセンス)で実際に文を埋め込みベクトルへ
+//! 変換し、`opencuda-blas`の実GEMM(`sgemm`)・実Attention
+//! (`scaled_dot_product_attention`)を`opencuda_cpu::CpuDevice`上で実行して
+//! 意図ごとの代表例文とのコサイン類似度を求める、エンコーダベースの
+//! 意味的類似度分類(旧: 固定語彙bag-of-wordsのドット積)。
 //!
 //! **「分身の術」構成**: このサービスは1インスタンスを複数ドメインが
 //! 共有する設計(`src/tenants.rs`参照)。ドメインを追加するたびに
@@ -59,19 +59,19 @@ fn chat(
     match scoring::best_intent(device, &req.message) {
         Ok(Some(intent)) => Json(ChatResponse {
             reply: intent.reply.to_string(),
-            engine: "rule-based-v0-opencuda-cpu",
+            engine: "embedding-cosine-v0-opencuda-bert-cpu",
             matched_intent: Some(intent.name),
         }),
         Ok(None) => Json(ChatResponse {
             reply: scoring::FALLBACK_REPLY.to_string(),
-            engine: "rule-based-v0-opencuda-cpu",
+            engine: "embedding-cosine-v0-opencuda-bert-cpu",
             matched_intent: None,
         }),
         Err(err) => {
             tracing::warn!("scoring failed: {err}");
             Json(ChatResponse {
                 reply: scoring::FALLBACK_REPLY.to_string(),
-                engine: "rule-based-v0-opencuda-cpu-error",
+                engine: "embedding-cosine-v0-opencuda-bert-cpu-error",
                 matched_intent: None,
             })
         }

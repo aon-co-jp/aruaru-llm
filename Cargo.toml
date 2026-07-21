@@ -20,3 +20,7 @@ anyhow = "1"
 # 等は不要——rayon+anyhow+thiserror+tracingのみの軽量な依存グラフ。
 opencuda-core = { path = "../open-cuda/crates/opencuda-core" }
 opencuda-cpu = { path = "../open-cuda/crates/opencuda-cpu" }
+opencuda-blas = { path = "../open-cuda/crates/opencuda-blas" }
+# multilingual-e5-small(MIT)による実際の文埋め込み+コサイン類似度で意図分類する
+# (旧: 固定語彙bag-of-words、2026-07-21移行、CLAUDE.md参照)。
+opencuda-bert = { path = "../open-cuda/crates/opencuda-bert" }
