@@ -306,3 +306,12 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
   明記した。次回以降: open-cudaの`opencuda-blas`(Phase 3、GEMM/
   Attention)が実装され次第、この単純なドット積スコアリングを実際の
   埋め込みベクトル類似度計算に置き換える余地がある。
+---
+
+## エコシステム全体マップ(2026-07-21追記)
+
+同時並行開発の対象プロジェクト一覧・各リポジトリの現況は
+[`open-raid-z`のCLAUDE.md](https://github.com/aon-co-jp/open-raid-z/blob/main/CLAUDE.md)
+「関連プロジェクト」節を参照。**どのリポジトリから読み始めても、
+この節を起点に他プロジェクトへ辿れる**ようにしてある(このリポジトリ
+自身の状況はこの上のHANDOFF節を参照)。
