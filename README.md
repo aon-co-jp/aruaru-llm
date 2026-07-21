@@ -1,5 +1,12 @@
 # aruaru-llm
 
+**開発開始日: 2026-07-18**(このリポジトリのGitHub作成日)
+
+Python向けのAIライブラリとLLMをRust向けの書き直しを開始しました。
+ベースになったのは、このaruaru-llm(開発途中)＋
+[open-cuda](https://github.com/aon-co-jp/open-cuda)(Windows＋MAC＋LINUX互換
+＆ INTEL＋AMD＋nVIDIA互換を開発途中です)。
+
 `aruaru`エコシステム(aruaru-tokyo・aruaru-db・e-gov.info・karu.tokyo等)
 共通の「AIチャットコマース」応答サービス。各サイトが個別にチャット応答
 ロジックを持つのではなく、このHTTPサービスに問い合わせる構成にすることで、
