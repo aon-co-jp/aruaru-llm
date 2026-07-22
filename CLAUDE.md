@@ -164,6 +164,35 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-07-22 応答言語の多言語対応 + 起動時ウォームアップ(コールドスタート対策)**:
+  前回HANDOFFの「次にすべきこと」(1)(2)を実装した(バックグラウンド
+  エージェントの異常終了により未コミットのまま残っていたのを本セッションで
+  発見・検証・コミット)。
+  - `ChatRequest`に`lang: String`(`#[serde(default = "default_lang")]`で
+    既定`"ja"`、既存呼び出し元との後方互換を維持)を追加。
+    `ChatResponse`に`reply_lang`(実際に返した言語)・`lang_fallback`
+    (要求言語が未対応で英語へフォールバックしたか)を追加。
+  - 各`Intent`に`reply_en`(英語訳)を追加し、`Intent::reply_for(lang)`/
+    `scoring::fallback_reply_for(lang)`で`"ja"`→日本語、`"en"`→英語、
+    それ以外→英語へフォールバックしつつ`lang_fallback: true`で正直に
+    通知(黙って日本語へ落とさない、「graceful degradation, never
+    silent」方針)。
+  - `main()`起動時、`Server::run`の前に`scoring::warmup(&device)`を
+    呼び出し、opencuda-bertのモデルロード+インテント代表ベクトル計算を
+    前倒しで済ませる(実測5.58秒、warmup前は初回リクエストが
+    e-gov.info側の3秒タイムアウトを超えていた問題への対策)。
+  - 新規テスト4件追加(`reply_for_ja_returns_japanese_unchanged`、
+    `reply_for_en_returns_english_translation`、
+    `reply_for_unsupported_lang_falls_back_to_english_with_indicator`、
+    `fallback_reply_for_respects_lang_and_flags_unsupported`)。
+    `cargo test --release`は13件全passed。
+  - 検証: 実際に`cargo build --release`→サーバー起動→
+    `POST /v1/chat`へ実リクエスト送信で、`reply_lang`/`lang_fallback`を
+    含む正しい応答(`credit`インテント一致、embedding-cosine経路)を
+    確認済み(2026-07-22)。
+  - README.mdの開示文言も、旧bag-of-words時代の記述のまま更新漏れして
+    いたのを、現状のembedding-cosine分類の説明に合わせて修正した。
+
 - **2026-07-22 `e-gov.info`側がこのサービスへのHTTP問い合わせに置き換わった
   (このリポジトリ自体は無変更)**: 下記2026-07-21エントリで「次にすべき
   こと」として記録していた「`e-gov.info`側を実際にaruaru-llmへのHTTP問い
