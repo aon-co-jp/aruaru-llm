@@ -15,6 +15,7 @@
 //! `POST /admin/tenants`で動的登録するだけでよい。
 
 mod scoring;
+mod security;
 mod tenants;
 
 use std::sync::Arc;
@@ -108,6 +109,57 @@ fn chat(
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct ClassifySecurityRequest {
+    /// 判定対象のコード片、または振る舞いの説明文。
+    text: String,
+    #[serde(default)]
+    tenant: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ClassifySecurityResponse {
+    label: &'static str,
+    description: &'static str,
+    score: f32,
+    is_suspicious: bool,
+    engine: &'static str,
+}
+
+/// RS-Guardの「AI二次判定」用エンドポイント。静的ルールに引っかからない
+/// コード片を受け取り、マルウェア/スパイウェア/常駐・自動巡回/正常の
+/// いずれに意味的に最も近いかを埋め込みコサイン類似度で返す。
+/// **正直な開示**: 訓練済みマルウェア分類器ではなく汎用埋め込みの
+/// ヒューリスティック。`engine`にその旨を明示する。
+#[handler]
+fn classify_security(Json(req): Json<ClassifySecurityRequest>, Data(device): Data<&Arc<dyn GpuDevice>>) -> Json<ClassifySecurityResponse> {
+    if let Some(tenant) = &req.tenant {
+        tracing::info!("classify-security request from tenant: {tenant}");
+    }
+    match security::classify_security(device, &req.text) {
+        Ok(v) => Json(ClassifySecurityResponse {
+            label: v.label,
+            description: v.description,
+            score: v.score,
+            is_suspicious: v.is_suspicious,
+            engine: "embedding-cosine-heuristic-v0-opencuda-bert-cpu",
+        }),
+        Err(err) => {
+            tracing::warn!("classify_security failed: {err}");
+            // 判定不能なときは黙って「安全」とは言わない——is_suspicious=false
+            // だが、engineでエラーだったことを正直に示し、呼び出し側が
+            // 静的結果のみで判断できるようにする。
+            Json(ClassifySecurityResponse {
+                label: "unknown",
+                description: "classification failed; rely on static findings only",
+                score: 0.0,
+                is_suspicious: false,
+                engine: "embedding-cosine-heuristic-v0-opencuda-bert-cpu-error",
+            })
+        }
+    }
+}
+
 /// `E_GOV_LLM_ADMIN_TOKEN`が設定されていれば`x-admin-token`ヘッダとの
 /// 一致を要求する。未設定の場合は誰でも管理APIを呼べてしまうため、
 /// 本番運用では必ず設定すること(`open-web-server`の`TenantRegistry`
@@ -179,12 +231,18 @@ async fn main() -> Result<(), std::io::Error> {
             Ok(()) => tracing::info!("warmup complete in {:?} (model loaded, intent embeddings cached)", warmup_started.elapsed()),
             Err(err) => tracing::warn!("warmup failed (will retry lazily on first request): {err}"),
         }
+        // セキュリティ分類のカテゴリ代表ベクトルも起動時に前倒しキャッシュ。
+        match security::warmup(&device) {
+            Ok(()) => tracing::info!("security classifier warmup complete (category embeddings cached)"),
+            Err(err) => tracing::warn!("security warmup failed (will retry lazily on first request): {err}"),
+        }
     }
 
     let registry = Arc::new(TenantRegistry::new());
 
     let app = Route::new()
         .at("/v1/chat", post(chat))
+        .at("/v1/classify-security", post(classify_security))
         .at("/admin/tenants", post(admin_register_tenant).get(admin_list_tenants))
         .at("/admin/tenants/:host", delete(admin_remove_tenant))
         .at("/healthz", get(healthz))
