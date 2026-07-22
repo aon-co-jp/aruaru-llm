@@ -182,13 +182,25 @@ fn get_model() -> Result<&'static EmbeddingModel> {
     Ok(MODEL.get().expect("MODEL was just set"))
 }
 
-fn normalize(v: &mut [f32]) {
+pub(crate) fn normalize(v: &mut [f32]) {
     let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
     if norm > 0.0 {
         for x in v.iter_mut() {
             *x /= norm;
         }
     }
+}
+
+/// multilingual-e5系の規約に沿って1テキストを埋め込む共有ヘルパー。
+/// `security`モジュール等が、モデルを二重ロードせずに(同じ`OnceLock`
+/// キャッシュを使って)埋め込みを計算できるよう`pub(crate)`で公開する。
+/// `is_query`が`true`なら`"query: "`接頭辞(検索側)、`false`なら
+/// `"passage: "`接頭辞(登録側)を付ける。
+pub(crate) fn embed(device: &Arc<dyn GpuDevice>, text: &str, is_query: bool) -> Result<Vec<f32>> {
+    let m = get_model()?;
+    let prefix = if is_query { "query: " } else { "passage: " };
+    let prefixed = format!("{prefix}{text}");
+    embed_text(&m.model, &m.tokenizer, device, &prefixed)
 }
 
 fn get_intent_embeddings(device: &Arc<dyn GpuDevice>) -> Result<&'static Vec<Vec<f32>>> {
