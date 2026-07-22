@@ -35,6 +35,16 @@ struct ChatRequest {
     /// 構造という位置づけ)。
     #[serde(default)]
     tenant: Option<String>,
+    /// 応答言語(任意、既定`"ja"`)。2026-07-22追記: e-gov.info自体は
+    /// 13言語対応だが、本サービス経由の応答は従来日本語固定だった非対称を
+    /// 解消するために追加(CLAUDE.md 2026-07-22 HANDOFF参照)。未送信の
+    /// 既存呼び出し元との後方互換のため`"ja"`をデフォルトにする。
+    #[serde(default = "default_lang")]
+    lang: String,
+}
+
+fn default_lang() -> String {
+    "ja".to_string()
 }
 
 #[derive(Debug, Serialize)]
@@ -42,6 +52,13 @@ struct ChatResponse {
     reply: String,
     engine: &'static str,
     matched_intent: Option<&'static str>,
+    /// 実際に返した応答の言語(`"ja"`または`"en"`、現状の対応言語)。
+    reply_lang: &'static str,
+    /// `true`の場合、リクエストされた`lang`に対応する翻訳が無かったため
+    /// 英語へフォールバックしたことを示す(黙って日本語へ落とさない、
+    /// このエコシステムの「graceful degradation, never silent」方針、
+    /// CLAUDE.md参照)。
+    lang_fallback: bool,
 }
 
 #[handler]
@@ -57,22 +74,35 @@ fn chat(
     }
 
     match scoring::best_intent(device, &req.message) {
-        Ok(Some(intent)) => Json(ChatResponse {
-            reply: intent.reply.to_string(),
-            engine: "embedding-cosine-v0-opencuda-bert-cpu",
-            matched_intent: Some(intent.name),
-        }),
-        Ok(None) => Json(ChatResponse {
-            reply: scoring::FALLBACK_REPLY.to_string(),
-            engine: "embedding-cosine-v0-opencuda-bert-cpu",
-            matched_intent: None,
-        }),
+        Ok(Some(intent)) => {
+            let (reply, reply_lang, lang_fallback) = intent.reply_for(&req.lang);
+            Json(ChatResponse {
+                reply: reply.to_string(),
+                engine: "embedding-cosine-v0-opencuda-bert-cpu",
+                matched_intent: Some(intent.name),
+                reply_lang,
+                lang_fallback,
+            })
+        }
+        Ok(None) => {
+            let (reply, reply_lang, lang_fallback) = scoring::fallback_reply_for(&req.lang);
+            Json(ChatResponse {
+                reply: reply.to_string(),
+                engine: "embedding-cosine-v0-opencuda-bert-cpu",
+                matched_intent: None,
+                reply_lang,
+                lang_fallback,
+            })
+        }
         Err(err) => {
             tracing::warn!("scoring failed: {err}");
+            let (reply, reply_lang, lang_fallback) = scoring::fallback_reply_for(&req.lang);
             Json(ChatResponse {
-                reply: scoring::FALLBACK_REPLY.to_string(),
+                reply: reply.to_string(),
                 engine: "embedding-cosine-v0-opencuda-bert-cpu-error",
                 matched_intent: None,
+                reply_lang,
+                lang_fallback,
             })
         }
     }
@@ -136,6 +166,20 @@ async fn main() -> Result<(), std::io::Error> {
     // `std::thread::available_parallelism()`から検出)。
     let device: Arc<dyn GpuDevice> = CpuDevice::new(0);
     tracing::info!("aruaru-llm using open-cuda device: {}", device.info().name);
+
+    // コールドスタート対策(2026-07-22追記、CLAUDE.md HANDOFF参照):
+    // opencuda-bertのモデルロード+インテントembedding計算(数秒)を、
+    // サーバがTCP接続を受け付け始める前にここで前倒しで済ませておく。
+    // これをやらないと「実際のリクエストが来て初めてOnceLockへロードする」
+    // ことになり、e-gov.info等の呼び出し元タイムアウト(実測3秒)を
+    // 超える初回リクエスト遅延が発生する(実際に観測済み)。
+    {
+        let warmup_started = std::time::Instant::now();
+        match scoring::warmup(&device) {
+            Ok(()) => tracing::info!("warmup complete in {:?} (model loaded, intent embeddings cached)", warmup_started.elapsed()),
+            Err(err) => tracing::warn!("warmup failed (will retry lazily on first request): {err}"),
+        }
+    }
 
     let registry = Arc::new(TenantRegistry::new());
 

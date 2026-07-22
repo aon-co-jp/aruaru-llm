@@ -35,10 +35,31 @@ const SIMILARITY_THRESHOLD: f32 = 0.86;
 pub struct Intent {
     pub name: &'static str,
     pub reply: &'static str,
+    /// 英語訳の定型応答文。`lang != "ja"`のリクエストはまずこれを使う
+    /// (2026-07-22追記: e-gov.infoが本サービスへ問い合わせるようになり、
+    /// e-gov.info自体は13言語対応なのに本サービス経由だと日本語固定に
+    /// なってしまう非対称を解消するため)。
+    pub reply_en: &'static str,
     /// この意図を表す代表的な例文(複数可)。起動後の初回呼び出し時に
     /// これらの埋め込みベクトルを平均・正規化してキャッシュし、
     /// ユーザー発話との類似度比較に用いる。
     examples: &'static [&'static str],
+}
+
+impl Intent {
+    /// 要求言語に応じた応答文を返す。`(reply, actual_lang, was_fallback)`。
+    /// `lang == "ja"`なら日本語、それ以外は英語(現状唯一の翻訳先)を返す。
+    /// `lang`が`"ja"`でも`"en"`でもない(未対応言語)場合は、無言で
+    /// 日本語へ落とすのではなく英語へフォールバックし、`was_fallback`で
+    /// それを呼び出し側へ正直に伝える(「graceful degradation, never
+    /// silent」というこのエコシステムの方針、CLAUDE.md参照)。
+    pub fn reply_for(&self, lang: &str) -> (&'static str, &'static str, bool) {
+        match lang {
+            "ja" => (self.reply, "ja", false),
+            "en" => (self.reply_en, "en", false),
+            _ => (self.reply_en, "en", true),
+        }
+    }
 }
 
 pub const INTENTS: &[Intent] = &[
@@ -52,6 +73,9 @@ pub const INTENTS: &[Intent] = &[
         reply: "eガバメント(デジタルガバメント)についてのご案内ですね。\
 ペーパーレスでのオンライン申請、コンビニ端末(Loppi/Famiポート等)での手続き、\
 金額に応じた段階的な本人確認に対応しています。詳しくは https://e-gov.info/gov をご覧ください。",
+        reply_en: "It sounds like you're asking about e-Government (digital government) services. \
+We support paperless online applications, procedures via convenience-store terminals (Loppi/Famiport, etc.), \
+and tiered identity verification based on transaction amount. See https://e-gov.info/gov for details.",
     },
     Intent {
         name: "trade",
@@ -63,6 +87,9 @@ pub const INTENTS: &[Intent] = &[
         reply: "オンライン貿易プラットフォームでのお買い物ですね。\
 食料品・家電・自動車・オーディオ機器まで幅広く取り扱っています(現在は実在庫を伴わないサンプル運用です)。\
 詳しくは https://e-gov.info/trade をご覧ください。",
+        reply_en: "It sounds like you're interested in shopping on our online trade platform. \
+We carry a wide range of goods, from groceries to home appliances, automobiles, and audio equipment \
+(currently a sample operation with no real inventory). See https://e-gov.info/trade for details.",
     },
     Intent {
         name: "credit",
@@ -75,6 +102,10 @@ pub const INTENTS: &[Intent] = &[
 与信スコアに応じた後払い仕入れ、電子請求書の重複調査、売掛債権の保証に対応予定です\
 (現時点では設計方針の段階で、実際の与信審査機能はまだ搭載していません)。\
 詳しくは https://e-gov.info/credit をご覧ください。",
+        reply_en: "It sounds like you're asking about AI-based credit screening, buy-now-pay-later wholesale \
+purchasing, or accounts-receivable guarantees. We plan to offer credit-score-based deferred payment for \
+purchasing, duplicate-invoice detection, and receivables guarantees (this is currently at the design stage; \
+actual credit screening is not yet implemented). See https://e-gov.info/credit for details.",
     },
     Intent {
         name: "realestate",
@@ -87,6 +118,10 @@ pub const INTENTS: &[Intent] = &[
 検索した土地情報をもとにAIが間取りをご提案する機能を構想しています\
 (電子契約は正式な許可が下りるまで未実装のサンプル・デモ段階です)。\
 詳しくは https://e-gov.info/realestate をご覧ください。",
+        reply_en: "It sounds like you're asking about real estate investment or our AI-assisted builder service. \
+We're planning a feature where AI suggests floor plans based on land data you search for \
+(electronic contracts are not yet implemented and remain a sample/demo pending formal approval). \
+See https://e-gov.info/realestate for details.",
     },
 ];
 
@@ -96,6 +131,23 @@ pub const FALLBACK_REPLY: &str = "e-gov.infoへようこそ。\
 (本メッセージはopen-cudaのCPUバックエンドで計算した文埋め込み\
 コサイン類似度に基づく分類結果です。自己回帰的な対話生成はまだ\
 実装していません、詳しくはCLAUDE.mdをご覧ください)";
+
+pub const FALLBACK_REPLY_EN: &str = "Welcome to e-gov.info. \
+Try telling us what you'd like to do, e.g. \"I want to apply\", \"I want to buy something\", \
+\"I want to purchase inventory\", or \"I'm looking for land\", and we'll point you to the right page. \
+(This message is a classification result based on text-embedding cosine similarity computed on the \
+open-cuda CPU backend. Autoregressive dialogue generation is not yet implemented; see CLAUDE.md for details.)";
+
+/// [`FALLBACK_REPLY`]の言語別版。[`Intent::reply_for`]と同じ規約:
+/// `"ja"`は日本語、それ以外は英語(未対応言語は無言で日本語へ落とさず
+/// 英語へフォールバックし、その旨を返す)。
+pub fn fallback_reply_for(lang: &str) -> (&'static str, &'static str, bool) {
+    match lang {
+        "ja" => (FALLBACK_REPLY, "ja", false),
+        "en" => (FALLBACK_REPLY_EN, "en", false),
+        _ => (FALLBACK_REPLY_EN, "en", true),
+    }
+}
 
 struct EmbeddingModel {
     model: BertModel,
@@ -189,6 +241,24 @@ pub fn best_intent(device: &Arc<dyn GpuDevice>, user_text: &str) -> Result<Optio
     Ok(best.filter(|(_, sim)| *sim >= SIMILARITY_THRESHOLD).map(|(i, _)| &INTENTS[i]))
 }
 
+/// コールドスタート対策(2026-07-22追記、CLAUDE.md 2026-07-22 HANDOFF参照):
+/// `opencuda-bert`モデル・トークナイザのロードとインテント代表ベクトルの
+/// 計算は、いずれも`OnceLock`により初回呼び出し時に一度だけ実行される
+/// 設計だが、それを「サーバが接続を受け付け始めた後の最初の実リクエスト」
+/// 任せにすると、呼び出し元(e-gov.info等)のタイムアウト(実測3秒)を
+/// 超えてしまうことが実際に観測された。この関数を`main()`の起動処理で
+/// (`Server::new(...).run(app)`より前に)一度呼び出すことで、モデルロード+
+/// ダミー推論をサーバ起動時に前倒しし、実際のリクエストが来る頃には
+/// すでにウォーム状態にしておく。
+pub fn warmup(device: &Arc<dyn GpuDevice>) -> Result<()> {
+    // best_intentと全く同じコードパス(get_model→get_intent_embeddings→
+    // embed_text)を通すダミー推論。ここで計算した結果自体は捨ててよく、
+    // 目的はOnceLockへのモデルロード・インテントembeddingキャッシュの
+    // 前倒しのみ。
+    let _ = best_intent(device, "warmup")?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -231,5 +301,55 @@ mod tests {
         let device = cpu_device();
         let intent = best_intent(&device, "こんにちは").unwrap();
         assert!(intent.is_none());
+    }
+
+    #[test]
+    fn reply_for_ja_returns_japanese_unchanged() {
+        let device = cpu_device();
+        let intent = best_intent(&device, "マイナンバーカードの申請をしたい").unwrap().unwrap();
+        let (reply, lang, fallback) = intent.reply_for("ja");
+        assert_eq!(reply, intent.reply);
+        assert_eq!(lang, "ja");
+        assert!(!fallback);
+        assert!(reply.contains("eガバメント"));
+    }
+
+    #[test]
+    fn reply_for_en_returns_english_translation() {
+        let device = cpu_device();
+        let intent = best_intent(&device, "マイナンバーカードの申請をしたい").unwrap().unwrap();
+        let (reply, lang, fallback) = intent.reply_for("en");
+        assert_eq!(reply, intent.reply_en);
+        assert_eq!(lang, "en");
+        assert!(!fallback);
+        assert!(reply.contains("e-Government"));
+    }
+
+    #[test]
+    fn reply_for_unsupported_lang_falls_back_to_english_with_indicator() {
+        let device = cpu_device();
+        let intent = best_intent(&device, "マイナンバーカードの申請をしたい").unwrap().unwrap();
+        let (reply, lang, fallback) = intent.reply_for("fr");
+        assert_eq!(reply, intent.reply_en);
+        assert_eq!(lang, "en");
+        assert!(fallback, "unsupported language should fall back to English, not silently to Japanese");
+    }
+
+    #[test]
+    fn fallback_reply_for_respects_lang_and_flags_unsupported() {
+        let (ja_reply, ja_lang, ja_fallback) = fallback_reply_for("ja");
+        assert_eq!(ja_reply, FALLBACK_REPLY);
+        assert_eq!(ja_lang, "ja");
+        assert!(!ja_fallback);
+
+        let (en_reply, en_lang, en_fallback) = fallback_reply_for("en");
+        assert_eq!(en_reply, FALLBACK_REPLY_EN);
+        assert_eq!(en_lang, "en");
+        assert!(!en_fallback);
+
+        let (unsupported_reply, unsupported_lang, unsupported_fallback) = fallback_reply_for("zh");
+        assert_eq!(unsupported_reply, FALLBACK_REPLY_EN);
+        assert_eq!(unsupported_lang, "en");
+        assert!(unsupported_fallback);
     }
 }
