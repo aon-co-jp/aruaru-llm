@@ -164,6 +164,34 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-07-23(続き) 3点セット(`install.sh`/`install.ps1`/
+  `.github/workflows/release.yml`)を新規追加、v0.1.0タグでCI成功・
+  GitHub Release実在確認まで完了**: エコシステム全体インストーラー
+  整備計画(正本: `open-raid-z/CLAUDE.md`「エコシステム全体
+  インストーラー整備計画」節)の一環、以前は3点セット丸ごと未整備
+  だったリポジトリの1つ。
+  1. `install.sh`(systemdサービス登録)・`install.ps1`(Windows
+     サービス登録案内)を新規作成。**正直な開示**: 起動時に470MB超の
+     `multilingual-e5-small`モデル重み(Hugging Face配布、MIT)を
+     読み込むが、ライセンス上の理由でこのインストーラーには同梱せず、
+     両スクリプトに`huggingface-cli download`での取得手順を明記した。
+  2. `release.yml`: `Cargo.toml`が`../open-cuda/crates/opencuda-*`を
+     path依存しているため(sibling path依存)、CI環境でも同じ相対位置
+     (リポジトリルートの1つ上)へ`open-cuda`をgit cloneするステップを
+     追加(aruaru-db/open-web-server/RPoemで実際に踏んだ「sibling
+     path依存を忘れるとCI失敗」という罠を踏まないための対応)。
+     Linux x86_64・Windows x86_64向けにビルドし、GitHub Releasesへ
+     `softprops/action-gh-release@v2`で添付する構成。
+  3. `v0.1.0`タグを実際にpushし、`gh run list`で2ジョブ(Linux/
+     Windows)とも`completed success`、`gh release view v0.1.0`で
+     `aruaru-llm-linux-x86_64.tar.gz`/`aruaru-llm-windows-x86_64.zip`
+     の両方が実在することを確認した(型チェックのみでの完了報告では
+     ない——sibling path依存を踏まえたCI初回成功は他リポジトリでは
+     複数回の修正が必要だった実例があるため、特に注意して確認した)。
+  4. README(日英両方)にインストール手順節を新設。
+  - 次にすべきこと: Android版インストーラー(未着手、他リポジトリと
+    共通のバックログ)。
+
 - **2026-07-23 (関連リポジトリ動向の記録) `open-cuda`のDirectXバック
   エンドにmatmulカーネル対応・GPU圧縮/暗号化カーネル(ChaCha20)を実装**:
   このリポジトリが利用する`open-cuda`側で、`opencuda-directx`クレート

@@ -60,6 +60,25 @@ DB非依存・1バイナリ完結。
 詳細な設計思想は [CLAUDE.md](CLAUDE.md) を、他プロジェクトへの移植手順は
 [PORTING.md](PORTING.md) を参照してください。
 
+## インストール
+
+2026-07-23、`install.sh`(Linux、systemdサービス登録)・`install.ps1`
+(Windows、サービス登録案内)・`.github/workflows/release.yml`(タグ
+push時にLinux x86_64・Windows x86_64向けバイナリを自動ビルドし
+[GitHub Releases](https://github.com/aon-co-jp/aruaru-llm/releases)へ
+添付)の3点セットを追加した。**正直な開示**: 起動には470MB超の
+`multilingual-e5-small`モデル重み(Hugging Face配布、MIT)を別途
+取得する必要がある(ライセンス上の理由でインストーラーに同梱していない、
+`install.sh`/`install.ps1`にダウンロード手順を記載)。ビルドは
+`../open-cuda`へのsibling path依存があるため、ソースからビルドする
+場合は`open-cuda`を隣接ディレクトリへcloneしておくこと(CIでは
+`release.yml`が自動でclone)。
+
+```
+curl -fsSL https://github.com/aon-co-jp/aruaru-llm/releases/latest/download/aruaru-llm-linux-x86_64.tar.gz | tar xz
+sudo ./install.sh
+```
+
 ## 関連プロジェクト
 
 - [open-cuda](https://github.com/aon-co-jp/open-cuda) — GPUランタイム(SET構成の相方)
