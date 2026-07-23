@@ -47,6 +47,26 @@ No DB dependency, single self-contained binary.
 See [CLAUDE.md](CLAUDE.md) for the design philosophy and
 [PORTING.md](PORTING.md) for how to port these patterns elsewhere.
 
+## Install
+
+As of 2026-07-23, `install.sh` (Linux, registers a systemd service),
+`install.ps1` (Windows, prints Windows service registration steps), and
+`.github/workflows/release.yml` (builds Linux x86_64 / Windows x86_64
+binaries on every tag push and attaches them to
+[GitHub Releases](https://github.com/aon-co-jp/aruaru-llm/releases)) were
+added. **Honest disclosure**: at startup this binary needs the 470MB+
+`multilingual-e5-small` model weights (Hugging Face, MIT license) fetched
+separately — not bundled with the installer for licensing reasons; see
+`install.sh`/`install.ps1` for the download command. The build has a
+sibling path dependency on `../open-cuda`, so building from source requires
+cloning `open-cuda` into an adjacent directory (CI does this
+automatically via `release.yml`).
+
+```
+curl -fsSL https://github.com/aon-co-jp/aruaru-llm/releases/latest/download/aruaru-llm-linux-x86_64.tar.gz | tar xz
+sudo ./install.sh
+```
+
 ## Related projects
 
 - [open-cuda](https://github.com/aon-co-jp/open-cuda) — GPU runtime (the SET pairing)
