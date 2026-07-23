@@ -1,0 +1,78 @@
+name: Release binaries
+
+# タグ(例: v0.1.0)をpushすると、Linux(x86_64-unknown-linux-gnu)・
+# Windows(x86_64)向けにビルドし、GitHub Releasesへ添付する。
+#
+# sibling path依存: Cargo.tomlが`../open-cuda/crates/opencuda-*`を
+# path依存しているため、CI環境でも同じ相対位置(リポジトリルートの
+# 1つ上)へopen-cudaをcheckoutする(aruaru-db/open-web-server/RPoemで
+# 実際に踏んだ「sibling path依存を忘れるとCI失敗」という罠を踏まない
+# ための対応、詳細はopen-raid-z/CLAUDE.md参照)。
+#
+# 正直な開示: このバイナリは起動時に470MB超のmultilingual-e5-small
+# モデル重みを実行時に読み込む(このワークフローには含まれない、
+# install.sh/install.ps1に案内あり)。
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    name: Linux (x86_64-unknown-linux-gnu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout open-cuda (sibling path dependency)
+        run: git clone --depth=1 https://github.com/aon-co-jp/open-cuda.git ../open-cuda
+      - name: Build
+        run: cargo build --release --bin aruaru-llm
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp target/release/aruaru-llm dist/aruaru-llm
+          cp install.sh dist/install.sh
+          tar -czf aruaru-llm-linux-x86_64.tar.gz -C dist aruaru-llm install.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aruaru-llm-linux-x86_64
+          path: aruaru-llm-linux-x86_64.tar.gz
+
+  build-windows:
+    name: Windows (x86_64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout open-cuda (sibling path dependency)
+        run: git clone --depth=1 https://github.com/aon-co-jp/open-cuda.git ../open-cuda
+      - name: Build
+        run: cargo build --release --bin aruaru-llm
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist
+          Copy-Item target/release/aruaru-llm.exe dist/
+          Copy-Item install.ps1 dist/
+          Compress-Archive -Path dist/* -DestinationPath aruaru-llm-windows-x86_64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aruaru-llm-windows-x86_64
+          path: aruaru-llm-windows-x86_64.zip
+
+  release:
+    name: GitHub Releaseへ添付
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/download-artifact@v4
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            aruaru-llm-linux-x86_64/aruaru-llm-linux-x86_64.tar.gz
+            aruaru-llm-windows-x86_64/aruaru-llm-windows-x86_64.zip
