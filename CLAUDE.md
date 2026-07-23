@@ -164,6 +164,17 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-07-23 (関連リポジトリ動向の記録) `open-cuda`のDirectXバック
+  エンドにmatmulカーネル対応・GPU圧縮/暗号化カーネル(ChaCha20)を実装**:
+  このリポジトリが利用する`open-cuda`側で、`opencuda-directx`クレート
+  にmatmul対応とChaCha20 GPUカーネルが追加された(RS-LinkFusion側の
+  ハードウェアアクセラレータ要望への対応)。実機(NVIDIA GT 730)検証
+  中にHLSL cbuffer配列パディングによる実バグ(GPU出力が暗号化されず
+  平文のまま)を発見・修正済み(コミット`ec6acf1`、詳細は`open-cuda`
+  側CLAUDE.md HANDOFF参照)。**このリポジトリ自体への直接の変更は
+  無し**——`opencuda-bert`/`opencuda-blas`経由の既存利用箇所への
+  影響は無いことを確認済み。
+
 - **2026-07-22 応答言語の多言語対応 + 起動時ウォームアップ(コールドスタート対策)**:
   前回HANDOFFの「次にすべきこと」(1)(2)を実装した(バックグラウンド
   エージェントの異常終了により未コミットのまま残っていたのを本セッションで
