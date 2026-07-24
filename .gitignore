@@ -2,3 +2,9 @@
 # multilingual-e5-small(Hugging Face、470MB超)。Gitに含めず、README/
 # CLAUDE.mdに記載のダウンロード手順で各自取得する運用とする。
 /models
+
+# Android build artifacts (android/CLAUDE.md HANDOFF 2026-07-24)
+/android/.gradle/
+/android/.kotlin/
+/android/app/build/
+/android/build/
