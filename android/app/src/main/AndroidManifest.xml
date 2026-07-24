@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 常時電源接続プロファイルがPARTIAL_WAKE_LOCKでスリープを防ぐために
+         必要。省電力/通常プロファイルでは取得しない(PowerProfile.kt参照、
+         open-web-server Android版と同じ設計)。 -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- ACTION_POWER_DISCONNECTED/CONNECTEDはprotected broadcastのため、
+         マニフェスト側の権限宣言は不要(コード側でreceiverを動的登録する
+         のみ)。 -->
+
+    <application
+        android:allowBackup="true"
+        android:icon="@drawable/ic_launcher_normal"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.AruaruLlm"
+        android:usesCleartextTraffic="true">
+
+        <!--
+          起動時の電源プロファイル選択画面をLAUNCHERにする(open-web-server
+          Android版と同じパターン)。「文字表示」と「アイコン」の両方で
+          プロファイルを区別できるようにする。
+        -->
+        <activity
+            android:name=".ProfileSelectActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          MainActivity: リモートaruaru-llmサーバーへの接続設定+簡易チャット
+          UI(`POST /v1/chat`)+電源プロファイル管理。`ProfileSelectActivity`
+          または下記の`activity-alias`経由でのみ起動される
+          (それ自身はLAUNCHERではない)。
+        -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="false" />
+
+        <!--
+          3電源プロファイルそれぞれの専用ホーム画面アイコン。アイコン自体は
+          色+シンボルで区別(緑=省電力/青=通常/橙=常時電源接続)、ラベル
+          文字列にも明示的に文字でプロファイル名を含める。
+        -->
+        <activity-alias
+            android:name=".LauncherPowerSave"
+            android:targetActivity=".MainActivity"
+            android:icon="@drawable/ic_launcher_powersave"
+            android:label="@string/app_name_powersave"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="tokyo.runo.aruarullm.LAUNCH_POWER_SAVE" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".LauncherNormal"
+            android:targetActivity=".MainActivity"
+            android:icon="@drawable/ic_launcher_normal"
+            android:label="@string/app_name_normal"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="tokyo.runo.aruarullm.LAUNCH_NORMAL" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".LauncherAlwaysOn"
+            android:targetActivity=".MainActivity"
+            android:icon="@drawable/ic_launcher_alwayson"
+            android:label="@string/app_name_alwayson"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="tokyo.runo.aruarullm.LAUNCH_ALWAYS_ON" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+    </application>
+
+</manifest>

@@ -164,6 +164,75 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-07-24(続き) Android版クライアントを新規実装(`android/`)
+  ——直前のHANDOFF「Android実装が存在しないためスコープ外」から前進し、
+  実際に着手・ビルド成功まで確認**: `open-web-server`の
+  `android/`(`tokyo.runo.openwebserver`)を参照実装として、同じGradle
+  構成パターン(`com.android.application` 8.7.2 + Kotlin 2.0.21、
+  `compileSdk 35`/`minSdk 24`、`androidx.appcompat`+
+  `kotlinx-coroutines-android`のみの最小依存)で`aruaru-llm/android/`を
+  新規作成した。パッケージ名は`tokyo.runo.aruarullm`(open-web-server版
+  `tokyo.runo.openwebserver`とは別名)。
+  1. **open-web-server版との設計上の違い**: open-web-server版は
+     クロスコンパイル済みネイティブバイナリを`ProcessBuilder`で端末上に
+     起動する構成だったが、aruaru-llmはユーザー要望通り**リモートの
+     aruaru-llmサーバーへHTTP接続する薄いクライアント**として実装した
+     (ネイティブバイナリ同梱・jniLibsは無し)。`MainActivity`に
+     サーバーURL入力欄(`SharedPreferences`で保存、既定
+     `http://10.0.2.2:8080`=エミュレータからホストへの既定到達先)+
+     簡易チャットUI(`EditText`+送信ボタン+ログ表示の`TextView`)を実装、
+     `POST /v1/chat`(`CLAUDE.md`「API」節記載の`{"message","lang":"ja"}`
+     → `{"reply","engine",...}`契約)を`HttpURLConnection`+`org.json`
+     (Android標準同梱、追加依存不要)で叩く。
+  2. **電源プロファイル管理**(`PowerProfile.kt`/`ProfileSelectActivity.kt`
+     /`MainActivity.kt`、`AndroidManifest.xml`の`activity-alias`3種)は
+     open-web-server版と同じ設計パターンをそのまま踏襲: 省電力/通常/
+     常時電源接続の3モード、`SharedPreferences`保存、起動時
+     `ProfileSelectActivity`(絵文字+日本語ラベル)、ホーム画面専用アイコン
+     3種(緑/青/橙、色分け+ラベル文字列)、`ACTION_POWER_DISCONNECTED`/
+     `ACTION_POWER_CONNECTED`の`BroadcastReceiver`による自動切替提案
+     ダイアログ(既定推奨は省電力、常時電源接続版実行中に電源が外れた
+     場合)。省電力/通常は`WakeLock`を取得せず、常時電源接続のみ
+     `PARTIAL_WAKE_LOCK`を保持。`/healthz`ポーリング間隔もプロファイル別
+     (省電力5分/通常1分/常時電源接続5秒、open-web-server版と同じ値)。
+  3. **省電力版のHWアクセラレーター無効化指示(ユーザー指示分)**:
+     `/v1/chat`リクエストに`X-Aruaru-Llm-Accel-Backend`ヘッダーを付与し、
+     常時電源接続版は`hardware_accelerator`、省電力/通常版は`cpu`を
+     指定する設計にした(open-web-server版の
+     `OPEN_WEB_SERVER_ACCEL_BACKEND`環境変数と同じ設計思想をHTTP
+     ヘッダーへ移した形)。**正直な開示(将来対応課題)**: aruaru-llm
+     (Rust側)は本セッション時点でこのヘッダーを一切受け取らない・
+     解釈しない——`src/main.rs`/`src/scoring.rs`にヘッダー読み取りや
+     アクセラレーターバックエンド切替の実装は無く、`opencuda-bert`は
+     現状CPUパスのみ実装済み(GPU/NPU専用パスは`open-cuda`側含め
+     未実装、本ファイル冒頭「開発方針」節参照)。このAndroid側の
+     ヘッダー付与は将来サーバー側が対応した際に効果を持つ先取り実装
+     であり、現時点で実際の応答内容・処理経路には一切影響しない
+     (WakeLock有無とポーリング間隔差のみが実効果)。
+  4. **ビルド確認**: このマシンにキャッシュ済みの`gradle-8.11.1-all`
+     配布物(`~/.gradle/wrapper/dists/`、open-web-server版のビルドで
+     判明していた場所)を`gradlew`無しで直接実行し、
+     `gradle :app:assembleDebug`が**1回目の実行で成功**
+     (`BUILD SUCCESSFUL`、33 actionable tasks executed)、
+     `android/app/build/outputs/apk/debug/app-debug.apk`
+     (約3.2MB)の生成を確認した。型チェックのみでの完了報告ではない
+     (実際に成功したAPKファイルの生成まで確認済み)。
+  5. **正直な制約・未実施事項**: (a) 実機/エミュレータへの`adb install`
+     以降の実地検証(実際に起動しチャットが往復すること)は今回未実施
+     ——ビルド成功のみで完了と記録する(ユーザー指示「実機/エミュレータ
+     での実地検証ができない場合はビルド成功のみで良い」に基づく)。
+     (b) 上記3.の通りHWアクセラレーター指示は将来対応課題のまま。
+     (c) チャット履歴の永続化・複数テナント切替UI・管理API認証は
+     スコープ外(過剰実装を避けた)。(d) `local.properties`の
+     `sdk.dir`はこの開発機のパス(`C:/Users/noruk/AppData/Local/
+     Android/Sdk`)のままリポジトリに含めている(open-web-server版の
+     既存慣行と同じ)。
+  - 次にすべきこと: (1) 実機/エミュレータでの`adb install`→チャット
+    往復の実地検証、(2) `opencuda-bert`側にGPU/NPU実装が入った時点で
+    `X-Aruaru-Llm-Accel-Backend`ヘッダーをRust側で実際に解釈する配線、
+    (3) フォアグラウンドサービス化・APK署名/配布(open-web-server版と
+    同じく今回のスコープ外のまま)。
+
 - **2026-07-24 スマホ版電源モード切替機能の依頼を受けたが、Android実装が
   このリポジトリに全く存在しないことを確認・正直に記録**: ユーザーから
   「省電力版/常時電源接続版(ハードウェアアクセラレーター対応)/通常版」の
