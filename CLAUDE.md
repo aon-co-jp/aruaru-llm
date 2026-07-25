@@ -1,4 +1,4 @@
-# 開発方針＆開発環境ルール(aruaru-llm)
+# 設計思想＆開発方針＆開発環境ルール(aruaru-llm)
 
 作業ドライブは`F:\open-runo`。この節は[`open-raid-z`](https://github.com/aon-co-jp/open-raid-z)の
 `CLAUDE.md`を正本とし、各プロジェクトへコピーして同期する方針に準じる。
