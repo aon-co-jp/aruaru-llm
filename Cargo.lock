@@ -26,6 +26,7 @@ dependencies = [
  "opencuda-blas",
  "opencuda-core",
  "opencuda-cpu",
+ "opencuda-llm",
  "poem",
  "serde",
  "serde_json",
@@ -724,6 +725,20 @@ dependencies = [
  "anyhow",
  "opencuda-core",
  "rayon",
+ "tracing",
+]
+
+[[package]]
+name = "opencuda-llm"
+version = "0.4.1"
+dependencies = [
+ "anyhow",
+ "opencuda-blas",
+ "opencuda-core",
+ "safetensors",
+ "serde",
+ "serde_json",
+ "tokenizers",
  "tracing",
 ]
 

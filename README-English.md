@@ -6,16 +6,21 @@ site implementing its own chat-reply logic, they call this single HTTP
 service — centralizing the one place that needs to change when real LLM
 inference is eventually wired in.
 
-> ⚠️ **Honest disclosure (important, updated 2026-07-25)**: despite the
-> "LLM" name, this service does **not** perform autoregressive dialogue
-> generation. Since 2026-07-21 it classifies intent by computing a real
-> sentence embedding with open-cuda's `opencuda-bert` crate
-> (multilingual-e5-small, MIT license, 100 languages including Japanese)
-> and scoring cosine similarity against representative example sentences
-> per intent — a genuine improvement over the earlier fixed-vocabulary
-> bag-of-words dot product, but still an **encoder-only semantic
-> similarity classifier**, not a text-generation capability. See
-> [CLAUDE.md](CLAUDE.md) for details and rationale.
+> ⚠️ **Honest disclosure (important, updated 2026-07-25)**: as of
+> 2026-07-25 this service integrates `open-cuda`'s `opencuda-llm` crate
+> (real trained GPT-2 124M weights, `openai-community/gpt2`), so
+> `POST /v1/generate` now performs **actual autoregressive text
+> generation** — the "no autoregressive generation" claim below no longer
+> applies to that endpoint. That said, **GPT-2 124M is a small, 2019-era
+> model and is not comparable to modern commercial LLMs like GPT-4** in
+> capability or knowledge. This is a demonstration that self-contained
+> generation works without an external LLM API contract, not a claim of
+> state-of-the-art quality — output is often grammatically fluent English
+> but is not guaranteed to be factually accurate (it can hallucinate).
+> `POST /v1/chat` (intent classification via `opencuda-bert`'s sentence
+> embeddings + cosine similarity, since 2026-07-21) remains a separate,
+> lightweight, fast path for canned replies — intentionally not merged
+> with generation. See [CLAUDE.md](CLAUDE.md) for details and rationale.
 
 ## Paired ("SET") with open-cuda
 
@@ -48,9 +53,24 @@ understanding).
 ## API
 
 - `POST /v1/chat` — `{"message": "...", "tenant": "..."(optional)}` → `{"reply": "...", "engine":
-  "...", "matched_intent": "..."}`
+  "...", "matched_intent": "..."}` (intent classification, lightweight/fast canned replies)
+- `POST /v1/generate` — `{"prompt": "...", "max_new_tokens": 16(optional, default 16, capped at 128), "tenant": "..."(optional)}`
+  → `{"completion": "...", "engine": "gpt2-124m-greedy-decode-v0-opencuda-llm-cpu", "disclosure": "..."}`
+  (real autoregressive generation via GPT-2 124M weights — heavier but genuine. English prompts
+  recommended, since GPT-2's BPE vocabulary is trained mostly on English text. Example, verified
+  end-to-end over real HTTP: `{"prompt": "The quick brown fox", "max_new_tokens": 16}` →
+  `"completion": "es are a great way to get a little bit of a kick out of your"`)
 - `POST /admin/tenants` / `GET /admin/tenants` / `DELETE /admin/tenants/:host` — tenant registration management (`x-admin-token` header auth)
 - `GET /healthz` — health check
+
+### Classification vs. generation — which to use
+
+`/v1/chat` (classification) and `/v1/generate` (generation) serve different
+purposes and are deliberately not merged: `/v1/chat` only routes to canned
+replies and is lightweight/fast (a single embedding forward pass);
+`/v1/generate` runs the full GPT-2 124M model (548MB of weights) and is
+heavier but produces genuine free-form text. Pick whichever fits the use
+case.
 
 ## "Shadow clone" (分身の術) architecture
 
@@ -80,7 +100,14 @@ separately — not bundled with the installer for licensing reasons; see
 `install.sh`/`install.ps1` for the download command. The build has a
 sibling path dependency on `../open-cuda`, so building from source requires
 cloning `open-cuda` into an adjacent directory (CI does this
-automatically via `release.yml`).
+automatically via `release.yml`). **Added 2026-07-25**: `/v1/generate`
+(GPT-2 124M generation) additionally requires `config.json` /
+`model.safetensors` (548MB) / `tokenizer.json`
+(`openai-community/gpt2`, from Hugging Face) under
+`../open-cuda/crates/opencuda-llm/models/gpt2/` (override the path with the
+`ARUARU_LLM_GPT2_DIR` env var). If missing, only `/v1/generate` returns 503
+— `/v1/chat` and the rest of the service keep working normally
+(availability-first design, same philosophy as `bow_fallback`).
 
 ```
 curl -fsSL https://github.com/aon-co-jp/aruaru-llm/releases/latest/download/aruaru-llm-linux-x86_64.tar.gz | tar xz
