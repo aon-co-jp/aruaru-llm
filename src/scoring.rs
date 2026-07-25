@@ -32,6 +32,18 @@ use opencuda_core::GpuDevice;
 /// 調整した閾値(`cargo test`で無関係な発話が誤分類されないことを確認済み)。
 const SIMILARITY_THRESHOLD: f32 = 0.86;
 
+/// `/v1/chat`の`engine`フィールドに返す、実際に使われた分類経路の名前。
+/// 呼び出し側が「本物の対話生成AIかどうか」「意味理解の質(埋め込み/
+/// bag-of-words)」を判別できるよう、常に実際に使った経路を正直に返す
+/// (CLAUDE.md「正直な開示」節参照)。
+pub const ENGINE_EMBEDDING: &str = "embedding-cosine-v0-opencuda-bert-cpu";
+/// 埋め込みモデル(`models/multilingual-e5-small/`)が存在しない、または
+/// ロードに失敗したときに自動的に使われるフォールバック経路
+/// (2026-07-25追加、`bow_fallback.rs`参照)。
+pub const ENGINE_BOW_FALLBACK: &str = "bow-dotproduct-v0-opencuda-cpu-fallback";
+/// 埋め込み・bag-of-words双方が失敗した(通常発生しない異常系)場合。
+pub const ENGINE_CLASSIFICATION_UNAVAILABLE: &str = "classification-unavailable-v0";
+
 pub struct Intent {
     pub name: &'static str,
     pub reply: &'static str,
@@ -251,6 +263,38 @@ pub fn best_intent(device: &Arc<dyn GpuDevice>, user_text: &str) -> Result<Optio
     }
 
     Ok(best.filter(|(_, sim)| *sim >= SIMILARITY_THRESHOLD).map(|(i, _)| &INTENTS[i]))
+}
+
+/// [`classify`]の結果。`engine`は実際に使われた分類経路
+/// (`ENGINE_EMBEDDING`/`ENGINE_BOW_FALLBACK`/`ENGINE_CLASSIFICATION_UNAVAILABLE`)。
+pub struct ClassifyResult {
+    pub intent: Option<&'static Intent>,
+    pub engine: &'static str,
+}
+
+/// 意図分類のエントリポイント。まず`opencuda-bert`による埋め込み
+/// コサイン類似度分類(`best_intent`)を試み、モデル重み
+/// (`models/multilingual-e5-small/`)が存在しない・ロードに失敗した等で
+/// エラーになった場合は、自動的に`bow_fallback`の固定語彙bag-of-words
+/// ドット積へフォールバックする(2026-07-25追加)。**正直な開示**:
+/// フォールバック時は意味理解の質が明確に下がる(キーワード一致のみ)ため、
+/// `engine`フィールドで必ずどちらの経路が使われたかを呼び出し側へ伝える。
+pub fn classify(device: &Arc<dyn GpuDevice>, user_text: &str) -> ClassifyResult {
+    match best_intent(device, user_text) {
+        Ok(intent) => ClassifyResult { intent, engine: ENGINE_EMBEDDING },
+        Err(err) => {
+            tracing::warn!(
+                "embedding-based classification unavailable ({err}); falling back to bag-of-words (models/multilingual-e5-small/ missing or failed to load)"
+            );
+            match crate::bow_fallback::best_intent_bow(device, user_text) {
+                Ok(intent) => ClassifyResult { intent, engine: ENGINE_BOW_FALLBACK },
+                Err(bow_err) => {
+                    tracing::warn!("bag-of-words fallback also failed: {bow_err}");
+                    ClassifyResult { intent: None, engine: ENGINE_CLASSIFICATION_UNAVAILABLE }
+                }
+            }
+        }
+    }
 }
 
 /// コールドスタート対策(2026-07-22追記、CLAUDE.md 2026-07-22 HANDOFF参照):

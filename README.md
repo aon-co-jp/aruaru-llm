@@ -39,6 +39,14 @@ forward passのみで、自己回帰デコーダは未実装。GPU専用の高�
 Vulkan汎用パスは実装済み)。詳細はopen-cuda側の`CLAUDE.md`のHANDOFF節を
 参照。
 
+**2026-07-25追記(可用性フォールバック)**: `models/multilingual-e5-small/`
+(470MB超)が未取得・ロード失敗の環境でもサービスを完全停止させないよう、
+`scoring::classify`が自動的に旧bag-of-wordsドット積(`src/bow_fallback.rs`)
+へフォールバックするようにした。`/v1/chat`の`engine`フィールドには実際に
+使われた経路(`embedding-cosine-v0-opencuda-bert-cpu`または
+`bow-dotproduct-v0-opencuda-cpu-fallback`)を常に正直に返す——分類精度は
+フォールバック時に明確に下がる(意味理解ではなくキーワード一致のため)。
+
 ## API
 
 - `POST /v1/chat` — `{"message": "...", "tenant": "..."(任意)}` → `{"reply": "...", "engine":
