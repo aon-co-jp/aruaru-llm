@@ -1,5 +1,13 @@
 # aruaru-llm
 
+> **Updated 2026-07-25**: The dev-policy file (`CLAUDE.md`) heading was
+> renamed from "Development Policy & Dev Environment Rules" to
+> "Design Philosophy & Development Policy & Dev Environment Rules",
+> to more clearly separate the project's design philosophy (what we
+> value), development policy (how we work), and dev environment rules
+> (concrete operational conventions). See `CLAUDE.md` for details.
+
+
 A shared "AI chat commerce" response service for the `aruaru` ecosystem
 (aruaru-tokyo, aruaru-db, e-gov.info, karu.tokyo, etc). Instead of each
 site implementing its own chat-reply logic, they call this single HTTP
