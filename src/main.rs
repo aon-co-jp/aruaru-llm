@@ -15,6 +15,7 @@
 //! `POST /admin/tenants`で動的登録するだけでよい。
 
 mod bow_fallback;
+mod generation;
 mod scoring;
 mod security;
 mod tenants;
@@ -198,6 +199,71 @@ fn admin_remove_tenant(req: &Request, Path(host): Path<String>, Data(registry): 
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct GenerateRequest {
+    /// 生成の起点となるプロンプト(英語推奨——GPT-2 124MのBPE語彙は
+    /// 英語中心の学習データに由来するため、日本語入力は語彙効率・品質共に
+    /// 低下する。CLAUDE.md「正直な開示」参照)。
+    prompt: String,
+    /// 追加生成トークン数(既定16、上限128——CPU逐次デコードのため大きい値は
+    /// 応答時間が線形に伸びる)。
+    #[serde(default = "default_max_new_tokens")]
+    max_new_tokens: usize,
+    #[serde(default)]
+    tenant: Option<String>,
+}
+
+fn default_max_new_tokens() -> usize {
+    16
+}
+
+const MAX_NEW_TOKENS_LIMIT: usize = 128;
+
+#[derive(Debug, Serialize)]
+struct GenerateResponse {
+    /// `prompt`に続けて生成されたテキスト(プロンプト自体は含まない)。
+    completion: String,
+    engine: &'static str,
+    /// 正直な開示メッセージ(常に返す、GPT-2 124Mの性能限界を毎回明示)。
+    disclosure: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct GenerateErrorResponse {
+    error: String,
+    engine: &'static str,
+}
+
+/// `opencuda-llm::GptModel`(GPT-2 124M実重み)による自己回帰テキスト生成。
+/// `/v1/chat`(意図分類、軽量・高速)とは別目的の別エンドポイント——
+/// 意図分類と生成は無理に統合しない設計方針(CLAUDE.md参照)。
+#[handler]
+fn generate(Json(req): Json<GenerateRequest>, Data(device): Data<&Arc<dyn GpuDevice>>) -> Response {
+    if let Some(tenant) = &req.tenant {
+        tracing::info!("generate request from tenant: {tenant}");
+    }
+    let max_new_tokens = req.max_new_tokens.min(MAX_NEW_TOKENS_LIMIT).max(1);
+    match generation::generate(device, &req.prompt, max_new_tokens) {
+        Ok(completion) => {
+            let body = serde_json::to_string(&GenerateResponse {
+                completion,
+                engine: generation::ENGINE_GPT2_GREEDY,
+                disclosure: "GPT-2 124M is a small 2019-era model, not comparable to modern commercial LLMs (e.g. GPT-4). \
+                    This demonstrates self-contained text generation without an external LLM API contract, not state-of-the-art quality. \
+                    Output may be grammatically fluent but is not guaranteed to be factually accurate.",
+            })
+            .unwrap_or_else(|_| "{}".to_string());
+            Response::builder().status(StatusCode::OK).content_type("application/json").body(body)
+        }
+        Err(err) => {
+            tracing::warn!("generate failed: {err:#}");
+            let body = serde_json::to_string(&GenerateErrorResponse { error: format!("{err:#}"), engine: generation::ENGINE_GPT2_GREEDY })
+                .unwrap_or_else(|_| "{}".to_string());
+            Response::builder().status(StatusCode::SERVICE_UNAVAILABLE).content_type("application/json").body(body)
+        }
+    }
+}
+
 #[handler]
 fn healthz() -> &'static str {
     "ok"
@@ -232,6 +298,12 @@ async fn main() -> Result<(), std::io::Error> {
             Ok(()) => tracing::info!("security classifier warmup complete (category embeddings cached)"),
             Err(err) => tracing::warn!("security warmup failed (will retry lazily on first request): {err}"),
         }
+        // GPT-2 124M実重み(548MB)のロードも起動時に前倒し(2026-07-25追加)。
+        // 失敗しても致命的ではない(/v1/generateへの初回リクエスト時に再試行)。
+        match generation::warmup() {
+            Ok(()) => tracing::info!("generation (GPT-2 124M) warmup complete"),
+            Err(err) => tracing::warn!("generation warmup failed (will retry lazily on first /v1/generate request): {err}"),
+        }
     }
 
     let registry = Arc::new(TenantRegistry::new());
@@ -239,6 +311,7 @@ async fn main() -> Result<(), std::io::Error> {
     let app = Route::new()
         .at("/v1/chat", post(chat))
         .at("/v1/classify-security", post(classify_security))
+        .at("/v1/generate", post(generate))
         .at("/admin/tenants", post(admin_register_tenant).get(admin_list_tenants))
         .at("/admin/tenants/:host", delete(admin_remove_tenant))
         .at("/healthz", get(healthz))

@@ -43,8 +43,37 @@
 (`tenants.rs`本体、`main.rs`の管理ハンドラ、`check_admin_token`)を
 そのままコピーし、`TenantInfo`のフィールドだけ用途に応じて拡張すること。
 
+## 5. 本格的な生成能力(`opencuda-llm::GptModel`、2026-07-25追加)
+
+`src/generation.rs`に、GPT-2 124M実重み(`openai-community/gpt2`)を
+`OnceLock`でプロセス内キャッシュしつつロード・貪欲デコードするパターンを
+まとめている(`opencuda-bert::BertModel::load`と同じ設計思想)。
+
+移植手順:
+1. `Cargo.toml`に`opencuda-llm = { path = "../open-cuda/crates/opencuda-llm" }`
+   をpath依存として追加する(本リポジトリとopen-cudaが同じ親ディレクトリ
+   配下にある前提、他の`opencuda-*`依存と同じsibling pathパターン)。
+2. `src/generation.rs`をそのままコピーする。`model_dir()`のデフォルトパス
+   (`../open-cuda/crates/opencuda-llm/models/gpt2`)と環境変数名
+   (`ARUARU_LLM_GPT2_DIR`)は移植先の事情に合わせて変更してよい。
+3. `main.rs`に`POST /v1/generate`ハンドラを追加する(`GenerateRequest`/
+   `GenerateResponse`/`GenerateErrorResponse`ごとコピー可能)。
+4. **重要(誇大表示の回避)**: `disclosure`フィールド(GPT-2 124Mが小型・
+   2019年モデルであり最新商用LLMと同等でないことを明記)は、レスポンス
+   から省略しないこと。`engine`フィールドに実装方式
+   (`gpt2-124m-greedy-decode-v0-opencuda-llm-cpu`)を常に正直に返す設計も
+   踏襲すること。
+5. **意図分類(`/v1/chat`)と生成(`/v1/generate`)を無理に統合しない**
+   ——役割が異なる(前者は軽量・高速な定型応答振り分け、後者は本格的だが
+   重い自由文生成)ため、別エンドポイントとして両方提供するのがこの
+   エコシステムの設計方針。
+
 ## 注意事項
 
-- 本プロジェクトは「LLM」を名乗るが実際にはニューラル推論を行わない
-  ルールベース実装である旨を、移植先でも必ず明記すること(誇大表示の
-  回避、このエコシステム共通の「正直な開示」規約)。
+- 本プロジェクトは「LLM」を名乗り、2026-07-25以降`/v1/generate`で実際の
+  GPT-2 124M自己回帰生成が可能になったが、GPT-2 124M自体は小型・2019年
+  モデルであり最新商用LLM(GPT-4等)と同等の性能ではない旨を、移植先でも
+  必ず明記すること(誇大表示の回避、このエコシステム共通の「正直な開示」
+  規約)。`/v1/chat`(意図分類)は引き続きルールベース+エンコーダの
+  意味的類似度分類であり、こちらもニューラル対話生成そのものではない
+  ことを混同しないこと。

@@ -4,15 +4,25 @@
 `CLAUDE.md`を正本とし、各プロジェクトへコピーして同期する方針に準じる。
 GitHubリポジトリ: [aon-co-jp/aruaru-llm](https://github.com/aon-co-jp/aruaru-llm)。
 
-> ⚠️ **正直な開示(最重要、2026-07-21更新)**: このリポジトリ名は「LLM」を
-> 冠しているが、**自己回帰デコーダによる文章生成(対話生成としての
-> 「LLM」の能力)はまだ実装していない**。2026-07-21以降は、`open-cuda`の
-> `opencuda-bert`クレート(multilingual-e5-small、MITライセンス、日本語
-> 含む100言語対応)で実際に文を埋め込みベクトルへ変換し、意図ごとの
-> 代表例文とのコサイン類似度で分類する**エンコーダベースの意味的類似度
-> 分類**へ移行した(旧: 固定語彙へのbag-of-wordsドット積による単純な
-> キーワードマッチング)。意味理解の質は大きく向上したが、これは検索・
-> 分類向けのエンコーダであり、対話文を生成する能力ではない。
+> ⚠️ **正直な開示(最重要、2026-07-25更新)**: 2026-07-25、`open-cuda`の
+> `opencuda-llm`クレート(GPT-2 124M実学習済み重み、`openai-community/gpt2`)
+> を統合し、`POST /v1/generate`で**実際に自己回帰デコーダによる文章生成が
+> 可能**になった(下記「以前の記述」にあった「自己回帰デコーダはまだ
+> 実装していない」は本エンドポイントに限り解消済み)。ただし
+> **GPT-2 124Mは2019年発表の小型モデルであり、GPT-4等最新の商用LLMと
+> 同等の性能・知識・指示追従能力は無い**——あくまで「外部LLM API契約
+> (課金)不要の自己完結型AI」としての実証段階であることを常に明記する。
+> 生成テキストは文法的には自然な英語になることが多いが、意味的に正確
+> とは限らない(幻覚しうる、ファインチューニング済み対話モデルではなく
+> 素の事前学習済み言語モデルの貪欲デコード)。詳細は下記HANDOFF
+> 2026-07-25エントリ参照。
+>
+> **以前の記述(2026-07-21〜、`/v1/chat`には引き続き該当)**: `/v1/chat`
+> (意図分類)は`open-cuda`の`opencuda-bert`クレート(multilingual-e5-small、
+> MITライセンス、日本語含む100言語対応)で実際に文を埋め込みベクトルへ
+> 変換し、意図ごとの代表例文とのコサイン類似度で分類する**エンコーダ
+> ベースの意味的類似度分類**のままであり、対話文を生成する能力ではない
+> (生成は`/v1/generate`が別途担う、下記「意図分類 vs 生成」参照)。
 > 「AI」「LLM」を名乗る以上、この限界を隠さず常に明記すること。
 
 ## このプロジェクトの役割
@@ -86,6 +96,17 @@ HTTPサービスとして`poem`クレートを直接利用する。DB非依存�
   受け取り `{"reply": "...", "engine":
   "embedding-cosine-v0-opencuda-bert-cpu", "matched_intent": "..."}` を
   返す。`tenant`は未登録でも応答は返す(可用性を落とさないため)。
+- `POST /v1/generate`(2026-07-25新設) — `{"prompt": "...", "max_new_tokens":
+  16(任意、既定16、上限128), "tenant": "..."(任意)}` を受け取り
+  `{"completion": "...", "engine":
+  "gpt2-124m-greedy-decode-v0-opencuda-llm-cpu", "disclosure": "..."}` を
+  返す。`opencuda-llm::GptModel`(GPT-2 124M実重み)による貪欲デコード
+  生成。GPT-2実重み(`../open-cuda/crates/opencuda-llm/models/gpt2/`、
+  `ARUARU_LLM_GPT2_DIR`で変更可)が無い・ロード失敗時は503を返す
+  (`/v1/chat`とは異なりbag-of-words的なフォールバック先が存在しないため、
+  黙って別経路には落とさず正直にエラーを返す設計)。`/v1/chat`(意図分類、
+  軽量・高速)とは目的が異なるため無理に統合していない——役割分担は
+  `src/generation.rs`のモジュールdocコメント参照。
 - `POST /admin/tenants` — テナント(呼び出し元ドメイン)を動的登録する
   (`{"host": "...", "label": "..."}`)。`x-admin-token`ヘッダ認証
   (`E_GOV_LLM_ADMIN_TOKEN`環境変数で設定、未設定時は無認証)。
@@ -163,6 +184,75 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 
 ## HANDOFF
+
+- **2026-07-25(続き) `opencuda-llm::GptModel`(GPT-2 124M実重み)を統合、
+  `POST /v1/generate`で本格的な自己回帰テキスト生成を実装
+  ——実HTTPリクエストでの生成結果まで確認済み**: 姉妹リポジトリ
+  `open-cuda`側で直近実装・実機検証済みだった`opencuda-llm::GptModel`
+  (safetensorsローダー付き、GPT-2 124M実重みをロードして貪欲デコードで
+  文法的に自然な英語を生成できる)を、このリポジトリへ統合した。
+  1. **依存追加**: `Cargo.toml`に`opencuda-llm = { path =
+     "../open-cuda/crates/opencuda-llm" }`をpath依存として追加(既存の
+     `opencuda-bert`等と同じsibling pathパターン、`PORTING.md`にも
+     移植手順を追記)。
+  2. **新規モジュール`src/generation.rs`**: `OnceLock<Result<LoadedGpt,
+     String>>`でGPT-2実重み(`GptModel::load`)・トークナイザ
+     (`GptTokenizer::load`、GPT-2自身のBPE語彙、`tokenizers`クレート)を
+     プロセス内キャッシュ(`scoring.rs`の埋め込みモデルキャッシュと
+     同じ設計思想)。モデルディレクトリは既定
+     `../open-cuda/crates/opencuda-llm/models/gpt2`(`open-cuda`側で
+     2026-07-25に既に実際にダウンロード・検証済みの重みをそのまま
+     sibling repoとして再利用、`ARUARU_LLM_GPT2_DIR`環境変数で上書き可)。
+     `warmup()`・`generate(device, prompt, max_new_tokens) -> Result<String>`
+     を公開。
+  3. **新規エンドポイント`POST /v1/generate`**(`/v1/chat`とは別、
+     意図分類と生成を無理に統合しない設計方針、ユーザー指示通り):
+     `GenerateRequest{prompt, max_new_tokens(既定16、上限128でクランプ),
+     tenant}` → 成功時`GenerateResponse{completion, engine:
+     "gpt2-124m-greedy-decode-v0-opencuda-llm-cpu", disclosure: "..."}`
+     (200)、失敗時(重み未取得等)`GenerateErrorResponse{error, engine}`
+     (503)。`disclosure`フィールドは**毎回のレスポンスに**GPT-2 124Mが
+     小型・2019年モデルであり最新商用LLMと同等でない旨を明記する
+     (誇大表示を避けるため、レスポンス自体に埋め込む設計)。
+  4. **起動時ウォームアップに追加**: `main()`の既存ウォームアップ処理
+     (`scoring::warmup`/`security::warmup`と同じ並び)に
+     `generation::warmup()`を追加。失敗しても致命的ではなく初回
+     リクエスト時に再試行される(既存の設計思想を踏襲)。
+  5. **実機検証(型チェックのみで完了と報告しない方針を徹底)**:
+     `cargo build --release`成功、`cargo test --release`
+     **22件全green**(既存22件、リグレッション無し——`/v1/generate`自体の
+     専用単体テストは追加していない、GPT-2 124Mの実重みロード自体は
+     `opencuda-llm`側で既に単体テスト・実機検証済みのため、このリポジトリ
+     側では実際にサーバーを起動しての実HTTP検証を主体とした)。
+     実際にサーバー(`aruaru-llm.exe`)を起動し、起動ログで
+     `generation (GPT-2 124M) warmup complete`を確認した上で、
+     `POST /v1/generate`へ実HTTPリクエストを送信:
+     - `{"prompt": "The quick brown fox", "max_new_tokens": 16}` →
+       `"completion": "es are a great way to get a little bit of a kick out of your"`
+     - `{"prompt": "Artificial intelligence is", "max_new_tokens": 20}` →
+       `"completion": " a new field of research that has been in the works for a while now. It is a field"`
+     (いずれも文法的には自然な英語の継続生成。既存の`/v1/chat`
+     〈`POST /v1/chat {"message": "How do I apply for a permit?"}` →
+     govインテント一致・正しい応答〉も引き続き正常動作することを併せて
+     確認、リグレッション無し)。
+  6. **正直な評価**: GPT-2 124Mは小型モデルであり、GPT-4等の最新商用LLM
+     と同等の性能・知識・指示追従能力は無い。「質問に答える」というより
+     「文の続きを予測する」挙動(素の事前学習済み言語モデルの貪欲デコード、
+     対話ファインチューニング無し)であり、実際`"Artificial intelligence
+     is"`への継続も一般論的な文の羅列であって具体的で正確な回答ではない。
+     README(日英)・PORTING.md・本ファイルの冒頭開示文言にもこの限界を
+     明記した。
+  7. **意図的にスコープ外とした事項**: (a) `/v1/generate`専用の単体
+     テスト(統合的な実HTTP検証で代替、モデルロード自体のテストは
+     `opencuda-llm`クレート側に既存)、(b) サンプリング(温度・top-k/
+     top-p)——引き続き貪欲デコード(argmax)のみ、`opencuda-llm`側の
+     `GptModel::generate`のシグネチャ自体がサンプリング非対応のため、
+     (c) 日本語生成(GPT-2のBPE語彙は英語中心のため、日本語プロンプトは
+     語彙効率・品質共に低下する旨をAPIドキュメントに明記するに留めた)。
+  - 次にすべきこと: (1) `opencuda-llm`側でサンプリング(温度/top-k/top-p)
+    が実装されればAPIへ配線、(2) より大規模なGPT-2バリアント(medium/
+    large/xl)または日本語対応モデルへの切り替え検討、(3) `/v1/generate`
+    専用の単体テスト追加(現状はサーバー起動+実HTTP検証のみ)。
 
 - **2026-07-25 bag-of-wordsフォールバックを追加(可用性優先)**: 依頼の
   「bag-of-wordsから実埋め込みベクトル類似度への置き換え」を確認した
