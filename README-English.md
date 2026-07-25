@@ -6,24 +6,44 @@ site implementing its own chat-reply logic, they call this single HTTP
 service — centralizing the one place that needs to change when real LLM
 inference is eventually wired in.
 
-> ⚠️ **Honest disclosure (important)**: despite the "LLM" name, v0.1.0
-> does **not** perform any real neural-network inference. It's a simple
-> rule-based intent classifier using a **bag-of-words dot product** over a
-> fixed vocabulary. See [CLAUDE.md](CLAUDE.md) for details and rationale.
+> ⚠️ **Honest disclosure (important, updated 2026-07-25)**: despite the
+> "LLM" name, this service does **not** perform autoregressive dialogue
+> generation. Since 2026-07-21 it classifies intent by computing a real
+> sentence embedding with open-cuda's `opencuda-bert` crate
+> (multilingual-e5-small, MIT license, 100 languages including Japanese)
+> and scoring cosine similarity against representative example sentences
+> per intent — a genuine improvement over the earlier fixed-vocabulary
+> bag-of-words dot product, but still an **encoder-only semantic
+> similarity classifier**, not a text-generation capability. See
+> [CLAUDE.md](CLAUDE.md) for details and rationale.
 
 ## Paired ("SET") with open-cuda
 
 Depends on [`open-cuda`](https://github.com/aon-co-jp/open-cuda)'s
-`opencuda-core`/`opencuda-cpu` crates via a path dependency, and actually
-calls `GpuDevice::launch_kernel` on every `/v1/chat` request (an
-elementwise-multiply kernel over the bag-of-words vectors). This is a real
-runtime call through open-cuda's kernel-execution pipeline, not just a
-`Cargo.toml` reference.
+`opencuda-core`/`opencuda-cpu`/`opencuda-blas`/`opencuda-bert` crates via a
+path dependency. On every `/v1/chat` request, `opencuda-bert` runs
+multilingual-e5-small's forward pass (calling into `opencuda-blas`'s real
+GEMM/Attention kernels on `opencuda_cpu::CpuDevice`) to embed the message,
+then compares it via cosine similarity against each intent's cached
+representative embedding. This is a real runtime call through open-cuda's
+compute pipeline, not just a `Cargo.toml` reference — verified by actually
+starting the server and exercising `POST /v1/chat`.
 
-That said, this is not real neural LLM inference — open-cuda's
-`opencuda-blas` crate (GEMM/Attention) is still explicitly stubbed out as
-"Phase 3", so actual embedding-similarity or transformer inference remains
-future work.
+That said, this is not real neural LLM inference (dialogue generation) —
+only the encoder forward pass; the autoregressive decoder remains
+unimplemented. GPU-specific fast paths (`GemmPath::CuBlas`/`RocBlas`/
+`OneMkl`) are still stubbed (CPU and generic-Vulkan paths are implemented).
+See open-cuda's `CLAUDE.md` HANDOFF section for details.
+
+**2026-07-25 update (availability fallback)**: if
+`models/multilingual-e5-small/` (470MB+) is missing or fails to load, this
+service now automatically falls back to the original bag-of-words dot
+product (`src/bow_fallback.rs`) instead of failing requests outright. The
+`/v1/chat` response's `engine` field always honestly reports which path was
+actually used (`embedding-cosine-v0-opencuda-bert-cpu` or
+`bow-dotproduct-v0-opencuda-cpu-fallback`) — classification quality is
+noticeably lower on the fallback path (keyword matching, not semantic
+understanding).
 
 ## API
 

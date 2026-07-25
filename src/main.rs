@@ -14,6 +14,7 @@
 //! 新しい`aruaru-llm`プロセスを個別インストールする必要はない——
 //! `POST /admin/tenants`で動的登録するだけでよい。
 
+mod bow_fallback;
 mod scoring;
 mod security;
 mod tenants;
@@ -74,33 +75,28 @@ fn chat(
         }
     }
 
-    match scoring::best_intent(device, &req.message) {
-        Ok(Some(intent)) => {
+    // scoring::classifyは、埋め込みモデル(models/multilingual-e5-small/)が
+    // 使える場合はコサイン類似度分類を、モデル重みが無い・ロードに失敗した
+    // 場合は自動的にbag-of-wordsドット積へフォールバックする(2026-07-25
+    // 追加、詳細はscoring.rs/bow_fallback.rs参照)。engineには実際に使われた
+    // 経路を常に正直に返す。
+    let result = scoring::classify(device, &req.message);
+    match result.intent {
+        Some(intent) => {
             let (reply, reply_lang, lang_fallback) = intent.reply_for(&req.lang);
             Json(ChatResponse {
                 reply: reply.to_string(),
-                engine: "embedding-cosine-v0-opencuda-bert-cpu",
+                engine: result.engine,
                 matched_intent: Some(intent.name),
                 reply_lang,
                 lang_fallback,
             })
         }
-        Ok(None) => {
+        None => {
             let (reply, reply_lang, lang_fallback) = scoring::fallback_reply_for(&req.lang);
             Json(ChatResponse {
                 reply: reply.to_string(),
-                engine: "embedding-cosine-v0-opencuda-bert-cpu",
-                matched_intent: None,
-                reply_lang,
-                lang_fallback,
-            })
-        }
-        Err(err) => {
-            tracing::warn!("scoring failed: {err}");
-            let (reply, reply_lang, lang_fallback) = scoring::fallback_reply_for(&req.lang);
-            Json(ChatResponse {
-                reply: reply.to_string(),
-                engine: "embedding-cosine-v0-opencuda-bert-cpu-error",
+                engine: result.engine,
                 matched_intent: None,
                 reply_lang,
                 lang_fallback,

@@ -164,6 +164,45 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-07-25 bag-of-wordsフォールバックを追加(可用性優先)**: 依頼の
+  「bag-of-wordsから実埋め込みベクトル類似度への置き換え」を確認した
+  ところ、`scoring.rs`は既に2026-07-21の移行で`opencuda-bert`
+  (multilingual-e5-small)による実際の文埋め込み+コサイン類似度分類へ
+  移行済みだった(CLAUDE.mdの記載通り、コードとドキュメントに齟齬は
+  無かった)。実際に欠けていたのは、埋め込みモデルの重み
+  (`models/multilingual-e5-small/`)が無い・ロードに失敗した場合の
+  フォールバック——従来は`best_intent`がそのままエラーを返すだけで、
+  サービス全体が意図分類不能に陥っていた。
+  1. `src/bow_fallback.rs`を新設し、2026-07-21移行前の固定語彙
+     bag-of-wordsドット積(`opencuda_cpu::CpuDevice`上での要素積カーネル
+     実行、旧`scoring.rs`のロジック)を独立モジュールとして復元した。
+  2. `scoring::classify(device, user_text) -> ClassifyResult`
+     (`{intent, engine}`)を新設し、`main.rs`の`/v1/chat`ハンドラから
+     これを呼ぶよう変更。`best_intent`(埋め込み経路)が失敗した場合のみ
+     自動的に`bow_fallback::best_intent_bow`へフォールバックする。
+     `engine`フィールドは常に実際に使われた経路
+     (`ENGINE_EMBEDDING`=`"embedding-cosine-v0-opencuda-bert-cpu"`、
+     `ENGINE_BOW_FALLBACK`=`"bow-dotproduct-v0-opencuda-cpu-fallback"`、
+     両方失敗時`ENGINE_CLASSIFICATION_UNAVAILABLE`)を正直に返す。
+  3. **実機検証**: このマシンには`models/multilingual-e5-small/`が
+     実際にダウンロード済みだったため、埋め込み経路(通常運用)を
+     `cargo test --release`(22件全green、既存16件+bag-of-words
+     フォールバック新規6件)で実際に検証できた。bag-of-wordsフォール
+     バック自体も独立した単体テストで検証(埋め込み経路を意図的に
+     無効化しての統合テストまでは行っていない——モデルディレクトリを
+     一時的に退避させての検証は今回スコープ外、正直に記録)。
+  4. `cargo clippy --workspace --all-targets --release`で
+     `manual_slice_size_calculation`警告1件を検出・修正
+     (`n * std::mem::size_of::<f32>()` → `std::mem::size_of_val(a)`)、
+     修正後**workspace全体で警告0件**。
+  5. README.md/README-English.mdを現状(埋め込み優先+bag-of-words
+     フォールバック)に合わせて更新(README-English.mdは2026-07-21の
+     移行前の記述のまま更新漏れしていたのを合わせて是正)。
+  - 次にすべきこと: (1) 埋め込みモデルを意図的に無効化した状態での
+    フォールバック統合テスト(現状は`bow_fallback`モジュール単体の
+    テストのみ)、(2) 自己回帰デコーダによる対話文生成(引き続き
+    Qwen3-14B等の実モデル重みの入手・ライセンス確認が前提、未着手)。
+
 - **2026-07-24(続き) Android版クライアントを新規実装(`android/`)
   ——直前のHANDOFF「Android実装が存在しないためスコープ外」から前進し、
   実際に着手・ビルド成功まで確認**: `open-web-server`の
