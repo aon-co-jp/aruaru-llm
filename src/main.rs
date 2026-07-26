@@ -18,6 +18,7 @@ mod bow_fallback;
 mod generation;
 mod scoring;
 mod security;
+mod signatures;
 mod tenants;
 
 use std::sync::Arc;
@@ -50,6 +51,23 @@ fn default_lang() -> String {
     "ja".to_string()
 }
 
+/// 「分身の術」テナント登録有無の確認を全エンドポイントで統一する
+/// (2026-07-26修正: 以前は`/v1/chat`のみがこのチェックを行い、
+/// `/v1/classify-security`・`/v1/generate`は`tenant`フィールドを受け取り
+/// ながらレジストリに一切問い合わせず単にログへ流すだけという非対称が
+/// あった。テナント未登録でも応答は返す設計〈可用性優先〉は3エンドポイント
+/// とも共通のまま、少なくとも「未登録テナントからの呼び出し」の可視化
+/// だけは全エンドポイントで揃える)。
+fn log_tenant_usage(endpoint: &str, tenant: &Option<String>, registry: &TenantRegistry) {
+    if let Some(tenant) = tenant {
+        if !registry.contains(tenant) {
+            tracing::info!("{endpoint} request from unregistered tenant: {tenant}");
+        } else {
+            tracing::info!("{endpoint} request from tenant: {tenant}");
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct ChatResponse {
     reply: String,
@@ -70,11 +88,7 @@ fn chat(
     Data(device): Data<&Arc<dyn GpuDevice>>,
     Data(registry): Data<&Arc<TenantRegistry>>,
 ) -> Json<ChatResponse> {
-    if let Some(tenant) = &req.tenant {
-        if !registry.contains(tenant) {
-            tracing::info!("chat request from unregistered tenant: {tenant}");
-        }
-    }
+    log_tenant_usage("chat", &req.tenant, registry);
 
     // scoring::classifyは、埋め込みモデル(models/multilingual-e5-small/)が
     // 使える場合はコサイン類似度分類を、モデル重みが無い・ロードに失敗した
@@ -115,32 +129,57 @@ struct ClassifySecurityRequest {
 }
 
 #[derive(Debug, Serialize)]
+struct StaticSignalDto {
+    tag: String,
+    description: String,
+    category_hint: &'static str,
+}
+
+#[derive(Debug, Serialize)]
 struct ClassifySecurityResponse {
     label: &'static str,
     description: &'static str,
     score: f32,
     is_suspicious: bool,
     engine: &'static str,
+    /// 2026-07-26追加: embeddingコサイン類似度とは別に検出された、決定的に
+    /// 検証可能な静的特徴(既知シグネチャ一致・エントロピー・API組み合わせ)。
+    /// 空配列はそれらが何も検出されなかった(embeddingのみの判定)ことを示す。
+    static_signals: Vec<StaticSignalDto>,
 }
 
 /// RS-Guardの「AI二次判定」用エンドポイント。静的ルールに引っかからない
 /// コード片を受け取り、マルウェア/スパイウェア/常駐・自動巡回/正常の
-/// いずれに意味的に最も近いかを埋め込みコサイン類似度で返す。
-/// **正直な開示**: 訓練済みマルウェア分類器ではなく汎用埋め込みの
-/// ヒューリスティック。`engine`にその旨を明示する。
+/// いずれに最も近いかを判定する。2026-07-26更新: 汎用文埋め込みの
+/// コサイン類似度に加え、`signatures::analyze`による決定的な静的特徴抽出
+/// (既知マルウェア文字列シグネチャ・エンコード文字列のエントロピー・
+/// 疑わしいAPI呼び出しの組み合わせ)を組み合わせて判定する。
+/// **正直な開示**: それでも訓練済みマルウェア分類器ではなく、
+/// 意味的類似度+決定的な文字列/数値ヒューリスティックの組み合わせに
+/// すぎない。`engine`と`static_signals`にその内訳を常に明示する。
 #[handler]
-fn classify_security(Json(req): Json<ClassifySecurityRequest>, Data(device): Data<&Arc<dyn GpuDevice>>) -> Json<ClassifySecurityResponse> {
-    if let Some(tenant) = &req.tenant {
-        tracing::info!("classify-security request from tenant: {tenant}");
-    }
+fn classify_security(Json(req): Json<ClassifySecurityRequest>, Data(device): Data<&Arc<dyn GpuDevice>>, Data(registry): Data<&Arc<TenantRegistry>>) -> Json<ClassifySecurityResponse> {
+    log_tenant_usage("classify-security", &req.tenant, registry);
     match security::classify_security(device, &req.text) {
-        Ok(v) => Json(ClassifySecurityResponse {
-            label: v.label,
-            description: v.description,
-            score: v.score,
-            is_suspicious: v.is_suspicious,
-            engine: "embedding-cosine-heuristic-v0-opencuda-bert-cpu",
-        }),
+        Ok(v) => {
+            let had_static_signals = !v.static_signals.is_empty();
+            Json(ClassifySecurityResponse {
+                label: v.label,
+                description: v.description,
+                score: v.score,
+                is_suspicious: v.is_suspicious,
+                engine: if had_static_signals {
+                    "embedding-cosine-heuristic-v0-opencuda-bert-cpu+static-signatures-v1-opencuda-cpu"
+                } else {
+                    "embedding-cosine-heuristic-v0-opencuda-bert-cpu"
+                },
+                static_signals: v
+                    .static_signals
+                    .into_iter()
+                    .map(|s| StaticSignalDto { tag: s.tag, description: s.description, category_hint: s.category_hint })
+                    .collect(),
+            })
+        }
         Err(err) => {
             tracing::warn!("classify_security failed: {err}");
             // 判定不能なときは黙って「安全」とは言わない——is_suspicious=false
@@ -152,6 +191,7 @@ fn classify_security(Json(req): Json<ClassifySecurityRequest>, Data(device): Dat
                 score: 0.0,
                 is_suspicious: false,
                 engine: "embedding-cosine-heuristic-v0-opencuda-bert-cpu-error",
+                static_signals: Vec::new(),
             })
         }
     }
@@ -238,11 +278,9 @@ struct GenerateErrorResponse {
 /// `/v1/chat`(意図分類、軽量・高速)とは別目的の別エンドポイント——
 /// 意図分類と生成は無理に統合しない設計方針(CLAUDE.md参照)。
 #[handler]
-fn generate(Json(req): Json<GenerateRequest>, Data(device): Data<&Arc<dyn GpuDevice>>) -> Response {
-    if let Some(tenant) = &req.tenant {
-        tracing::info!("generate request from tenant: {tenant}");
-    }
-    let max_new_tokens = req.max_new_tokens.min(MAX_NEW_TOKENS_LIMIT).max(1);
+fn generate(Json(req): Json<GenerateRequest>, Data(device): Data<&Arc<dyn GpuDevice>>, Data(registry): Data<&Arc<TenantRegistry>>) -> Response {
+    log_tenant_usage("generate", &req.tenant, registry);
+    let max_new_tokens = req.max_new_tokens.clamp(1, MAX_NEW_TOKENS_LIMIT);
     match generation::generate(device, &req.prompt, max_new_tokens) {
         Ok(completion) => {
             let body = serde_json::to_string(&GenerateResponse {
