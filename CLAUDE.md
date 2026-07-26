@@ -185,6 +185,52 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-07-27 モデルのホットスワップ(プロセス再起動不要のモデル切り替え)
+  を実装——直前エントリの「次にすべきこと(2)」で残っていた制約
+  (「ダウンロード完了後、実際にそのモデルを使うにはプロセスを再起動する
+  必要がある」)を解消**:
+  1. **`src/generation.rs`を書き換え**: 起動時`OnceLock<Result<LoadedGpt,
+     String>>`(一度ロードしたら差し替え不可)を`static ACTIVE:
+     RwLock<Option<Arc<LoadedGpt>>>`へ変更。新規`select_model(dir:
+     PathBuf) -> Result<()>`は、指定ディレクトリからの読み込みに
+     **成功した場合のみ**`ACTIVE`を置き換える(失敗時は現在動作中の
+     モデルをそのまま維持——不正なディレクトリを指定してサービスを
+     壊さない設計)。`active_model_dir() -> Option<PathBuf>`で現在
+     使用中のモデルの読み込み元を問い合わせ可能にした。
+  2. **新規HTTPエンドポイント`POST /v1/models/select`**(`main.rs`):
+     `{"id": "distilgpt2"}`のようなリクエストで
+     `{models_root}/{id}/`から`generation::select_model`を呼ぶ
+     (ブロッキングI/Oのため`tokio::task::spawn_blocking`経由)。
+     `GET /v1/models/catalog`のレスポンスにも`active_model_dir`
+     フィールドを追加し、現在どのモデルが使われているか可視化した。
+  3. **検証(実測、モックではなく実GPT-2重みで検証)**: 新規テスト2件
+     (`generation::tests`)——`select_model_succeeds_for_a_real_directory_
+     and_updates_active_model_dir`は、実際にsibling repoの実GPT-2重み
+     (`../open-cuda/crates/opencuda-llm/models/gpt2`、既存の既定
+     モデルと同じ実体)へ`select_model`を呼び、`active_model_dir()`が
+     実際に反映されること、切り替え後の`generate()`が実際に
+     (空文字列ではない)テキストを生成することを確認した。
+     `select_model_fails_cleanly_for_a_nonexistent_directory`は、
+     存在しないディレクトリを指定した場合にパニックせず`Err`を
+     返すことを確認。`cargo test`**37→39件、全green**(既存テストへの
+     回帰なし)。
+  4. **正直な開示**: (1) 「新しいモデルとして本当に別アーキテクチャの
+     重みへ切り替える」ところまでは検証していない(この環境には
+     `distilgpt2`等の実際のダウンロード済みモデルが無いため、検証は
+     「同じ実GPT-2重みディレクトリへの再ロードが機能すること」に
+     留まる——ロード処理自体は`GptModel::load`をそのまま呼ぶだけなので、
+     サイズ・語彙が異なるGPT-2互換モデルでも同様に動く設計上の根拠は
+     あるが、実際にその組み合わせでの動作確認はしていない)。
+     (2) 切り替え中に進行中の生成リクエストがあった場合の挙動
+     (`Arc`のクローンにより、切り替え前の`generate`呼び出しは古い
+     `Arc<LoadedGpt>`を握ったまま完走する設計——エラーにはならないが、
+     切り替えの瞬間に古いモデルと新しいモデルが一時的に混在しうる)は
+     意図した仕様ではあるが、専用のテストは追加していない。
+  - 次にすべきこと: (1) 実際に`distilgpt2`等別モデルをダウンロード→
+    切り替え→生成、という一気通貫の確認(実ダウンロードは今回も
+    見送ったまま、前々回エントリから継続)、(2) 管理UI(Tauri Admin GUI
+    等)からのモデル選択操作(現状はHTTP API止まり)。
+
 - **2026-07-26(続き) 他のGPT-2アーキテクチャ互換モデルを選択・ダウンロード
   できるモデルカタログ機能を新規実装(ユーザー指示「aruaru-llm以外の
   オープンソースのローカルLLMも簡単にダウンロード・インストールを選択

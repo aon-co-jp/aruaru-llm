@@ -309,6 +309,9 @@ fn generate(Json(req): Json<GenerateRequest>, Data(device): Data<&Arc<dyn GpuDev
 struct CatalogResponse {
     models: &'static [model_catalog::CatalogEntry],
     installed_ids: Vec<&'static str>,
+    /// 現在実際に生成に使われているモデルの読み込み元ディレクトリ
+    /// (まだ一度もロードしていなければ`None`、2026-07-27追加)。
+    active_model_dir: Option<String>,
     /// 正直な開示: このエンジンがロードできるのはGPT-2アーキテクチャ
     /// 互換モデルのみで、Llama/Mistral/Qwen等アーキテクチャの異なる
     /// オープンソースLLMは対象外であることを、APIレスポンス自体にも
@@ -322,6 +325,7 @@ fn list_model_catalog() -> Response {
     let body = serde_json::to_string(&CatalogResponse {
         models: model_catalog::CATALOG,
         installed_ids: model_catalog::installed_ids(&models_root),
+        active_model_dir: generation::active_model_dir().map(|d| d.to_string_lossy().to_string()),
         disclosure_ja: "このカタログはGPT-2アーキテクチャ互換モデルのみを対象としています。\
             Llama/Mistral/Qwen等、異なるアーキテクチャのオープンソースLLMは現在のエンジンでは\
             ロードできません(config.json/model.safetensors/tokenizer.jsonの3ファイル構成で\
@@ -347,6 +351,52 @@ struct InstallModelResponse {
 #[derive(Debug, Serialize)]
 struct InstallModelErrorResponse {
     error: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SelectModelRequest {
+    /// `model_catalog::CatalogEntry::id`のいずれか(ダウンロード済みで
+    /// あることが前提、`GET /v1/models/catalog`の`installed_ids`参照)。
+    id: String,
+}
+
+#[derive(Debug, Serialize)]
+struct SelectModelResponse {
+    id: String,
+    dir: String,
+    message_ja: String,
+}
+
+/// `POST /v1/models/select` — インストール済みモデルへプロセス再起動
+/// 無しで切り替える(2026-07-27追加、`generation::select_model`参照)。
+/// **読み込みに成功した場合のみ**現在使用中のモデルを置き換える——
+/// 指定した`id`が未インストール・破損している等で読み込みに失敗した
+/// 場合、現在動作中のモデルはそのまま維持され、サービスは壊れない。
+#[handler]
+async fn select_model(Json(req): Json<SelectModelRequest>) -> Response {
+    let dest_dir = model_catalog::models_root().join(&req.id);
+    let dir_for_task = dest_dir.clone();
+    let result = tokio::task::spawn_blocking(move || generation::select_model(dir_for_task)).await;
+    match result {
+        Ok(Ok(())) => {
+            let body = serde_json::to_string(&SelectModelResponse {
+                id: req.id.clone(),
+                dir: dest_dir.to_string_lossy().to_string(),
+                message_ja: format!("使用するモデルを{}に切り替えました(プロセス再起動は不要です)。", req.id),
+            })
+            .unwrap_or_else(|_| "{}".to_string());
+            Response::builder().status(StatusCode::OK).content_type("application/json").body(body)
+        }
+        Ok(Err(e)) => {
+            tracing::warn!("select_model({}) failed: {e:#}", req.id);
+            let body = serde_json::to_string(&InstallModelErrorResponse { error: format!("{e:#}") }).unwrap_or_else(|_| "{}".to_string());
+            Response::builder().status(StatusCode::BAD_REQUEST).content_type("application/json").body(body)
+        }
+        Err(e) => {
+            let body = serde_json::to_string(&InstallModelErrorResponse { error: format!("select_model task panicked: {e}") }).unwrap_or_else(|_| "{}".to_string());
+            Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).content_type("application/json").body(body)
+        }
+    }
 }
 
 /// `POST /v1/models/install` — カタログから選択したモデルをHugging Face
@@ -437,6 +487,7 @@ async fn main() -> Result<(), std::io::Error> {
         .at("/v1/generate", post(generate))
         .at("/v1/models/catalog", get(list_model_catalog))
         .at("/v1/models/install", post(install_model))
+        .at("/v1/models/select", post(select_model))
         .at("/admin/tenants", post(admin_register_tenant).get(admin_list_tenants))
         .at("/admin/tenants/:host", delete(admin_remove_tenant))
         .at("/healthz", get(healthz))
