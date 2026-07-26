@@ -16,6 +16,7 @@
 
 mod bow_fallback;
 mod generation;
+mod model_catalog;
 mod scoring;
 mod security;
 mod signatures;
@@ -302,6 +303,90 @@ fn generate(Json(req): Json<GenerateRequest>, Data(device): Data<&Arc<dyn GpuDev
     }
 }
 
+/// `GET /v1/models/catalog` — インストール可能なGPT-2アーキテクチャ互換
+/// モデルの一覧(ダウンロード前、どのモデルが選択可能かを提示するため)。
+#[derive(Debug, Serialize)]
+struct CatalogResponse {
+    models: &'static [model_catalog::CatalogEntry],
+    installed_ids: Vec<&'static str>,
+    /// 正直な開示: このエンジンがロードできるのはGPT-2アーキテクチャ
+    /// 互換モデルのみで、Llama/Mistral/Qwen等アーキテクチャの異なる
+    /// オープンソースLLMは対象外であることを、APIレスポンス自体にも
+    /// 明記する(UIがこの文言をそのまま表示できるように)。
+    disclosure_ja: &'static str,
+}
+
+#[handler]
+fn list_model_catalog() -> Response {
+    let models_root = model_catalog::models_root();
+    let body = serde_json::to_string(&CatalogResponse {
+        models: model_catalog::CATALOG,
+        installed_ids: model_catalog::installed_ids(&models_root),
+        disclosure_ja: "このカタログはGPT-2アーキテクチャ互換モデルのみを対象としています。\
+            Llama/Mistral/Qwen等、異なるアーキテクチャのオープンソースLLMは現在のエンジンでは\
+            ロードできません(config.json/model.safetensors/tokenizer.jsonの3ファイル構成で\
+            GPT-2のテンソル名規約に従うモデルのみ対応)。",
+    })
+    .unwrap_or_else(|_| "{}".to_string());
+    Response::builder().status(StatusCode::OK).content_type("application/json").body(body)
+}
+
+#[derive(Debug, Deserialize)]
+struct InstallModelRequest {
+    /// `model_catalog::CatalogEntry::id`のいずれか。
+    id: String,
+}
+
+#[derive(Debug, Serialize)]
+struct InstallModelResponse {
+    id: String,
+    dir: String,
+    message_ja: String,
+}
+
+#[derive(Debug, Serialize)]
+struct InstallModelErrorResponse {
+    error: String,
+}
+
+/// `POST /v1/models/install` — カタログから選択したモデルをHugging Face
+/// からダウンロードし、`{ARUARU_LLM_MODELS_ROOT}/{id}/`へ配置する。
+/// ダウンロード自体は必ずこのエンドポイントへの明示的なリクエストからのみ
+/// 起動する(サーバー起動時の自動ダウンロードは行わない設計)。
+/// **正直な開示**: ダウンロード完了後、実際にそのモデルを使うには
+/// `ARUARU_LLM_GPT2_DIR`をこのディレクトリへ向けて`/v1/generate`を叩く
+/// 側のプロセスを再起動する必要がある(現状のロード方式が起動時
+/// `OnceLock`のため、実行中のホットスワップには対応していない)。
+#[handler]
+async fn install_model(Json(req): Json<InstallModelRequest>) -> Response {
+    let Some(entry) = model_catalog::find(&req.id) else {
+        let body = serde_json::to_string(&InstallModelErrorResponse { error: format!("unknown model id: {}", req.id) }).unwrap_or_else(|_| "{}".to_string());
+        return Response::builder().status(StatusCode::BAD_REQUEST).content_type("application/json").body(body);
+    };
+
+    let dest_dir = model_catalog::models_root().join(entry.id);
+    match model_catalog::install(entry, &dest_dir).await {
+        Ok(()) => {
+            let body = serde_json::to_string(&InstallModelResponse {
+                id: entry.id.to_string(),
+                dir: dest_dir.to_string_lossy().to_string(),
+                message_ja: format!(
+                    "{}のダウンロードが完了しました。使用するには ARUARU_LLM_GPT2_DIR={} を設定してプロセスを再起動してください。",
+                    entry.display_name_ja,
+                    dest_dir.to_string_lossy()
+                ),
+            })
+            .unwrap_or_else(|_| "{}".to_string());
+            Response::builder().status(StatusCode::OK).content_type("application/json").body(body)
+        }
+        Err(err) => {
+            tracing::warn!("install_model({}) failed: {err:#}", entry.id);
+            let body = serde_json::to_string(&InstallModelErrorResponse { error: format!("{err:#}") }).unwrap_or_else(|_| "{}".to_string());
+            Response::builder().status(StatusCode::BAD_GATEWAY).content_type("application/json").body(body)
+        }
+    }
+}
+
 #[handler]
 fn healthz() -> &'static str {
     "ok"
@@ -350,6 +435,8 @@ async fn main() -> Result<(), std::io::Error> {
         .at("/v1/chat", post(chat))
         .at("/v1/classify-security", post(classify_security))
         .at("/v1/generate", post(generate))
+        .at("/v1/models/catalog", get(list_model_catalog))
+        .at("/v1/models/install", post(install_model))
         .at("/admin/tenants", post(admin_register_tenant).get(admin_list_tenants))
         .at("/admin/tenants/:host", delete(admin_remove_tenant))
         .at("/healthz", get(healthz))

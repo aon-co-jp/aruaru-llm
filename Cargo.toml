@@ -28,3 +28,11 @@ opencuda-bert = { path = "../open-cuda/crates/opencuda-bert" }
 # 文章生成する(2026-07-25追加、CLAUDE.md参照)。意図分類(scoring.rs)とは
 # 別の目的の別エンドポイント(/v1/generate)として提供する。
 opencuda-llm = { path = "../open-cuda/crates/opencuda-llm" }
+# モデルカタログ(2026-07-26追加)からのHugging Faceダウンロードに使う
+# HTTPクライアント。OpenSSL不要のrustls-tlsを使用(他リポジトリの既存
+# 方針〈aruaru-db等〉と同じ)。
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+
+[dev-dependencies]
+tempfile = "3"
+mockito = "1"
