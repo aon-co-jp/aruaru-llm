@@ -22,6 +22,7 @@ use opencuda_bert::cosine_similarity;
 use opencuda_core::GpuDevice;
 
 use crate::scoring::{embed, normalize};
+use crate::signatures::{self, StaticSignal};
 
 /// 判定カテゴリ。`benign`(正常)を含めることで、普通のコードが
 /// マルウェア側へ誤って寄らないようにする(最近傍が`benign`なら
@@ -152,9 +153,25 @@ pub struct SecurityVerdict {
     pub description: &'static str,
     pub score: f32,
     pub is_suspicious: bool,
+    /// 2026-07-26追加: 埋め込みコサイン類似度とは別の、決定的に検証可能な
+    /// 静的特徴抽出(既知シグネチャ一致・エントロピー・API組み合わせ)で
+    /// 検出されたシグナル一覧。空なら何も検出されなかったことを意味する
+    /// (embeddingのみの判定であることを呼び出し側が把握できるようにする)。
+    pub static_signals: Vec<StaticSignal>,
 }
 
 /// 渡されたコード片/説明を、最も近いセキュリティカテゴリへ分類する。
+///
+/// 2026-07-26更新: 従来のembeddingコサイン類似度に加え、
+/// `signatures::analyze`による**決定的な静的特徴抽出**(既知マルウェア/
+/// 攻撃手法の文字列シグネチャ、エンコード文字列のShannon entropy、
+/// 疑わしいAPI呼び出しの組み合わせ)を実行し、以下のように統合する:
+/// - 既知シグネチャに一致した場合は、embeddingスコアに関わらず
+///   確信を持って`is_suspicious=true`とする(EICAR等の決定的一致は
+///   embeddingの類似度計算より確実な証拠のため)。
+/// - `static_signals`は常に(空でも)レスポンスに含め、embeddingだけの
+///   判定なのか静的特徴が寄与したのかを呼び出し側が判別できるようにする
+///   (「正直な開示」方針、CLAUDE.md参照)。
 pub fn classify_security(device: &Arc<dyn GpuDevice>, text: &str) -> Result<SecurityVerdict> {
     let cat_embeddings = category_embeddings(device)?;
     let query = embed(device, text, true)?;
@@ -168,11 +185,27 @@ pub fn classify_security(device: &Arc<dyn GpuDevice>, text: &str) -> Result<Secu
     }
 
     let (idx, score) = best.expect("CATEGORIES is non-empty");
-    let category = &CATEGORIES[idx];
+    let mut category = &CATEGORIES[idx];
+    let mut score = score;
     // 「疑わしい」判定: 最近傍がsuspiciousカテゴリ かつ スコアが閾値以上。
-    let is_suspicious = category.suspicious && score >= SUSPICIOUS_THRESHOLD;
+    let mut is_suspicious = category.suspicious && score >= SUSPICIOUS_THRESHOLD;
 
-    Ok(SecurityVerdict { label: category.name, description: category.description, score, is_suspicious })
+    let static_signals = signatures::analyze(text);
+    if !static_signals.is_empty() {
+        // 既知シグネチャの決定的一致(EICAR等)を最優先する——embeddingの
+        // 意味的類似度より確実な証拠のため、スコアを1.0に上書きしてでも
+        // 確信を持って判定する。
+        let known_hit = static_signals.iter().find(|s| s.category_hint != "benign");
+        if let Some(hit) = known_hit {
+            is_suspicious = true;
+            score = score.max(0.99);
+            if let Some(hint_category) = CATEGORIES.iter().find(|c| c.name == hit.category_hint) {
+                category = hint_category;
+            }
+        }
+    }
+
+    Ok(SecurityVerdict { label: category.name, description: category.description, score, is_suspicious, static_signals })
 }
 
 /// 起動時ウォームアップ(モデルロード + カテゴリ代表ベクトル計算の前倒し)。
