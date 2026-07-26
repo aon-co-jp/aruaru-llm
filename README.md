@@ -68,6 +68,17 @@ Vulkan汎用パスは実装済み)。詳細はopen-cuda側の`CLAUDE.md`のHANDO
   GPT-2のBPE語彙は英語中心のため。実験例:
   `{"prompt": "The quick brown fox", "max_new_tokens": 16}` →
   `"completion": "es are a great way to get a little bit of a kick out of your"`)
+- `GET /v1/models/catalog` — インストール可能なGPT-2アーキテクチャ互換モデル
+  (`gpt2`/`distilgpt2`/`gpt2-medium`/`gpt2-large`)の一覧・インストール済み
+  ID・現在使用中のモデルディレクトリを返す(2026-07-27追加)。
+- `POST /v1/models/install` — `{"id": "distilgpt2"}`のようにカタログから
+  選択したモデルをHugging Faceからダウンロードする(2026-07-27追加)。
+- `POST /v1/models/select` — `{"id": "distilgpt2"}`でダウンロード済みの
+  モデルへ**プロセス再起動無しで**切り替える(2026-07-27追加、読み込みに
+  成功した場合のみ切り替わる設計——失敗時は現在動作中のモデルを維持)。
+  正直な開示: このカタログ・切り替え機能はGPT-2アーキテクチャ互換モデル
+  限定(Llama/Mistral/Qwen等、アーキテクチャの異なるモデルは現行エンジン
+  ではロードできない)。詳細は`CLAUDE.md`参照。
 - `POST /admin/tenants` / `GET /admin/tenants` / `DELETE /admin/tenants/:host` — テナント登録管理(`x-admin-token`ヘッダ認証)
 - `GET /healthz` — ヘルスチェック
 
