@@ -185,6 +185,119 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-07-26(続き) 他のGPT-2アーキテクチャ互換モデルを選択・ダウンロード
+  できるモデルカタログ機能を新規実装(ユーザー指示「aruaru-llm以外の
+  オープンソースのローカルLLMも簡単にダウンロード・インストールを選択
+  可能にしてユーザビリティを高めて」への対応)**:
+  1. **スコープを正直に限定**: `opencuda_llm::GptModel::load`はGPT-2
+     アーキテクチャ専用(`config.json`のフィールド・`model.safetensors`の
+     テンソル名規約・`Conv1D`の重み配置が前提)であり、Llama/Mistral/Qwen等
+     アーキテクチャの異なるモデルはこのエンジンではロードできない。
+     「任意のオープンソースLLM」ではなく「GPT-2互換の別サイズ/別重み」に
+     限定したカタログとして実装した(`src/model_catalog.rs`冒頭のdoc
+     コメントに明記)。
+  2. **新規モジュール`src/model_catalog.rs`**: `CatalogEntry`
+     (id/表示名/Hugging Faceリポジトリ/概算サイズ/ライセンス注記)の
+     静的配列`CATALOG`(既定の`gpt2`に加え、`distilgpt2`〈82M、軽量〉・
+     `gpt2-medium`〈355M〉・`gpt2-large`〈774M〉、いずれも
+     `config.json`/`model.safetensors`/`tokenizer.json`の3ファイル構成が
+     確認できる公式`openai-community`/`distilbert`名前空間のリポジトリ)。
+     `install(entry, dest_dir)`がHugging Faceの`resolve/main/`エンドポイント
+     (認証不要)から3ファイルを`reqwest`でダウンロードし、`.tmp`拡張子経由の
+     アトミックなリネームで書き込む(冪等——既にファイルが存在すれば
+     再ダウンロードしない)。
+  3. **新規HTTPエンドポイント2件**(`main.rs`): `GET /v1/models/catalog`
+     (カタログ一覧+インストール済みID一覧+アーキテクチャ制約の開示文言を
+     返す)、`POST /v1/models/install`(`{"id": "distilgpt2"}`のような
+     リクエストでダウンロードを実行、完了後は`ARUARU_LLM_GPT2_DIR`を
+     ダウンロード先へ向けてプロセスを再起動する必要がある旨を
+     レスポンスに明記——現状のロード方式が起動時`OnceLock`のため実行中の
+     ホットスワップ切り替えには対応していない、この制約も正直に開示)。
+  4. **検証(実測)**: 新規テスト7件(`model_catalog::tests`)を追加、
+     うち`install_writes_all_required_files_from_a_local_mock_server`は
+     `mockito`によるローカルHTTPモックサーバーへ実際にHTTPリクエストを
+     送り、`install`(内部の`install_from_base_url`)が実際に3ファイルを
+     ダウンロード・書き込みし、既存ファイルがあれば再ダウンロードしない
+     (冪等)ことを確認した。`cargo build`/`cargo test`
+     **37件全green**(既存30件+新規7件、回帰なし)。
+  5. **実Hugging Face到達性の確認(誇張しない範囲での実地検証)**:
+     数百MB〜3GB超のモデル重みを本セッション中に自動ダウンロードする
+     ことはせず(明示的なユーザーリクエスト無しに大容量ファイルを
+     自動取得しない方針)、`curl`で`distilbert/distilgpt2/resolve/main/
+     tokenizer.json`・`openai-community/gpt2-large/resolve/main/
+     model.safetensors`へのリダイレクト追跡込みアクセスが実際に
+     `200`を返すことのみ確認した(カタログに載せたURLが実在し到達可能
+     であることの裏取り)。**実際に`POST /v1/models/install`を呼んで
+     数百MB級モデルのダウンロード完了→ロード→生成、という一気通貫の
+     動作確認は今回未実施**(正直な開示)。
+  - 次にすべきこと: (1) 実際に`distilgpt2`等をダウンロードし、
+    `ARUARU_LLM_GPT2_DIR`切り替え後に`GptModel::load`が実際にロードでき
+    生成が動くことのエンドツーエンド確認、(2) ダウンロード進捗の
+    ストリーミング報告(現状は完了までブロックするシンプルな実装)、
+    (3) 管理UI(Tauri Admin GUI等)からのカタログ選択・インストール操作
+    (現状はHTTP API止まり)。
+
+- **2026-07-26 SET連携(open-directx/open-cuda/aruaru-llm)調査: 「GPU推論」は
+  実際にはCPUバックエンドのみで、opencuda-vulkan/open-directxへの実接続が
+  無いことを確認。安易なGPU配線は逆に遅くなりうるという設計上の結論に
+  達したため、今回はコードの変更は行わず調査結果のみを正直に記録する
+  (ユーザー指示: 「open-directxとopencudaとaruaru-llmは、SETで考慮・
+  配慮して連携の実用性と完成度を高めて」への対応、Windows/Linux/nVIDIA
+  実機を中心とする方針)**:
+  1. **現状の確認**: `src/main.rs:319`の`CpuDevice::new(0)`が唯一のデバイス
+     インスタンスで、`generation.rs`のGPT-2生成(`opencuda_llm::GptModel::
+     generate`)・`scoring.rs`の埋め込み計算(`opencuda-bert`経由)・
+     `bow_fallback.rs`の要素積、いずれも実際にはCPU実行。`opencuda-vulkan`
+     へのdependencyは無く(Cargo.toml未記載)、`open-directx`への参照も
+     ソース中に皆無(grep該当0件)。「GPU推論」という呼称は名目上のもので、
+     実際にVulkan/DirectX経由でGPU実機にディスパッチしたことは一度もない。
+  2. **技術的に判明した、安易な配線を避けた理由**: `opencuda-llm::GptModel`
+     の推論ループ(`generate`→`forward_step`→`DecoderLayer::forward_step`→
+     `Linear::forward`)は、プロンプト処理も含め常に`seq_len=1`
+     (1トークンずつの自己回帰デコード)で`opencuda_blas::sgemm`を呼ぶ設計
+     になっている(`opencuda-llm/src/lib.rs:244,332,508`)。これは
+     GPT-2 124M(hidden=768)程度の行列サイズでは、CPU側では数マイクロ秒で
+     終わる極めて軽い計算である一方、Vulkanの`dispatch_spirv`はコマンド
+     バッファ記録・`vkQueueSubmit`・フェンス待機という固定オーバーヘッドを
+     1回のGEMM呼び出しごとに伴う(`opencuda-vulkan/src/real.rs`の
+     `dispatch_spirv`実装)。1トークンあたりレイヤー数×6回(Q/K/V/attn_out/
+     intermediate/output)のLinear呼び出しがあり、GPT-2 124Mは12層のため
+     1トークンで72回のGEMM呼び出しが発生する——これを単純にVulkan経由へ
+     置き換えると、実計算時間よりディスパッチのオーバーヘッドの方が
+     支配的になり、**CPU実行より遅くなる可能性が高い**という結論に至った
+     (実際にベンチマークするところまでは今回行っていないが、既存の
+     `dispatch_spirv`実装のコマンドバッファ/フェンス同期パターンから
+     判断した設計上の懸念であり、誇張せず正直に「推測に基づく懸念」として
+     記録する)。
+  3. **今回あえて実装しなかったこと**: `opencuda_blas::sgemm`の
+     `GemmPath::VulkanGeneric`(`device.supports_spirv()`かつ`spirv`引数
+     ありで動作)自体は既に実装済みで、`aruaru-llm`側からVulkanDeviceを
+     構築し`matmul.spv`を渡せば技術的には配線可能だった。しかし上記2.の
+     懸念を解消せずに「GPUを使っている」という体裁だけを整えるのは
+     ユーザーの「実用性を高めて」という指示に反すると判断し、見せかけの
+     配線は行わなかった。
+  4. **本当に効果が見込める設計変更(次回以降の推奨、今回は未着手)**:
+     (a) プロンプトのプリフィル処理(初回の複数トークン分のforward)を、
+     現状の「1トークンずつのループ」から「`seq_len=プロンプト長`の
+     バッチ処理」へ変更すれば、Linear層のGEMMが本当のGEMM(m>1)になり
+     Vulkanディスパッチの固定オーバーヘッドを算術強度で上回れる可能性が
+     ある(デコード側は引き続きCPUのままでよい、いわゆる
+     prefill/decode分離)。(b) Q/K/Vの3つの`Linear`呼び出しを、
+     safetensors側で既に`c_attn`という1本の融合`Conv1D`として保存されて
+     いる構造(`opencuda-llm/src/lib.rs`の`load_fused_qkv`参照)に合わせ、
+     推論側でも1回のGEMM呼び出しに統合すればディスパッチ回数を1/3に
+     削減できる。(c) 上記(a)(b)を実施した上で初めて、`aruaru-llm`側の
+     デバイス選択(`main.rs:319`)を`opencuda-vulkan::real::VulkanDevice`
+     (`real-vulkan` feature、既定では無効なオプトイン機能にすべき——
+     Android等クロスコンパイル環境でash/Vulkanローダーへの依存を強制
+     しないため)へ切り替え、実GPU実機(NVIDIA GT 730)で生成結果が
+     CPU版と数値的に一致すること・実際に速度が改善することの両方を
+     ベンチマークで確認する、という増分計画とする。
+  - 次にすべきこと: (1) プリフィル/デコード分離とQKV融合(上記4(a)(b))を
+    `opencuda-llm`側に実装、(2) その上で`aruaru-llm`にオプトインの
+    `real-vulkan` featureを追加しVulkanDevice経由の生成を実装、
+    (3) CPU版との生成結果の数値一致・実際の速度差をベンチマークで検証。
+
 - **2026-07-25(続き) `opencuda-llm::GptModel`(GPT-2 124M実重み)を統合、
   `POST /v1/generate`で本格的な自己回帰テキスト生成を実装
   ——実HTTPリクエストでの生成結果まで確認済み**: 姉妹リポジトリ
