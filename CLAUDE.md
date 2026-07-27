@@ -185,6 +185,151 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-07-27(続き3) 「一つ大きなモデルをダウンロードする」/「一つ小さな
+  モデルをダウロードする」ボタンを追加(ユーザー指示への対応、直前の
+  HANDOFF〈お勧めLLMダウンロード〉の上に構築)**:
+  1. **`src/model_catalog.rs`にサイズ順ナビゲーション関数を追加**:
+     `size_ordered_catalog()`(`approx_size_mb`昇順ソート)・
+     `next_larger(current_id)`・`next_smaller(current_id)`
+     (いずれも未知IDや端(最大/最小)では`None`を返す)。カタログの
+     サイズ順は`distilgpt2`(353MB) < `gpt2`(548MB) <
+     `gpt2-medium`(1520MB) < `gpt2-large`(3250MB) < `gpt2-xl`(6430MB)。
+  2. **`src/main.rs`に`step_model_size()`共通ロジック+2エンドポイント**:
+     `POST /v1/download-larger`・`POST /v1/download-smaller`。現在
+     アクティブなモデルID(`current_model_id()`、`generation::
+     active_model_dir()`から逆引き)を起点に`next_larger`/`next_smaller`
+     を解決し、未取得なら`model_catalog::install`でダウンロード、
+     `generation::select_model`でホットスワップ切り替え。既に
+     カタログ端(最大/最小)の場合は`already_installed: true,
+     switched: false`と共に「これ以上大きく/小さくできません」と
+     正直に応答する。切り替え失敗時も直前の稼働モデルは維持される
+     (既存の`recommend-and-download`と同じ「サービスを壊さない」設計)。
+  3. **`static/index.html`にボタン2個(`largerBtn`/`smallerBtn`)を追加**:
+     `stepModelSize(path, button)`という共通JS関数で両エンドポイントを
+     叩き、結果(切り替え元/先ID・ダウンロード要否・成否)を`#status`へ
+     表示する。
+  4. **検証**: `cargo build`成功。`cargo test`**42件全green**(新規2件
+     `model_catalog::tests::next_larger_and_next_smaller_follow_
+     approx_size_order`・`next_larger_and_next_smaller_return_none_
+     for_unknown_id`を含む——`CatalogEntry`が`PartialEq`未実装のため
+     `assert_eq!(..., None)`ではなく`assert!(...is_none())`で比較する
+     形に実装済み)。実機での実HTTP検証(サーバー起動+ボタンクリック
+     +GPU実機での実ダウンロード確認)は今回未実施(GPUハードウェア
+     featureが既定offのCPU-onlyフォールバック経路のみローカルで確認)。
+  - 次にすべきこと: (1) `hw-detect-vulkan`/`hw-detect-directx`を有効化
+    した実機ビルドでの実ダウンロード・実切り替えの動作確認、
+    (2) UIの日本語文言を他言語(英/伊/仏/独/露)へ拡張するかの検討。
+
+- **2026-07-27(続き2) ハードウェア検出→推奨LLMサイズ→「お勧めLLMを
+  ダウンロード」ボタンを実装(ユーザー指示「open-directx・open-cuda・
+  aruaru-llmの組み合わせで『お勧めLLMをダウンロード』ボタンで最適な
+  LLMをダウンロードする機能を搭載して」への対応、直前のHANDOFF
+  〈モデルカタログ・ホットスワップ〉の上に構築)**:
+  1. **新規モジュール`src/hardware.rs`**: `open-cuda`(`opencuda-vulkan`、
+     Vulkan物理デバイス列挙)・`open-directx`(`opencuda-directx`、DXGI
+     アダプタ列挙)のいずれかからGPUベンダー名・VRAM容量を取得し、
+     VRAM容量に応じてGPT-2ファミリーの推奨サイズ(124M/355M/774M/1.5B)
+     を選ぶ簡易ヒューリスティックを実装(閾値: <2GB→124M、2-4GB→355M、
+     4-8GB→774M、8GB以上→1.5B、GPU検出不能・CPUのみ→124M固定の
+     安全側フォールバック)。**正直な開示**: パラメータ数×4バイトの
+     fp32概算とVRAM容量の単純比較に過ぎず、精密な性能予測ではない旨を
+     モジュールdoc・APIレスポンス(`disclosure_ja`)・UI双方に明記した。
+  2. **GPU検出はopt-in feature**(`hw-detect-vulkan`/`hw-detect-directx`、
+     `Cargo.toml`に追加、既定は両方無効): `opencuda-vulkan`/
+     `opencuda-directx`をoptional path依存として追加し、それぞれ上流
+     クレート自身の`real-vulkan`/`real-dx12` featureへ連鎖させた。
+     既定ビルド(feature無効)ではCPUのみとみなし安全側(124M)へ
+     フォールバックするため、Android等クロスコンパイル環境やCI環境に
+     Vulkanローダー/Windows SDK依存を強制しない(既存の`opencuda-vulkan`/
+     `opencuda-directx`自身の設計方針を踏襲)。
+  3. **どちらの経路の情報を使うか明確化**(ユーザー指示への直接対応):
+     `hardware::detect()`はVulkan経路を優先し、両feature有効なら
+     DXGI(DirectX)側の結果を10%許容誤差でクロスチェックし
+     `cross_check_agreement`フィールドへ記録する。実際に使われた経路は
+     `detection_path`("vulkan"/"directx"/"cpu-only-fallback")で常に
+     APIレスポンスへ明示する。
+  4. **モデルカタログに`gpt2-xl`(1.5B、`openai-community/gpt2-xl`)を
+     追加**(`src/model_catalog.rs`)——VRAM8GB以上枠に対応する実在の
+     Hugging Face公開リポジトリ。
+  5. **新規HTTPエンドポイント2件**(`main.rs`): `GET /v1/recommend`
+     (検出のみ)、`POST /v1/recommend-and-download`
+     (検出→未ダウンロードならHugging Faceから取得〈`model_catalog::install`
+     を再利用、既存ファイルがあれば再取得しない冪等設計〉→
+     `generation::select_model`でホットスワップ切り替え、まで一括)。
+     切り替え失敗時は現在動作中のモデルを維持し、エラー内容を正直に
+     返す(`select_model`と同じ「サービスを壊さない」設計)。
+  6. **`generation::engine_label()`を新設**(`src/generation.rs`):
+     従来の固定`ENGINE_GPT2_GREEDY`定数は、ホットスワップでgpt2-medium
+     等へ切り替えた後も"gpt2-124m-..."と表示され続ける不正直な状態
+     だった(直前のHANDOFFで追加したホットスワップ機能の副作用に
+     今回気付いて修正)。`active_model_dir()`のディレクトリ名を反映した
+     動的な`engine`文字列("gpt2-medium-greedy-decode-v0-opencuda-llm-cpu"
+     等)を返すよう`main.rs`の`/v1/generate`ハンドラを修正した。
+  7. **最小限の静的HTML UI新設**(`static/index.html`、`GET /`で配信):
+     「お勧めLLMをダウンロード」ボタン1つ+進捗/結果表示+切り替え成功後の
+     生成テスト導線。Tauri/Node.js/TypeScript不使用、`include_str!`で
+     Rustバイナリへ埋め込み配信(過剰実装を避ける方針通り)。
+  8. **実機検証(型チェックのみで完了と報告しない方針を徹底、このマシンの
+     実GPU〈NVIDIA GeForce GT 730〉で一気通貫の動作確認まで実施)**:
+     - `cargo test --release --features hw-detect-vulkan`
+       **42件全green**(既存39件+`hardware`モジュール新規3件、実際に
+       Vulkan経由のGPU検出コードパスを通した上でパニックしないことを
+       含めて検証)。
+     - 実際にサーバーを起動し(`--features hw-detect-vulkan`)、
+       `GET /v1/recommend`が実際に`{"gpu_detected":true,
+       "detection_path":"vulkan","gpu_name":"OpenCUDA Vulkan Device
+       (NVIDIA GeForce GT 730)","vram_bytes":2104819712}`を返すことを
+       確認した。**この`vram_bytes=2104819712`という値は、`open-cuda`
+       側`CLAUDE.md`の2026-07-23 HANDOFFに記録されているDXGI経由の
+       同一実機での実測値と完全一致する**——これにより「open-directx
+       経由でもopen-cuda経由でも同じベンダー・VRAM情報を返すこと」
+       (ユーザー指示4番)を、実際に2つの独立した検出コードパスの
+       実行結果を突き合わせて確認できた(DirectX側は今回新たに
+       実行し直してはいないが、既存の実測記録との一致を裏取りとして
+       使った、正直な検証範囲として明記)。
+     - `POST /v1/recommend-and-download`を実際に呼び出し、推奨モデル
+       (このマシンではVRAM 1.96GB<2GBのため`gpt2`)の判定・ダウンロード
+       (既にダウンロード済みのケース)・ホットスワップ切り替え・
+       `/v1/generate`での実際の生成("The quick brown fox" →
+       "es are a great way to get a little bit of a kick out of your")
+       まで一連の流れが実際に動作することを確認した。
+     - さらに大きいサイズの実ダウンロードも実施(ユーザー指示「可能なら
+       1つ大きめのサイズも実際に試すこと」への対応): `POST
+       /v1/models/install {"id":"gpt2-medium"}`で実際にHugging Faceから
+       355M(1.52GB、`model.safetensors`)を約51秒でダウンロード、
+       `POST /v1/models/select`でプロセス再起動無しに切り替え、
+       `/v1/generate`で実際に生成("Artificial intelligence is" →
+       " a big deal. It's a big deal because it's going to change the
+           way we think about")、`engine`フィールドが
+       "gpt2-medium-greedy-decode-v0-opencuda-llm-cpu"へ正しく更新
+       されていることを確認した。
+     - UIを実際にブラウザで開き(`http://127.0.0.1:4600/`)、白画面・
+       コンソールエラーが無いことを確認した上で「お勧めLLMを
+       ダウンロード」ボタンをクリック→検出結果・推奨モデル・切り替え
+       結果が実際に画面へ表示されること、続けて「生成テスト実行」
+       ボタンで実際の生成結果がDOMへ反映されることを確認した
+       (白画面バグ等を見逃さない検証徹底ルールに基づく)。
+  9. **正直な開示・スコープ外**: (a) 上記の通りDirectX経路
+     (`--features hw-detect-directx`)は今回のセッションで改めて
+     ビルド成功のみ確認し(`cargo build --features hw-detect-directx`
+     成功)、実機での`/v1/recommend`呼び出しによる再検証はVulkan経由の
+     みで行った(既存のDXGI実測記録との数値一致で代替、上記8番参照)。
+     (b) 生成処理自体は引き続きCPU実行のまま(`open-cuda`側CLAUDE.mdの
+     「安易なGPU配線は逆に遅くなりうる」という2026-07-26の結論を
+     踏襲、ハードウェア検出は推奨サイズ選定の入力としてのみ使い、
+     生成のGPUディスパッチ配線は行っていない)。(c) 1.5B
+     (`gpt2-xl`、6.4GB)は今回実ダウンロードで検証していない
+     (カタログへの追加・ヒューリスティックのロジック検証に留まる、
+     このマシンのVRAM検出結果〈1.96GB〉ではそもそも推奨対象にならない
+     ため優先度を下げた)。
+  - 次にすべきこと: (1) `--features hw-detect-directx`を実際に有効化
+    した状態での`/v1/recommend`実行検証(今回はビルド成功のみ)、
+    (2) `gpt2-xl`(1.5B)の実ダウンロード検証(8GB以上VRAM環境が
+    得られ次第、またはVRAM閾値を無視した強制インストールでの動作確認)、
+    (3) ダウンロード進捗のストリーミング報告(現状は完了までブロック
+    する既存のシンプルな実装のまま、直前のHANDOFFから継続する既知の
+    未着手事項)。
+
 - **2026-07-27 モデルのホットスワップ(プロセス再起動不要のモデル切り替え)
   を実装——直前エントリの「次にすべきこと(2)」で残っていた制約
   (「ダウンロード完了後、実際にそのモデルを使うにはプロセスを再起動する

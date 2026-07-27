@@ -16,6 +16,7 @@
 
 mod bow_fallback;
 mod generation;
+mod hardware;
 mod model_catalog;
 mod scoring;
 mod security;
@@ -264,15 +265,20 @@ const MAX_NEW_TOKENS_LIMIT: usize = 128;
 struct GenerateResponse {
     /// `prompt`に続けて生成されたテキスト(プロンプト自体は含まない)。
     completion: String,
-    engine: &'static str,
-    /// 正直な開示メッセージ(常に返す、GPT-2 124Mの性能限界を毎回明示)。
+    /// 2026-07-27修正: `model_catalog`経由のホットスワップ後も実際に
+    /// 使用中のモデルディレクトリ名を反映するよう動的化
+    /// (`generation::engine_label()`)——固定文字列のままだと、例えば
+    /// gpt2-mediumへ切り替えた後も"gpt2-124m-..."と表示され続け不正直
+    /// だったため。
+    engine: String,
+    /// 正直な開示メッセージ(常に返す、GPT-2系モデルの性能限界を毎回明示)。
     disclosure: &'static str,
 }
 
 #[derive(Debug, Serialize)]
 struct GenerateErrorResponse {
     error: String,
-    engine: &'static str,
+    engine: String,
 }
 
 /// `opencuda-llm::GptModel`(GPT-2 124M実重み)による自己回帰テキスト生成。
@@ -286,8 +292,8 @@ fn generate(Json(req): Json<GenerateRequest>, Data(device): Data<&Arc<dyn GpuDev
         Ok(completion) => {
             let body = serde_json::to_string(&GenerateResponse {
                 completion,
-                engine: generation::ENGINE_GPT2_GREEDY,
-                disclosure: "GPT-2 124M is a small 2019-era model, not comparable to modern commercial LLMs (e.g. GPT-4). \
+                engine: generation::engine_label(),
+                disclosure: "GPT-2 family models (124M-1.5B) are small 2019-era models, not comparable to modern commercial LLMs (e.g. GPT-4). \
                     This demonstrates self-contained text generation without an external LLM API contract, not state-of-the-art quality. \
                     Output may be grammatically fluent but is not guaranteed to be factually accurate.",
             })
@@ -296,7 +302,7 @@ fn generate(Json(req): Json<GenerateRequest>, Data(device): Data<&Arc<dyn GpuDev
         }
         Err(err) => {
             tracing::warn!("generate failed: {err:#}");
-            let body = serde_json::to_string(&GenerateErrorResponse { error: format!("{err:#}"), engine: generation::ENGINE_GPT2_GREEDY })
+            let body = serde_json::to_string(&GenerateErrorResponse { error: format!("{err:#}"), engine: generation::engine_label() })
                 .unwrap_or_else(|_| "{}".to_string());
             Response::builder().status(StatusCode::SERVICE_UNAVAILABLE).content_type("application/json").body(body)
         }
@@ -437,6 +443,171 @@ async fn install_model(Json(req): Json<InstallModelRequest>) -> Response {
     }
 }
 
+/// `GET /v1/recommend` — ハードウェア検出+推奨モデルサイズ算出のみ
+/// (ダウンロードは行わない、2026-07-27新設)。`hardware::recommend()`が
+/// `open-directx`(DXGI)/`open-cuda`(Vulkan)いずれかの実GPU検出を試み、
+/// VRAM容量から推奨モデルIDを算出する(正直な開示は`hardware.rs`
+/// モジュールdoc参照)。
+#[handler]
+fn recommend_model() -> Response {
+    let rec = hardware::recommend();
+    let body = serde_json::to_string(&rec).unwrap_or_else(|_| "{}".to_string());
+    Response::builder().status(StatusCode::OK).content_type("application/json").body(body)
+}
+
+#[derive(Debug, Serialize)]
+struct RecommendAndDownloadResponse {
+    recommendation: hardware::Recommendation,
+    already_installed: bool,
+    switched_to_recommended: bool,
+    message_ja: String,
+}
+
+/// `POST /v1/recommend-and-download` — 「お勧めLLMをダウンロード」ボタンの
+/// 受け口(2026-07-27新設)。(a)ハードウェア検出→推奨モデルサイズ算出、
+/// (b)未ダウンロードならHugging Faceから取得(`model_catalog::install`、
+/// 既にダウンロード済みなら再取得しない=冪等)、(c)ダウンロード
+/// (または既存)完了後、`generation::select_model`でホットスワップし
+/// `/v1/generate`が直ちにこのモデルを使えるようにする。**正直な開示**:
+/// 失敗時(ダウンロード失敗・切り替え失敗)は現在動作中のモデルを維持
+/// したまま、エラー内容を正直に返す(サービスを壊さない設計、
+/// `select_model`と同じ思想)。
+#[handler]
+async fn recommend_and_download() -> Response {
+    let rec = hardware::recommend();
+    let Some(entry) = model_catalog::find(rec.recommended_model_id) else {
+        let body = serde_json::to_string(&InstallModelErrorResponse { error: format!("recommended id {} not in catalog (internal bug)", rec.recommended_model_id) }).unwrap_or_else(|_| "{}".to_string());
+        return Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).content_type("application/json").body(body);
+    };
+
+    let models_root = model_catalog::models_root();
+    let dest_dir = models_root.join(entry.id);
+    let already_installed = model_catalog::installed_ids(&models_root).contains(&entry.id);
+
+    if !already_installed {
+        if let Err(err) = model_catalog::install(entry, &dest_dir).await {
+            tracing::warn!("recommend_and_download: install({}) failed: {err:#}", entry.id);
+            let body = serde_json::to_string(&InstallModelErrorResponse { error: format!("{err:#}") }).unwrap_or_else(|_| "{}".to_string());
+            return Response::builder().status(StatusCode::BAD_GATEWAY).content_type("application/json").body(body);
+        }
+    }
+
+    let dir_for_task = dest_dir.clone();
+    let switch_result = tokio::task::spawn_blocking(move || generation::select_model(dir_for_task)).await;
+    let (switched_to_recommended, message_ja) = match switch_result {
+        Ok(Ok(())) => (true, format!("推奨モデル{}({})のダウンロードと切り替えが完了しました。/v1/generateで使用中です。", entry.display_name_ja, entry.id)),
+        Ok(Err(e)) => {
+            tracing::warn!("recommend_and_download: select_model({}) failed: {e:#}", entry.id);
+            (false, format!("ダウンロードは完了しましたが、切り替えに失敗しました({e:#})。現在動作中のモデルは維持されています。"))
+        }
+        Err(e) => (false, format!("切り替え処理がパニックしました({e})。現在動作中のモデルは維持されています。")),
+    };
+
+    let body = serde_json::to_string(&RecommendAndDownloadResponse { recommendation: rec, already_installed, switched_to_recommended, message_ja }).unwrap_or_else(|_| "{}".to_string());
+    Response::builder().status(StatusCode::OK).content_type("application/json").body(body)
+}
+
+/// 現在アクティブなモデルのカタログID(2026-07-27追加、「一つ大きい/
+/// 小さいモデルをダウンロード」ボタンが「今どのサイズを基準に1段階
+/// 動かすか」を判断するために使う)。`model_catalog::install`が
+/// `models_root().join(entry.id)`という規約でディレクトリを作る
+/// (`recommend_and_download`参照)ため、そのディレクトリ名の最後の
+/// パス要素がそのままカタログIDになる。まだ一度もモデルを切り替えて
+/// いない(起動時の既定モデルのまま)場合、既定モデルの読み込み元
+/// ディレクトリ名も偶然`"gpt2"`という同じ規約に従う
+/// (`generation::default_model_dir`参照)ため、素直にディレクトリ名を
+/// 使うだけでよい。取得できない場合は安全側の"gpt2"を基準にする。
+fn current_model_id() -> String {
+    generation::active_model_dir()
+        .and_then(|dir| dir.file_name().map(|n| n.to_string_lossy().to_string()))
+        .unwrap_or_else(|| "gpt2".to_string())
+}
+
+#[derive(Debug, Serialize)]
+struct StepModelResponse {
+    from_id: String,
+    to_id: Option<String>,
+    already_installed: bool,
+    switched: bool,
+    message_ja: String,
+}
+
+/// `direction`に応じて「今使っているモデルより1段階大きい/小さい」
+/// カタログエントリを探し、未取得ならダウンロードした上でホットスワップ
+/// する共通処理(`POST /v1/download-larger`/`POST /v1/download-smaller`
+/// 双方から呼ぶ、2026-07-27新設)。既に最大/最小サイズの場合は、正直に
+/// その旨を伝えて何もしない(`to_id: None`、`switched: false`)。
+async fn step_model_size(direction_larger: bool) -> Response {
+    let from_id = current_model_id();
+    let next = if direction_larger { model_catalog::next_larger(&from_id) } else { model_catalog::next_smaller(&from_id) };
+
+    let Some(entry) = next else {
+        let label = if direction_larger { "最大" } else { "最小" };
+        let body = serde_json::to_string(&StepModelResponse {
+            from_id: from_id.clone(),
+            to_id: None,
+            already_installed: true,
+            switched: false,
+            message_ja: format!("現在の{from_id}は既にカタログ内で{label}サイズです。これ以上{}できません。", if direction_larger { "大きくする" } else { "小さくする" }),
+        })
+        .unwrap_or_else(|_| "{}".to_string());
+        return Response::builder().status(StatusCode::OK).content_type("application/json").body(body);
+    };
+
+    let models_root = model_catalog::models_root();
+    let dest_dir = models_root.join(entry.id);
+    let already_installed = model_catalog::installed_ids(&models_root).contains(&entry.id);
+
+    if !already_installed {
+        if let Err(err) = model_catalog::install(entry, &dest_dir).await {
+            tracing::warn!("step_model_size: install({}) failed: {err:#}", entry.id);
+            let body = serde_json::to_string(&InstallModelErrorResponse { error: format!("{err:#}") }).unwrap_or_else(|_| "{}".to_string());
+            return Response::builder().status(StatusCode::BAD_GATEWAY).content_type("application/json").body(body);
+        }
+    }
+
+    let dir_for_task = dest_dir.clone();
+    let switch_result = tokio::task::spawn_blocking(move || generation::select_model(dir_for_task)).await;
+    let (switched, message_ja) = match switch_result {
+        Ok(Ok(())) => (true, format!("{from_id} から {}({}) へ切り替えました。/v1/generateで使用中です。", entry.display_name_ja, entry.id)),
+        Ok(Err(e)) => {
+            tracing::warn!("step_model_size: select_model({}) failed: {e:#}", entry.id);
+            (false, format!("ダウンロードは完了しましたが、切り替えに失敗しました({e:#})。現在動作中の{from_id}は維持されています。"))
+        }
+        Err(e) => (false, format!("切り替え処理がパニックしました({e})。現在動作中の{from_id}は維持されています。")),
+    };
+
+    let body = serde_json::to_string(&StepModelResponse { from_id, to_id: Some(entry.id.to_string()), already_installed, switched, message_ja }).unwrap_or_else(|_| "{}".to_string());
+    Response::builder().status(StatusCode::OK).content_type("application/json").body(body)
+}
+
+/// `POST /v1/download-larger` — 現在のモデルより1段階大きいカタログ
+/// エントリをダウンロード・切り替える(2026-07-27新設、ユーザー指示
+/// 「一つ大きなモデルをダウンロードする、と言うボタンも作って」)。
+#[handler]
+async fn download_larger_model() -> Response {
+    step_model_size(true).await
+}
+
+/// `POST /v1/download-smaller` — 現在のモデルより1段階小さいカタログ
+/// エントリをダウンロード・切り替える(2026-07-27新設、ユーザー指示
+/// 「一つ小さなモデルをダウロードする、と言うボタンも作って」)。
+#[handler]
+async fn download_smaller_model() -> Response {
+    step_model_size(false).await
+}
+
+/// 最小限の静的HTML UI(2026-07-27新設、ユーザー指示「お勧めLLMを
+/// ダウンロード」ボタン1つ+進捗表示+生成テスト導線)。Tauri/Node.js/
+/// TypeScript不使用、Rust側でのインライン静的HTML配信(既存エコシステム
+/// 方針通り、過剰実装を避けフレームワーク追加無し)。
+const INDEX_HTML: &str = include_str!("../static/index.html");
+
+#[handler]
+fn index_page() -> Response {
+    Response::builder().status(StatusCode::OK).content_type("text/html; charset=utf-8").body(INDEX_HTML)
+}
+
 #[handler]
 fn healthz() -> &'static str {
     "ok"
@@ -488,6 +659,11 @@ async fn main() -> Result<(), std::io::Error> {
         .at("/v1/models/catalog", get(list_model_catalog))
         .at("/v1/models/install", post(install_model))
         .at("/v1/models/select", post(select_model))
+        .at("/v1/recommend", get(recommend_model))
+        .at("/v1/recommend-and-download", post(recommend_and_download))
+        .at("/v1/download-larger", post(download_larger_model))
+        .at("/v1/download-smaller", post(download_smaller_model))
+        .at("/", get(index_page))
         .at("/admin/tenants", post(admin_register_tenant).get(admin_list_tenants))
         .at("/admin/tenants/:host", delete(admin_remove_tenant))
         .at("/healthz", get(healthz))

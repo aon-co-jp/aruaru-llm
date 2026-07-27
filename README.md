@@ -69,8 +69,9 @@ Vulkan汎用パスは実装済み)。詳細はopen-cuda側の`CLAUDE.md`のHANDO
   `{"prompt": "The quick brown fox", "max_new_tokens": 16}` →
   `"completion": "es are a great way to get a little bit of a kick out of your"`)
 - `GET /v1/models/catalog` — インストール可能なGPT-2アーキテクチャ互換モデル
-  (`gpt2`/`distilgpt2`/`gpt2-medium`/`gpt2-large`)の一覧・インストール済み
-  ID・現在使用中のモデルディレクトリを返す(2026-07-27追加)。
+  (`gpt2`/`distilgpt2`/`gpt2-medium`/`gpt2-large`/`gpt2-xl`〈2026-07-27追加〉)
+  の一覧・インストール済みID・現在使用中のモデルディレクトリを返す
+  (2026-07-26追加)。
 - `POST /v1/models/install` — `{"id": "distilgpt2"}`のようにカタログから
   選択したモデルをHugging Faceからダウンロードする(2026-07-27追加)。
 - `POST /v1/models/select` — `{"id": "distilgpt2"}`でダウンロード済みの
@@ -79,8 +80,50 @@ Vulkan汎用パスは実装済み)。詳細はopen-cuda側の`CLAUDE.md`のHANDO
   正直な開示: このカタログ・切り替え機能はGPT-2アーキテクチャ互換モデル
   限定(Llama/Mistral/Qwen等、アーキテクチャの異なるモデルは現行エンジン
   ではロードできない)。詳細は`CLAUDE.md`参照。
+- `GET /v1/recommend`（2026-07-27追加） — `open-cuda`(Vulkan)/`open-directx`
+  (DXGI)経由のハードウェア検出(VRAM容量)から推奨モデルサイズを算出する
+  (ダウンロードは行わない)。`{"hardware": {"gpu_detected":bool,
+  "detection_path":"vulkan"|"directx"|"cpu-only-fallback",
+  "gpu_name":"...","vram_bytes":...,"cross_check_agreement":bool|null},
+  "recommended_model_id":"gpt2-medium","disclosure_ja":"..."}`のような形。
+- `POST /v1/recommend-and-download`（2026-07-27追加、「お勧めLLMを
+  ダウンロード」ボタンの受け口） — ハードウェア検出→推奨サイズ算出→
+  未ダウンロードならHugging Faceから取得(既にあれば再取得しない)→
+  取得後は自動的に`/v1/generate`用へホットスワップ切り替え、まで一括で
+  行う。`{"recommendation": {...}, "already_installed":bool,
+  "switched_to_recommended":bool, "message_ja":"..."}`を返す。
+- `GET /` （2026-07-27追加） — 「お勧めLLMをダウンロード」ボタン1つ+
+  進捗表示+切り替え後の生成テスト導線を持つ、最小限の静的HTML UI
+  (`static/index.html`、フレームワーク不使用)。
 - `POST /admin/tenants` / `GET /admin/tenants` / `DELETE /admin/tenants/:host` — テナント登録管理(`x-admin-token`ヘッダ認証)
 - `GET /healthz` — ヘルスチェック
+
+### ハードウェア検出→推奨LLMサイズ（2026-07-27新設）
+
+`open-directx`(DXGIアダプタ列挙)・`open-cuda`(`opencuda-vulkan`の
+Vulkan物理デバイス列挙)いずれかの実GPU検出結果(VRAM容量)を使い、
+GPT-2ファミリーの複数サイズ(124M/355M/774M/1.5B)から推奨サイズを選ぶ
+簡易ヒューリスティックを`src/hardware.rs`に実装した。VRAM 2GB未満→124M、
+2-4GB→355M、4-8GB→774M、8GB以上→1.5B、GPU検出不能・CPUのみ→124M固定
+(安全側フォールバック)。**正直な開示**: これはモデルサイズ(パラメータ数×
+4バイトのfp32概算)とVRAM容量の単純な比較に基づく目安であり、精密な
+性能予測ではない(KVキャッシュ・アクティベーション等の実消費は含まない)。
+
+GPU検出は既定では無効（`hw-detect-vulkan`/`hw-detect-directx`という
+opt-in Cargo feature、CPUのみの環境やクロスコンパイル環境でVulkan
+ローダー/Windows SDKへの依存を強制しないため）。有効にした場合、Vulkan
+経路を優先し、両方有効ならDXGI(DirectX)側の結果をクロスチェックとして
+ログへ記録する(`cross_check_agreement`フィールド)。**実機検証済み**:
+このマシン(NVIDIA GeForce GT 730)で`--features hw-detect-vulkan`を
+有効にして実行したところ、`vram_bytes=2104819712`を取得——これは
+`open-cuda`側`CLAUDE.md`のHANDOFF(DXGI経由の同一実機での実測値)と
+完全一致する値であり、Vulkan/DirectX両経路が同一ハードウェアに対し
+同じVRAM量を報告することを確認した。
+
+```
+cargo run --release --features hw-detect-vulkan
+# または Windows専用: --features hw-detect-directx
+```
 
 ### 意図分類 vs 生成、どちらを使うか
 

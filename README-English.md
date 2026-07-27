@@ -68,8 +68,47 @@ understanding).
   recommended, since GPT-2's BPE vocabulary is trained mostly on English text. Example, verified
   end-to-end over real HTTP: `{"prompt": "The quick brown fox", "max_new_tokens": 16}` →
   `"completion": "es are a great way to get a little bit of a kick out of your"`)
+- `GET /v1/models/catalog` — GPT-2-compatible models available to install
+  (`gpt2`/`distilgpt2`/`gpt2-medium`/`gpt2-large`/`gpt2-xl`, the last added
+  2026-07-27), which ones are already installed, and the currently active
+  model directory.
+- `POST /v1/models/install` / `POST /v1/models/select` — download a catalog
+  model from Hugging Face, and hot-swap the active model without a process
+  restart.
+- `GET /v1/recommend` (added 2026-07-27) — detects hardware (VRAM) via
+  `open-cuda` (Vulkan) or `open-directx` (DXGI) and returns a recommended
+  GPT-2-family model size, without downloading anything.
+- `POST /v1/recommend-and-download` (added 2026-07-27, backs the
+  "Download recommended LLM" button) — detects hardware → picks a
+  recommended size → downloads it from Hugging Face if not already present
+  (idempotent) → hot-swaps `/v1/generate` to use it. Returns
+  `{"recommendation": {...}, "already_installed":bool,
+  "switched_to_recommended":bool, "message_ja":"..."}`.
+- `GET /` (added 2026-07-27) — minimal static HTML UI (`static/index.html`,
+  no framework) with one "Download recommended LLM" button, progress
+  display, and a generation-test panel once switched.
 - `POST /admin/tenants` / `GET /admin/tenants` / `DELETE /admin/tenants/:host` — tenant registration management (`x-admin-token` header auth)
 - `GET /healthz` — health check
+
+### Hardware detection → recommended LLM size (added 2026-07-27)
+
+`src/hardware.rs` implements a simple heuristic that picks a GPT-2-family
+size (124M/355M/774M/1.5B) from detected VRAM: <2GB → 124M, 2-4GB → 355M,
+4-8GB → 774M, 8GB+ → 1.5B; undetectable GPU / CPU-only → 124M (safe
+fallback). **Honest disclosure**: this is a rough size-vs-VRAM comparison
+(parameter count × 4 bytes, fp32 estimate), not a precise performance
+model — it ignores KV-cache and activation memory.
+
+GPU detection is opt-in via Cargo features `hw-detect-vulkan` /
+`hw-detect-directx` (disabled by default, so CPU-only or cross-compiled
+builds are not forced to depend on the Vulkan loader / Windows SDK). When
+enabled, Vulkan is preferred; if both features are enabled, the DXGI
+(DirectX) result is cross-checked against the Vulkan result and logged
+(`cross_check_agreement`). **Verified on real hardware**: running with
+`--features hw-detect-vulkan` on this machine's NVIDIA GeForce GT 730
+reported `vram_bytes=2104819712` — exactly matching the value previously
+recorded via DXGI in `open-cuda`'s CLAUDE.md, confirming both detection
+paths agree on this GPU.
 
 ### Classification vs. generation — which to use
 

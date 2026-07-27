@@ -74,6 +74,42 @@
    重い自由文生成)ため、別エンドポイントとして両方提供するのがこの
    エコシステムの設計方針。
 
+## 6. ハードウェア検出→推奨LLMサイズ→自動ダウンロード(2026-07-27追加)
+
+`src/hardware.rs`(VRAM容量→推奨モデルサイズの簡易ヒューリスティック、
+`open-cuda`/`open-directx`のGPU検出結果をどちらの経路から取るか)と、
+`main.rs`の`GET /v1/recommend`・`POST /v1/recommend-and-download`・
+`GET /`(`static/index.html`の最小UI)を新設した。
+
+移植手順:
+1. `Cargo.toml`に`opencuda-vulkan`/`opencuda-directx`をoptional
+   path依存として追加し、`hw-detect-vulkan`/`hw-detect-directx`
+   feature(既定無効)を定義する(`hw-detect-vulkan = ["dep:opencuda-vulkan",
+   "opencuda-vulkan/real-vulkan"]`のように、上流クレート自身のopt-in
+   feature〈`real-vulkan`/`real-dx12`〉へ連鎖させる)。**重要**: これらの
+   featureを既定で有効にしないこと——Android等クロスコンパイル環境や
+   CI環境でVulkanローダー/Windows SDKへの依存を強制しないため
+   (`opencuda-vulkan`/`opencuda-directx`自身の既存の設計方針と同じ)。
+2. `src/hardware.rs`をそのままコピーする。VRAM閾値
+   (`recommend_id_for_vram`)は`model_catalog::CATALOG`のサイズ構成に
+   合わせて調整すること。
+3. Vulkan/DirectXを両方有効にした場合、片方を優先しもう片方はクロス
+   チェック(`cross_check_agreement`フィールド)として扱う設計を維持
+   すること——「どちらの経路の情報を実際に使っているか」を常に
+   レスポンスへ明記する(誇大表示回避、`detection_path`フィールド)。
+4. `main.rs`に`GET /v1/recommend`(検出のみ)・
+   `POST /v1/recommend-and-download`(検出→ダウンロード→ホットスワップ
+   切り替えまで一括)ハンドラを追加する。切り替え失敗時は現在動作中の
+   モデルを維持すること(`generation::select_model`と同じ「失敗しても
+   サービスを壊さない」設計を踏襲)。
+5. **正直な開示を省略しないこと**: VRAM容量とモデルサイズの単純比較に
+   過ぎず精密な性能予測ではない旨(`hardware.rs`モジュールdoc参照)を、
+   レスポンスの`disclosure_ja`フィールドとUI双方に必ず表示すること。
+6. UIを追加する場合、Tauri/Node.js/TypeScript等の重量フレームワークを
+   導入せず、`static/index.html`(`include_str!`でRustバイナリへ埋め込み、
+   `poem`から`text/html`で配信)のような最小構成に留めること
+   (過剰実装を避ける、このエコシステム共通の設計方針)。
+
 ## 注意事項
 
 - 本プロジェクトは「LLM」を名乗り、2026-07-25以降`/v1/generate`で実際の
