@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>aruaru-llm — お勧めLLMをダウンロード</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", "Hiragino Kaku Gothic ProN", sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; line-height: 1.6; color: #222; }
+  h1 { font-size: 1.3rem; }
+  button { font-size: 1rem; padding: 0.6rem 1.2rem; cursor: pointer; }
+  button:disabled { cursor: default; opacity: 0.6; }
+  #status { white-space: pre-wrap; background: #f4f4f4; padding: 0.8rem; border-radius: 6px; margin-top: 1rem; font-size: 0.9rem; }
+  .disclosure { font-size: 0.8rem; color: #666; margin-top: 0.5rem; }
+  #genArea { margin-top: 1.5rem; display: none; }
+  textarea { width: 100%; box-sizing: border-box; }
+</style>
+</head>
+<body>
+<h1>aruaru-llm — ハードウェア検出とお勧めLLMダウンロード</h1>
+<p>このマシンのGPU/VRAMを検出し、実行に適したGPT-2互換モデルのサイズを推奨した上で、
+未取得であればHugging Faceから自動ダウンロードします。</p>
+
+<button id="recommendBtn">お勧めLLMをダウンロード</button>
+<button id="largerBtn">一つ大きなモデルをダウンロードする</button>
+<button id="smallerBtn">一つ小さなモデルをダウンロードする</button>
+<div id="status">まだ実行していません。</div>
+<p class="disclosure" id="disclosure"></p>
+
+<div id="genArea">
+  <h2>生成テスト</h2>
+  <textarea id="prompt" rows="2">The quick brown fox</textarea><br>
+  <button id="genBtn">生成テスト実行</button>
+  <div id="genResult"></div>
+</div>
+
+<script>
+const statusEl = document.getElementById('status');
+const disclosureEl = document.getElementById('disclosure');
+const btn = document.getElementById('recommendBtn');
+const largerBtn = document.getElementById('largerBtn');
+const smallerBtn = document.getElementById('smallerBtn');
+const genArea = document.getElementById('genArea');
+const genBtn = document.getElementById('genBtn');
+const genResult = document.getElementById('genResult');
+
+btn.addEventListener('click', async () => {
+  btn.disabled = true;
+  statusEl.textContent = 'ハードウェアを検出しています...(GPU検出→推奨サイズ算出→未取得ならダウンロード。数百MB〜数GBの場合、数分かかることがあります)';
+  try {
+    const res = await fetch('/v1/recommend-and-download', { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) {
+      statusEl.textContent = 'エラー: ' + (data.error || res.status);
+      btn.disabled = false;
+      return;
+    }
+    const hw = data.recommendation.hardware;
+    const gpuLine = hw.gpu_detected
+      ? `GPU検出: ${hw.gpu_name} (経路: ${hw.detection_path}, VRAM: ${(hw.vram_bytes / (1024**3)).toFixed(2)} GB)`
+      : `GPU未検出(CPUのみとみなします、経路: ${hw.detection_path})`;
+    statusEl.textContent =
+      gpuLine + '\n' +
+      `推奨モデル: ${data.recommendation.recommended_model_id}\n` +
+      `既にダウンロード済みだったか: ${data.already_installed ? 'はい' : 'いいえ(今回ダウンロードしました)'}\n` +
+      `切り替え成功: ${data.switched_to_recommended ? 'はい' : 'いいえ'}\n` +
+      data.message_ja;
+    disclosureEl.textContent = data.recommendation.disclosure_ja;
+    if (data.switched_to_recommended) {
+      genArea.style.display = 'block';
+    }
+  } catch (e) {
+    statusEl.textContent = '通信エラー: ' + e;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+async function stepModelSize(path, button) {
+  button.disabled = true;
+  statusEl.textContent = '確認しています...(未取得ならダウンロード。数百MB〜数GBの場合、数分かかることがあります)';
+  try {
+    const res = await fetch(path, { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) {
+      statusEl.textContent = 'エラー: ' + (data.error || res.status);
+      return;
+    }
+    let text = `現在: ${data.from_id}\n`;
+    if (data.to_id) {
+      text += `切り替え先: ${data.to_id}\n` +
+        `既にダウンロード済みだったか: ${data.already_installed ? 'はい' : 'いいえ(今回ダウンロードしました)'}\n` +
+        `切り替え成功: ${data.switched ? 'はい' : 'いいえ'}\n`;
+    }
+    text += data.message_ja;
+    statusEl.textContent = text;
+    if (data.switched) {
+      genArea.style.display = 'block';
+    }
+  } catch (e) {
+    statusEl.textContent = '通信エラー: ' + e;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+largerBtn.addEventListener('click', () => stepModelSize('/v1/download-larger', largerBtn));
+smallerBtn.addEventListener('click', () => stepModelSize('/v1/download-smaller', smallerBtn));
+
+genBtn.addEventListener('click', async () => {
+  genBtn.disabled = true;
+  genResult.textContent = '生成中...';
+  try {
+    const prompt = document.getElementById('prompt').value;
+    const res = await fetch('/v1/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt, max_new_tokens: 20 })
+    });
+    const data = await res.json();
+    genResult.textContent = res.ok ? (prompt + data.completion) : ('エラー: ' + data.error);
+  } catch (e) {
+    genResult.textContent = '通信エラー: ' + e;
+  } finally {
+    genBtn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>

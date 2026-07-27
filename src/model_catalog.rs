@@ -83,10 +83,46 @@ pub const CATALOG: &[CatalogEntry] = &[
         approx_size_mb: 3250,
         license_note_ja: "Modified MIT License(OpenAIのモデルカード参照)。",
     },
+    // 2026-07-27追加(`hardware::recommend`のVRAM8GB以上枠に対応するため)。
+    // 実在するpublicリポジトリ(`openai-community/gpt2-xl`)、config.json/
+    // model.safetensors/tokenizer.jsonの3ファイル構成をHugging Face上で
+    // 事前に確認済み(GPT-2アーキテクチャそのままのXLバリアント)。
+    CatalogEntry {
+        id: "gpt2-xl",
+        display_name_ja: "GPT-2 XL (1.5B、VRAM 8GB以上推奨。CPU推論は非常に低速)",
+        display_name_en: "GPT-2 XL (1.5B, recommended for 8GB+ VRAM. CPU inference will be very slow)",
+        hf_repo: "openai-community/gpt2-xl",
+        approx_size_mb: 6430,
+        license_note_ja: "Modified MIT License(OpenAIのモデルカード参照)。",
+    },
 ];
 
 pub fn find(id: &str) -> Option<&'static CatalogEntry> {
     CATALOG.iter().find(|e| e.id == id)
+}
+
+/// `CATALOG`を概算サイズ(`approx_size_mb`)の昇順に並べたビュー
+/// (2026-07-27追加、「一つ大きい/小さいモデルをダウンロード」ボタン向け)。
+fn size_ordered_catalog() -> Vec<&'static CatalogEntry> {
+    let mut v: Vec<&'static CatalogEntry> = CATALOG.iter().collect();
+    v.sort_by_key(|e| e.approx_size_mb);
+    v
+}
+
+/// `current_id`より1段階サイズが大きいカタログエントリ(既に最大サイズ、
+/// または`current_id`自体がカタログに無い場合は`None`)。
+pub fn next_larger(current_id: &str) -> Option<&'static CatalogEntry> {
+    let ordered = size_ordered_catalog();
+    let idx = ordered.iter().position(|e| e.id == current_id)?;
+    ordered.get(idx + 1).copied()
+}
+
+/// `current_id`より1段階サイズが小さいカタログエントリ(既に最小サイズ、
+/// または`current_id`自体がカタログに無い場合は`None`)。
+pub fn next_smaller(current_id: &str) -> Option<&'static CatalogEntry> {
+    let ordered = size_ordered_catalog();
+    let idx = ordered.iter().position(|e| e.id == current_id)?;
+    idx.checked_sub(1).and_then(|i| ordered.get(i)).copied()
 }
 
 /// ダウンロード対象の3ファイル(`opencuda_llm::GptModel::load`/
@@ -193,6 +229,30 @@ mod tests {
     fn find_returns_entry_for_known_id() {
         let e = find("distilgpt2").expect("distilgpt2 must be in the catalog");
         assert_eq!(e.hf_repo, "distilbert/distilgpt2");
+    }
+
+    /// サイズ順(概算MB昇順)は distilgpt2 < gpt2 < gpt2-medium < gpt2-large
+    /// < gpt2-xl になるはず(2026-07-27追加の「大きい/小さいモデルへ切替」
+    /// ボタン機能向け)。
+    #[test]
+    fn next_larger_and_next_smaller_follow_approx_size_order() {
+        assert_eq!(next_larger("distilgpt2").map(|e| e.id), Some("gpt2"));
+        assert_eq!(next_larger("gpt2").map(|e| e.id), Some("gpt2-medium"));
+        assert_eq!(next_larger("gpt2-medium").map(|e| e.id), Some("gpt2-large"));
+        assert_eq!(next_larger("gpt2-large").map(|e| e.id), Some("gpt2-xl"));
+        assert!(next_larger("gpt2-xl").is_none(), "gpt2-xl is already the largest catalog entry");
+
+        assert_eq!(next_smaller("gpt2-xl").map(|e| e.id), Some("gpt2-large"));
+        assert_eq!(next_smaller("gpt2-large").map(|e| e.id), Some("gpt2-medium"));
+        assert_eq!(next_smaller("gpt2-medium").map(|e| e.id), Some("gpt2"));
+        assert_eq!(next_smaller("gpt2").map(|e| e.id), Some("distilgpt2"));
+        assert!(next_smaller("distilgpt2").is_none(), "distilgpt2 is already the smallest catalog entry");
+    }
+
+    #[test]
+    fn next_larger_and_next_smaller_return_none_for_unknown_id() {
+        assert!(next_larger("does-not-exist").is_none());
+        assert!(next_smaller("does-not-exist").is_none());
     }
 
     #[test]

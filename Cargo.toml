@@ -32,6 +32,20 @@ opencuda-llm = { path = "../open-cuda/crates/opencuda-llm" }
 # HTTPクライアント。OpenSSL不要のrustls-tlsを使用(他リポジトリの既存
 # 方針〈aruaru-db等〉と同じ)。
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+# ハードウェア検出(2026-07-27追加、推奨LLMサイズ算出用)。既定では
+# 無効(opt-in feature) — CPUのみの環境やAndroid等クロスコンパイル環境で
+# Vulkanローダー/Windows SDKへの依存を強制しないため(既存の
+# opencuda-vulkan/opencuda-directx側の設計方針〈real-vulkan/real-dx12が
+# 既定featureに無い〉と同じ考え方)。`hw-detect-vulkan`/`hw-detect-directx`
+# を有効にした場合のみ実GPU検出を試みる。いずれも無効ならCPU固定
+# フォールバックのみで動作する(安全側)。
+opencuda-vulkan = { path = "../open-cuda/crates/opencuda-vulkan", optional = true }
+opencuda-directx = { path = "../open-cuda/crates/opencuda-directx", optional = true }
+
+[features]
+default = []
+hw-detect-vulkan = ["dep:opencuda-vulkan", "opencuda-vulkan/real-vulkan"]
+hw-detect-directx = ["dep:opencuda-directx", "opencuda-directx/real-dx12"]
 
 [dev-dependencies]
 tempfile = "3"

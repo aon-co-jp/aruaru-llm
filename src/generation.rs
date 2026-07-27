@@ -110,7 +110,27 @@ pub fn active_model_dir() -> Option<PathBuf> {
 }
 
 /// エンジン識別子(`engine`フィールド用、常に実装方式を正直に返す方針)。
+/// 後方互換のため定数として残すが、`model_catalog`経由でモデルを
+/// ホットスワップした後は実際のサイズと乖離するため、レスポンスには
+/// [`engine_label`]の方を使うこと(2026-07-27修正——「お勧めLLM
+/// ダウンロード」機能でgpt2-medium/large/xl等に切り替えた後も
+/// "gpt2-124m-..."と表示され続けるのは不正直なため)。
 pub const ENGINE_GPT2_GREEDY: &str = "gpt2-124m-greedy-decode-v0-opencuda-llm-cpu";
+
+/// 現在アクティブなモデルディレクトリ名を反映したエンジン識別子。
+/// ディレクトリ名がわかればそれをそのまま埋め込み(例:
+/// `"gpt2-medium-greedy-decode-v0-opencuda-llm-cpu"`)、未ロード
+/// (`active_model_dir()`が`None`)ならデフォルトの`ENGINE_GPT2_GREEDY`
+/// を返す。
+pub fn engine_label() -> String {
+    match active_model_dir() {
+        Some(dir) => {
+            let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or("unknown").to_string();
+            format!("{name}-greedy-decode-v0-opencuda-llm-cpu")
+        }
+        None => ENGINE_GPT2_GREEDY.to_string(),
+    }
+}
 
 /// `prompt`の続きを`max_new_tokens`個、貪欲デコード(argmax、サンプリング
 /// 無し)で生成する。GPT-2実重み・実トークナイザが読み込めない場合はエラー
