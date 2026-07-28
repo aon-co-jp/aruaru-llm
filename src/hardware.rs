@@ -31,11 +31,12 @@
 //! いずれのfeatureも既定では無効(opt-in、CPUのみの環境やクロス
 //! コンパイル環境でVulkanローダー/Windows SDKへの依存を強制しないため、
 //! `opencuda-vulkan`/`opencuda-directx`自身の既存の`real-vulkan`/
-//! `real-dx12` feature設計方針と同じ)。**両方有効な場合はVulkanを優先し
-//! DirectXの結果をクロスチェックとしてログへ記録する**(どちらの経路の
+//! `real-dx12` feature設計方針と同じ)。**両方有効な場合はDirectXを優先し
+//! Vulkanの結果をクロスチェックとしてログへ記録する**(どちらの経路の
 //! 情報を使うかを明確にするため——ユーザー指示「ハードウェア検出ロジック
 //! がどちらの経路からの情報を使うか明確にドキュメント化すること」への
-//! 対応)。両方失敗、または両feature無効の場合はCPUのみとみなし、
+//! 対応。2026-07-27、ユーザー指示によりVulkan優先→DirectX優先へ反転)。
+//! 両方失敗、または両feature無効の場合はCPUのみとみなし、
 //! 安全側(最小サイズ)にフォールバックする。
 
 use serde::Serialize;
@@ -133,11 +134,15 @@ pub fn detect() -> HardwareSummary {
         _ => None,
     };
 
-    if let Some((name, vram)) = vulkan {
-        return HardwareSummary { gpu_detected: true, detection_path: "vulkan", gpu_name: Some(name), vram_bytes: Some(vram), cross_check_agreement };
-    }
+    // 2026-07-27追記(ユーザー指示: 「Vulkan環境を重視してましたが、今度は
+    // 逆に、open-directxを重視するように変更して」): 優先順位を
+    // DirectX→Vulkanへ反転した。クロスチェックの計算自体(上記)は
+    // どちらを優先するかに関わらず対称なので変更不要。
     if let Some((name, vram)) = directx {
         return HardwareSummary { gpu_detected: true, detection_path: "directx", gpu_name: Some(name), vram_bytes: Some(vram), cross_check_agreement };
+    }
+    if let Some((name, vram)) = vulkan {
+        return HardwareSummary { gpu_detected: true, detection_path: "vulkan", gpu_name: Some(name), vram_bytes: Some(vram), cross_check_agreement };
     }
     HardwareSummary { gpu_detected: false, detection_path: "cpu-only-fallback", gpu_name: None, vram_bytes: None, cross_check_agreement: None }
 }
