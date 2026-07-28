@@ -978,3 +978,29 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
      (優先順位の分岐自体は両feature有効時のみ到達するコードパスのため、
      ユニットテストでの直接検証は行わず、上記の実機起動確認で代替した)。
   - 次にすべきこと: 特になし(この反転自体は完了)。
+
+- **2026-07-27(続き6) 実際にdistilgpt2をダウンロード→切り替え→生成の一気通貫E2Eを実施、実バグを発見・修正(open-cuda側で対応)**:
+  1. **実施内容**: `POST /v1/models/install {"id":"distilgpt2"}`→
+     `POST /v1/models/select {"id":"distilgpt2"}`→
+     `POST /v1/generate {"prompt":"The quick brown fox",...}`の一気通貫
+     を実際に実行。
+  2. **発見した実バグ**: `select`の段階で`missing tensor 'wte.weight':
+     TensorNotFound`エラーで失敗。調査の結果、
+     `distilbert/distilgpt2`のsafetensorsは`transformer.wte.weight`
+     のように`transformer.`プレフィックス付きテンソル名を使っており、
+     `opencuda-llm::GptModel::load`がプレフィックス無し前提でハード
+     コードされていたことが原因と判明(詳細・修正内容は
+     `open-cuda/CLAUDE.md`の同名HANDOFF参照)。
+  3. **修正後の実行結果**: `select`成功
+     (`"使用するモデルをdistilgpt2に切り替えました"`)、`generate`で
+     実際に英文
+     (`"es are a common sight in the wild, and are often found in the
+     wild."`、エンジンラベル`distilgpt2-greedy-decode-v0-opencuda-llm-cpu`)
+     が生成されることを確認した。
+  4. **意義**: 「型チェック・ビルド成功だけで完了と報告しない」方針の
+     実践例——`cargo test`は全green(opencuda-llm側の合成フィクスチャ
+     テストも含む)だったが、実際にHugging Faceから実モデルをダウン
+     ロードして使うE2Eを実行して初めてこの実バグが見つかった。
+  - 次にすべきこと: `gpt2-medium`/`gpt2-large`/`gpt2-xl`についても同様の
+    実ダウンロード→切り替え→生成E2Eを行い、テンソル名規約の違いが
+    無いか確認する(未実施)。
