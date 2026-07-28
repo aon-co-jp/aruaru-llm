@@ -650,6 +650,25 @@ async fn main() -> Result<(), std::io::Error> {
         }
     }
 
+    // 2026-07-27追記(使いやすさ改善): GPU検出feature(hw-detect-vulkan/
+    // hw-detect-directx)はいずれも既定offのため、何も知らずにビルドした
+    // ユーザーは常にCPU-onlyフォールバック(最小モデル固定推奨)に静かに
+    // 誘導されてしまう——起動ログでその旨と有効化方法を明示し、この
+    // 「気づかれないまま」の状態を防ぐ。
+    #[cfg(not(any(feature = "hw-detect-vulkan", feature = "hw-detect-directx")))]
+    tracing::info!(
+        "GPU detection is disabled in this build (hw-detect-vulkan/hw-detect-directx features \
+         are off) — /v1/recommend and /v1/recommend-and-download will always assume CPU-only \
+         and recommend the smallest model. Rebuild with `cargo build --features hw-detect-vulkan` \
+         (or hw-detect-directx on Windows) for hardware-based recommendations."
+    );
+    #[cfg(any(feature = "hw-detect-vulkan", feature = "hw-detect-directx"))]
+    tracing::info!(
+        "GPU detection is enabled in this build (feature(s): {}{}).",
+        if cfg!(feature = "hw-detect-vulkan") { "hw-detect-vulkan " } else { "" },
+        if cfg!(feature = "hw-detect-directx") { "hw-detect-directx" } else { "" },
+    );
+
     let registry = Arc::new(TenantRegistry::new());
 
     let app = Route::new()
