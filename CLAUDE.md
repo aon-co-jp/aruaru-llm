@@ -959,3 +959,22 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
     (2) README.mdのクイックスタート冒頭にもこのfeatureフラグをより
     目立たせる形で言及するかの検討(現状は「ハードウェア検出」節に
     既に記載済みのため優先度は低いと判断)。
+
+- **2026-07-27(続き5) GPU検出の優先順位をVulkan→DirectXへ反転(ユーザー指示「Vulkan環境を重視してましたが、今度は逆に、open-directxを重要視して」)**:
+  1. **`src/hardware.rs::detect()`の分岐順序を入れ替え**: 両feature有効時、
+     従来はVulkan結果を優先しDirectXをクロスチェックとして記録していたが、
+     今回の指示によりDirectX結果を優先しVulkanをクロスチェックとして
+     記録する形へ反転した。クロスチェック計算自体(10%許容誤差での
+     一致判定)は対称なため変更不要。
+  2. **モジュールdocコメントも同期更新**(「両方有効な場合はDirectXを
+     優先しVulkanの結果をクロスチェック」に書き換え)。
+  3. **実機検証**: `cargo build --release --features hw-detect-vulkan,
+     hw-detect-directx`でビルドし、実際にサーバーを起動して
+     `GET /v1/recommend`を叩いたところ、
+     `"detection_path":"directx"`(`gpu_name":"NVIDIA GeForce GT 730"`、
+     `cross_check_agreement":true`)が返ることを実機(GT 730)で確認済み
+     ——反転が実際に効いていることを型チェックだけでなく実行結果で確認。
+  4. **`cargo test`は既存のfeature無効時のテスト3件のみ引き続きgreen**
+     (優先順位の分岐自体は両feature有効時のみ到達するコードパスのため、
+     ユニットテストでの直接検証は行わず、上記の実機起動確認で代替した)。
+  - 次にすべきこと: 特になし(この反転自体は完了)。
