@@ -1006,7 +1006,21 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
     規約で問題なく動作することを確認済み(切り替え成功・実際に英文
     "! I'm a newbie here, so I"を生成、エンジンラベル
     `gpt2-medium-greedy-decode-v0-opencuda-llm-cpu`)。
-  - 次にすべきこと: `gpt2-large`/`gpt2-xl`についても同様の実ダウンロード
-    →切り替え→生成E2Eを行い、テンソル名規約の違いが無いか確認する
-    (未実施、いずれもファイルサイズが大きい〈3.25GB/6.43GB〉ため
-    ダウンロード時間がかかる点に留意)。
+  - **追記2**: `gpt2-large`(3.25GB)・`gpt2-xl`(6.43GB)についても実際に
+    Hugging Faceからダウンロード→`select`→`generate`のE2Eを実施し、
+    いずれも問題なく動作することを確認した(両方とも`gpt2`/`gpt2-medium`
+    と同じ無印テンソル名規約、`transformer.`プレフィックス問題は
+    distilgpt2固有だったと判明)。
+    - `gpt2-large`: 切り替え成功、"jumps over the lazy dog. The quick
+      brown fox"を生成(エンジンラベル
+      `gpt2-large-greedy-decode-v0-opencuda-llm-cpu`)。
+    - `gpt2-xl`: 切り替え成功、"jumps over the lazy dog.\n\nThe slow"を
+      生成(エンジンラベル`gpt2-xl-greedy-decode-v0-opencuda-llm-cpu`)。
+  - **結論**: カタログ5モデル(`gpt2`/`distilgpt2`/`gpt2-medium`/
+    `gpt2-large`/`gpt2-xl`)全てについて、実ダウンロード→切り替え→生成の
+    一気通貫E2Eを実施済み。テンソル名規約の違いは`distilgpt2`のみで、
+    その修正(open-cuda側`key_prefix`自動判定)は既に完了・全モデルで
+    正しく動作することを実証した。
+  - 次にすべきこと: 特になし(カタログ全モデルのE2E確認は完了)。今後
+    カタログに新モデルを追加する際は、同様の実ダウンロード検証を
+    行うこと。
