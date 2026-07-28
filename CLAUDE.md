@@ -1001,6 +1001,12 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
      実践例——`cargo test`は全green(opencuda-llm側の合成フィクスチャ
      テストも含む)だったが、実際にHugging Faceから実モデルをダウン
      ロードして使うE2Eを実行して初めてこの実バグが見つかった。
-  - 次にすべきこと: `gpt2-medium`/`gpt2-large`/`gpt2-xl`についても同様の
-    実ダウンロード→切り替え→生成E2Eを行い、テンソル名規約の違いが
-    無いか確認する(未実施)。
+  - **追記**: `gpt2-medium`(既にダウンロード済みだったもの)についても
+    追加で`select`→`generate`のE2Eを実施し、`gpt2`と同じ無印テンソル名
+    規約で問題なく動作することを確認済み(切り替え成功・実際に英文
+    "! I'm a newbie here, so I"を生成、エンジンラベル
+    `gpt2-medium-greedy-decode-v0-opencuda-llm-cpu`)。
+  - 次にすべきこと: `gpt2-large`/`gpt2-xl`についても同様の実ダウンロード
+    →切り替え→生成E2Eを行い、テンソル名規約の違いが無いか確認する
+    (未実施、いずれもファイルサイズが大きい〈3.25GB/6.43GB〉ため
+    ダウンロード時間がかかる点に留意)。
