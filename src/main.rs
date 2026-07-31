@@ -2,7 +2,7 @@
 //!
 //! **正直な開示(最重要、詳細はCLAUDE.md参照)**: 2026-07-21時点では
 //! 自己回帰デコーダによる文章生成(いわゆる対話生成としての「LLM」の
-//! 能力)は実装していない。`open-cuda`の`opencuda-bert`クレート
+//! 能力)は実装していない。`open-cuda`の`open-cuda-bert`クレート
 //! (multilingual-e5-small、MITライセンス)で実際に文を埋め込みベクトルへ
 //! 変換し、`opencuda-blas`の実GEMM(`sgemm`)・実Attention
 //! (`scaled_dot_product_attention`)を`opencuda_cpu::CpuDevice`上で実行して
@@ -192,9 +192,9 @@ async fn classify_security(req: Request, device: Arc<dyn GpuDevice>, registry: A
                     score: v.score,
                     is_suspicious: v.is_suspicious,
                     engine: if had_static_signals {
-                        "embedding-cosine-heuristic-v0-opencuda-bert-cpu+static-signatures-v1-opencuda-cpu"
+                        "embedding-cosine-heuristic-v0-open-cuda-bert-cpu+static-signatures-v1-opencuda-cpu"
                     } else {
-                        "embedding-cosine-heuristic-v0-opencuda-bert-cpu"
+                        "embedding-cosine-heuristic-v0-open-cuda-bert-cpu"
                     },
                     static_signals: v
                         .static_signals
@@ -216,7 +216,7 @@ async fn classify_security(req: Request, device: Arc<dyn GpuDevice>, registry: A
                     description: "classification failed; rely on static findings only",
                     score: 0.0,
                     is_suspicious: false,
-                    engine: "embedding-cosine-heuristic-v0-opencuda-bert-cpu-error",
+                    engine: "embedding-cosine-heuristic-v0-open-cuda-bert-cpu-error",
                     static_signals: Vec::new(),
                 },
             )
@@ -307,7 +307,7 @@ struct GenerateErrorResponse {
     engine: String,
 }
 
-/// `opencuda-llm::GptModel`(GPT-2 124M実重み)による自己回帰テキスト生成。
+/// `open-cuda-llm::GptModel`(GPT-2 124M実重み)による自己回帰テキスト生成。
 /// `/v1/chat`(意図分類、軽量・高速)とは別目的の別エンドポイント——
 /// 意図分類と生成は無理に統合しない設計方針(CLAUDE.md参照)。
 async fn generate(req: Request, device: Arc<dyn GpuDevice>, registry: Arc<TenantRegistry>) -> Response {
@@ -644,7 +644,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("aruaru-llm using open-cuda device: {}", device.info().name);
 
     // コールドスタート対策(2026-07-22追記、CLAUDE.md HANDOFF参照):
-    // opencuda-bertのモデルロード+インテントembedding計算(数秒)を、
+    // open-cuda-bertのモデルロード+インテントembedding計算(数秒)を、
     // サーバがTCP接続を受け付け始める前にここで前倒しで済ませておく。
     // これをやらないと「実際のリクエストが来て初めてOnceLockへロードする」
     // ことになり、e-gov.info等の呼び出し元タイムアウト(実測3秒)を

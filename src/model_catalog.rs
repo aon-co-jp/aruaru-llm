@@ -6,7 +6,7 @@
 //!
 //! ## スコープの正直な開示(誇張しない)
 //!
-//! `opencuda_llm::GptModel::load`は現状GPT-2アーキテクチャ専用
+//! `open_cuda_llm::GptModel::load`は現状GPT-2アーキテクチャ専用
 //! (`config.json`のフィールド・`model.safetensors`内のテンソル名
 //! `wte.weight`/`h.{i}.attn.c_attn.weight`等・`Conv1D`の重み配置を前提)
 //! であり、Llama/Mistral/Qwen等、アーキテクチャの異なるモデル(RoPE・
@@ -125,8 +125,8 @@ pub fn next_smaller(current_id: &str) -> Option<&'static CatalogEntry> {
     idx.checked_sub(1).and_then(|i| ordered.get(i)).copied()
 }
 
-/// ダウンロード対象の3ファイル(`opencuda_llm::GptModel::load`/
-/// `GptTokenizer::load`が要求するもの、`opencuda-llm/src/lib.rs`参照)。
+/// ダウンロード対象の3ファイル(`open_cuda_llm::GptModel::load`/
+/// `GptTokenizer::load`が要求するもの、`open-cuda-llm/src/lib.rs`参照)。
 const REQUIRED_FILES: &[&str] = &["config.json", "model.safetensors", "tokenizer.json"];
 
 const HUGGINGFACE_BASE_URL: &str = "https://huggingface.co";

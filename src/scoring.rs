@@ -3,10 +3,10 @@
 //! **2026-07-21移行: bag-of-wordsから実際の文埋め込みベースへ**。
 //! 以前はユーザー発話・各インテントを固定語彙へのbag-of-words(0/1)
 //! ベクトルへ変換し`opencuda_blas::sgemm`でドット積するだけの単純な
-//! キーワードマッチングだった。現在は`opencuda-bert`(multilingual-e5-small、
+//! キーワードマッチングだった。現在は`open-cuda-bert`(multilingual-e5-small、
 //! Hugging Face、MITライセンス、日本語含む100言語対応)で実際に文を
 //! 384次元の埋め込みベクトルへ変換し、各インテントの代表例文embeddingとの
-//! コサイン類似度(`opencuda_bert::cosine_similarity`)で最も近いものを
+//! コサイン類似度(`open_cuda_bert::cosine_similarity`)で最も近いものを
 //! 選ぶ。埋め込み計算自体、`opencuda-blas`の実GEMM(`sgemm`)・実Attention
 //! (`scaled_dot_product_attention`)を`opencuda_cpu::CpuDevice`上で実行して
 //! 求めている(スタブではない)。
@@ -15,7 +15,7 @@
 //! あり、bag-of-wordsだった頃より意味理解の質は大きく向上した(実機検証:
 //! 「マイナンバーカードの申請をしたい」と「行政手続き・マイナンバーに
 //! 関するご案内」の類似度が「今日の天気は晴れです」より高くなることを
-//! `opencuda-bert`側のテストで確認済み)。ただしこれは**エンコーダ専用**の
+//! `open-cuda-bert`側のテストで確認済み)。ただしこれは**エンコーダ専用**の
 //! 分類であり、自己回帰デコーダによる文章生成(いわゆる対話生成としての
 //! 「LLM」の能力)はまだ実装していない。「LLM」を名乗るこのプロジェクトが
 //! 実際に何を計算しているかを誇張しないための開示(詳しくはCLAUDE.md参照)。
@@ -24,7 +24,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context, Result};
-use opencuda_bert::{cosine_similarity, embed_text, BertModel, BertTokenizer};
+use open_cuda_bert::{cosine_similarity, embed_text, BertModel, BertTokenizer};
 use opencuda_core::GpuDevice;
 
 /// コサイン類似度がこの値未満のときはどのインテントにも一致しないと
@@ -36,7 +36,7 @@ const SIMILARITY_THRESHOLD: f32 = 0.86;
 /// 呼び出し側が「本物の対話生成AIかどうか」「意味理解の質(埋め込み/
 /// bag-of-words)」を判別できるよう、常に実際に使った経路を正直に返す
 /// (CLAUDE.md「正直な開示」節参照)。
-pub const ENGINE_EMBEDDING: &str = "embedding-cosine-v0-opencuda-bert-cpu";
+pub const ENGINE_EMBEDDING: &str = "embedding-cosine-v0-open-cuda-bert-cpu";
 /// 埋め込みモデル(`models/multilingual-e5-small/`)が存在しない、または
 /// ロードに失敗したときに自動的に使われるフォールバック経路
 /// (2026-07-25追加、`bow_fallback.rs`参照)。
@@ -186,9 +186,9 @@ fn get_model() -> Result<&'static EmbeddingModel> {
     }
     let dir = model_dir();
     let model = BertModel::load(&dir)
-        .with_context(|| format!("opencuda-bert: multilingual-e5-smallのロードに失敗しました({dir:?})"))?;
+        .with_context(|| format!("open-cuda-bert: multilingual-e5-smallのロードに失敗しました({dir:?})"))?;
     let tokenizer = BertTokenizer::load(&dir)
-        .with_context(|| format!("opencuda-bert: tokenizer.jsonのロードに失敗しました({dir:?})"))?;
+        .with_context(|| format!("open-cuda-bert: tokenizer.jsonのロードに失敗しました({dir:?})"))?;
     // 別スレッドと競合してもどちらか片方が採用されればよい(結果は同一)。
     let _ = MODEL.set(EmbeddingModel { model, tokenizer });
     Ok(MODEL.get().expect("MODEL was just set"))
@@ -242,7 +242,7 @@ fn get_intent_embeddings(device: &Arc<dyn GpuDevice>) -> Result<&'static Vec<Vec
 }
 
 /// ユーザー発話ともっとも類似度の高いインテントを、open-cudaのCPU
-/// バックエンド上で実行する実際のBERT系エンコーダ(`opencuda-bert`、
+/// バックエンド上で実行する実際のBERT系エンコーダ(`open-cuda-bert`、
 /// GEMM/Attentionは`opencuda-blas`の実カーネル)で計算する。すべての
 /// インテントとの類似度が`SIMILARITY_THRESHOLD`未満ならNoneを返す
 /// (呼び出し側で`FALLBACK_REPLY`にフォールバックする)。
@@ -272,7 +272,7 @@ pub struct ClassifyResult {
     pub engine: &'static str,
 }
 
-/// 意図分類のエントリポイント。まず`opencuda-bert`による埋め込み
+/// 意図分類のエントリポイント。まず`open-cuda-bert`による埋め込み
 /// コサイン類似度分類(`best_intent`)を試み、モデル重み
 /// (`models/multilingual-e5-small/`)が存在しない・ロードに失敗した等で
 /// エラーになった場合は、自動的に`bow_fallback`の固定語彙bag-of-words
@@ -298,7 +298,7 @@ pub fn classify(device: &Arc<dyn GpuDevice>, user_text: &str) -> ClassifyResult 
 }
 
 /// コールドスタート対策(2026-07-22追記、CLAUDE.md 2026-07-22 HANDOFF参照):
-/// `opencuda-bert`モデル・トークナイザのロードとインテント代表ベクトルの
+/// `open-cuda-bert`モデル・トークナイザのロードとインテント代表ベクトルの
 /// 計算は、いずれも`OnceLock`により初回呼び出し時に一度だけ実行される
 /// 設計だが、それを「サーバが接続を受け付け始めた後の最初の実リクエスト」
 /// 任せにすると、呼び出し元(e-gov.info等)のタイムアウト(実測3秒)を
