@@ -8,7 +8,14 @@ name = "aruaru-llm"
 path = "src/main.rs"
 
 [dependencies]
-poem = "3.1"
+# 本家`poem`クレートへの直接依存を廃止し、RPoem(RPoem/crates/
+# open-runo-poem-compat)のPoem互換ファサードへ移行(2026-07-31、
+# ユーザー指示「RPoem(open-runo-poem-compat、Poem互換API面)への移行も
+# 同時に始めて下さい」)。実体はtokio/hyper直接実装
+# (open_runo_router::hyper_compat)であり、本家poemには依存しない。
+open-runo-poem-compat = { path = "../RPoem/crates/open-runo-poem-compat" }
+hyper = { version = "1", features = ["full"] }
+bytes = "1"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -13,6 +13,14 @@
 //! 共有する設計(`src/tenants.rs`参照)。ドメインを追加するたびに
 //! 新しい`aruaru-llm`プロセスを個別インストールする必要はない——
 //! `POST /admin/tenants`で動的登録するだけでよい。
+//!
+//! **Poem互換ファサード(RPoem)への移行(2026-07-31)**: 本家`poem`クレート
+//! への直接依存を廃止し、`RPoem`(`open-runo-poem-compat`、
+//! `open_runo_router::hyper_compat`のtokio/hyper直接実装をpoemと同じ
+//! 呼び出し形状でラップした薄いファサード)へ移行した。`Data<T>`抽出子は
+//! 提供されないため、共有状態(`device`/`registry`)はハンドラ登録時の
+//! クロージャで`Arc`をキャプチャする形に置き換えている——ロジック自体は
+//! 移行前と同一。
 
 mod bow_fallback;
 mod generation;
@@ -25,13 +33,31 @@ mod tenants;
 
 use std::sync::Arc;
 
+use bytes::Bytes;
 use opencuda_core::GpuDevice;
 use opencuda_cpu::CpuDevice;
-use poem::listener::TcpListener;
-use poem::web::{Data, Json, Path};
-use poem::{delete, get, handler, http::StatusCode, post, EndpointExt, Request, Response, Route, Server};
+use open_runo_poem_compat::hyper_compat::{fixed_body, json_response, Params};
+use open_runo_poem_compat::{delete, get, handler_fn, post, Handler, Json, PathParams, Request, Response, Route, Server, StatusCode, TcpListener};
 use serde::{Deserialize, Serialize};
 use tenants::{TenantInfo, TenantRegistry};
+
+/// poemの`Response::builder().status(...).body(&str)`相当(RPoemは
+/// レスポンスボディのcontent-type自動判定を持たないため、プレーン
+/// テキスト応答はこの薄いヘルパーで組み立てる)。
+fn text_response(status: StatusCode, body: impl Into<String>) -> Response {
+    hyper::Response::builder()
+        .status(status)
+        .body(fixed_body(Bytes::from(body.into())))
+        .expect("building a response from a fixed set of valid headers cannot fail")
+}
+
+fn html_page_response(html: &'static str) -> Response {
+    hyper::Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", "text/html; charset=utf-8")
+        .body(fixed_body(Bytes::from(html)))
+        .expect("building a response from a fixed set of valid headers cannot fail")
+}
 
 #[derive(Debug, Deserialize)]
 struct ChatRequest {
@@ -84,40 +110,30 @@ struct ChatResponse {
     lang_fallback: bool,
 }
 
-#[handler]
-fn chat(
-    Json(req): Json<ChatRequest>,
-    Data(device): Data<&Arc<dyn GpuDevice>>,
-    Data(registry): Data<&Arc<TenantRegistry>>,
-) -> Json<ChatResponse> {
-    log_tenant_usage("chat", &req.tenant, registry);
+async fn chat(req: Request, device: Arc<dyn GpuDevice>, registry: Arc<TenantRegistry>) -> Response {
+    let Json(req): Json<ChatRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    log_tenant_usage("chat", &req.tenant, &registry);
 
     // scoring::classifyは、埋め込みモデル(models/multilingual-e5-small/)が
     // 使える場合はコサイン類似度分類を、モデル重みが無い・ロードに失敗した
     // 場合は自動的にbag-of-wordsドット積へフォールバックする(2026-07-25
     // 追加、詳細はscoring.rs/bow_fallback.rs参照)。engineには実際に使われた
     // 経路を常に正直に返す。
-    let result = scoring::classify(device, &req.message);
+    let result = scoring::classify(&device, &req.message);
     match result.intent {
         Some(intent) => {
             let (reply, reply_lang, lang_fallback) = intent.reply_for(&req.lang);
-            Json(ChatResponse {
-                reply: reply.to_string(),
-                engine: result.engine,
-                matched_intent: Some(intent.name),
-                reply_lang,
-                lang_fallback,
-            })
+            json_response(
+                StatusCode::OK,
+                &ChatResponse { reply: reply.to_string(), engine: result.engine, matched_intent: Some(intent.name), reply_lang, lang_fallback },
+            )
         }
         None => {
             let (reply, reply_lang, lang_fallback) = scoring::fallback_reply_for(&req.lang);
-            Json(ChatResponse {
-                reply: reply.to_string(),
-                engine: result.engine,
-                matched_intent: None,
-                reply_lang,
-                lang_fallback,
-            })
+            json_response(StatusCode::OK, &ChatResponse { reply: reply.to_string(), engine: result.engine, matched_intent: None, reply_lang, lang_fallback })
         }
     }
 }
@@ -159,42 +175,51 @@ struct ClassifySecurityResponse {
 /// **正直な開示**: それでも訓練済みマルウェア分類器ではなく、
 /// 意味的類似度+決定的な文字列/数値ヒューリスティックの組み合わせに
 /// すぎない。`engine`と`static_signals`にその内訳を常に明示する。
-#[handler]
-fn classify_security(Json(req): Json<ClassifySecurityRequest>, Data(device): Data<&Arc<dyn GpuDevice>>, Data(registry): Data<&Arc<TenantRegistry>>) -> Json<ClassifySecurityResponse> {
-    log_tenant_usage("classify-security", &req.tenant, registry);
-    match security::classify_security(device, &req.text) {
+async fn classify_security(req: Request, device: Arc<dyn GpuDevice>, registry: Arc<TenantRegistry>) -> Response {
+    let Json(req): Json<ClassifySecurityRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    log_tenant_usage("classify-security", &req.tenant, &registry);
+    match security::classify_security(&device, &req.text) {
         Ok(v) => {
             let had_static_signals = !v.static_signals.is_empty();
-            Json(ClassifySecurityResponse {
-                label: v.label,
-                description: v.description,
-                score: v.score,
-                is_suspicious: v.is_suspicious,
-                engine: if had_static_signals {
-                    "embedding-cosine-heuristic-v0-opencuda-bert-cpu+static-signatures-v1-opencuda-cpu"
-                } else {
-                    "embedding-cosine-heuristic-v0-opencuda-bert-cpu"
+            json_response(
+                StatusCode::OK,
+                &ClassifySecurityResponse {
+                    label: v.label,
+                    description: v.description,
+                    score: v.score,
+                    is_suspicious: v.is_suspicious,
+                    engine: if had_static_signals {
+                        "embedding-cosine-heuristic-v0-opencuda-bert-cpu+static-signatures-v1-opencuda-cpu"
+                    } else {
+                        "embedding-cosine-heuristic-v0-opencuda-bert-cpu"
+                    },
+                    static_signals: v
+                        .static_signals
+                        .into_iter()
+                        .map(|s| StaticSignalDto { tag: s.tag, description: s.description, category_hint: s.category_hint })
+                        .collect(),
                 },
-                static_signals: v
-                    .static_signals
-                    .into_iter()
-                    .map(|s| StaticSignalDto { tag: s.tag, description: s.description, category_hint: s.category_hint })
-                    .collect(),
-            })
+            )
         }
         Err(err) => {
             tracing::warn!("classify_security failed: {err}");
             // 判定不能なときは黙って「安全」とは言わない——is_suspicious=false
             // だが、engineでエラーだったことを正直に示し、呼び出し側が
             // 静的結果のみで判断できるようにする。
-            Json(ClassifySecurityResponse {
-                label: "unknown",
-                description: "classification failed; rely on static findings only",
-                score: 0.0,
-                is_suspicious: false,
-                engine: "embedding-cosine-heuristic-v0-opencuda-bert-cpu-error",
-                static_signals: Vec::new(),
-            })
+            json_response(
+                StatusCode::OK,
+                &ClassifySecurityResponse {
+                    label: "unknown",
+                    description: "classification failed; rely on static findings only",
+                    score: 0.0,
+                    is_suspicious: false,
+                    engine: "embedding-cosine-heuristic-v0-opencuda-bert-cpu-error",
+                    static_signals: Vec::new(),
+                },
+            )
         }
     }
 }
@@ -210,34 +235,35 @@ fn check_admin_token(req: &Request) -> bool {
     }
 }
 
-#[handler]
-fn admin_register_tenant(req: &Request, Json(info): Json<TenantInfo>, Data(registry): Data<&Arc<TenantRegistry>>) -> Response {
-    if !check_admin_token(req) {
-        return Response::builder().status(StatusCode::UNAUTHORIZED).body("invalid admin token");
+async fn admin_register_tenant(req: Request, registry: Arc<TenantRegistry>) -> Response {
+    if !check_admin_token(&req) {
+        return text_response(StatusCode::UNAUTHORIZED, "invalid admin token");
     }
+    let Json(info): Json<TenantInfo> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
     tracing::info!("registering tenant: {}", info.host);
     registry.register(info);
-    Response::builder().status(StatusCode::OK).body("ok")
+    text_response(StatusCode::OK, "ok")
 }
 
-#[handler]
-fn admin_list_tenants(req: &Request, Data(registry): Data<&Arc<TenantRegistry>>) -> Response {
-    if !check_admin_token(req) {
-        return Response::builder().status(StatusCode::UNAUTHORIZED).body("invalid admin token");
+async fn admin_list_tenants(req: Request, registry: Arc<TenantRegistry>) -> Response {
+    if !check_admin_token(&req) {
+        return text_response(StatusCode::UNAUTHORIZED, "invalid admin token");
     }
-    let body = serde_json::to_string(&registry.list()).unwrap_or_else(|_| "[]".to_string());
-    Response::builder().status(StatusCode::OK).content_type("application/json").body(body)
+    json_response(StatusCode::OK, &registry.list())
 }
 
-#[handler]
-fn admin_remove_tenant(req: &Request, Path(host): Path<String>, Data(registry): Data<&Arc<TenantRegistry>>) -> Response {
-    if !check_admin_token(req) {
-        return Response::builder().status(StatusCode::UNAUTHORIZED).body("invalid admin token");
+async fn admin_remove_tenant(req: Request, params: Params, registry: Arc<TenantRegistry>) -> Response {
+    if !check_admin_token(&req) {
+        return text_response(StatusCode::UNAUTHORIZED, "invalid admin token");
     }
+    let host = PathParams::from(params).get("host").unwrap_or("").to_string();
     if registry.remove(&host) {
-        Response::builder().status(StatusCode::OK).body("ok")
+        text_response(StatusCode::OK, "ok")
     } else {
-        Response::builder().status(StatusCode::NOT_FOUND).body("tenant not found")
+        text_response(StatusCode::NOT_FOUND, "tenant not found")
     }
 }
 
@@ -284,27 +310,27 @@ struct GenerateErrorResponse {
 /// `opencuda-llm::GptModel`(GPT-2 124M実重み)による自己回帰テキスト生成。
 /// `/v1/chat`(意図分類、軽量・高速)とは別目的の別エンドポイント——
 /// 意図分類と生成は無理に統合しない設計方針(CLAUDE.md参照)。
-#[handler]
-fn generate(Json(req): Json<GenerateRequest>, Data(device): Data<&Arc<dyn GpuDevice>>, Data(registry): Data<&Arc<TenantRegistry>>) -> Response {
-    log_tenant_usage("generate", &req.tenant, registry);
+async fn generate(req: Request, device: Arc<dyn GpuDevice>, registry: Arc<TenantRegistry>) -> Response {
+    let Json(req): Json<GenerateRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    log_tenant_usage("generate", &req.tenant, &registry);
     let max_new_tokens = req.max_new_tokens.clamp(1, MAX_NEW_TOKENS_LIMIT);
-    match generation::generate(device, &req.prompt, max_new_tokens) {
-        Ok(completion) => {
-            let body = serde_json::to_string(&GenerateResponse {
+    match generation::generate(&device, &req.prompt, max_new_tokens) {
+        Ok(completion) => json_response(
+            StatusCode::OK,
+            &GenerateResponse {
                 completion,
                 engine: generation::engine_label(),
                 disclosure: "GPT-2 family models (124M-1.5B) are small 2019-era models, not comparable to modern commercial LLMs (e.g. GPT-4). \
                     This demonstrates self-contained text generation without an external LLM API contract, not state-of-the-art quality. \
                     Output may be grammatically fluent but is not guaranteed to be factually accurate.",
-            })
-            .unwrap_or_else(|_| "{}".to_string());
-            Response::builder().status(StatusCode::OK).content_type("application/json").body(body)
-        }
+            },
+        ),
         Err(err) => {
             tracing::warn!("generate failed: {err:#}");
-            let body = serde_json::to_string(&GenerateErrorResponse { error: format!("{err:#}"), engine: generation::engine_label() })
-                .unwrap_or_else(|_| "{}".to_string());
-            Response::builder().status(StatusCode::SERVICE_UNAVAILABLE).content_type("application/json").body(body)
+            json_response(StatusCode::SERVICE_UNAVAILABLE, &GenerateErrorResponse { error: format!("{err:#}"), engine: generation::engine_label() })
         }
     }
 }
@@ -325,20 +351,20 @@ struct CatalogResponse {
     disclosure_ja: &'static str,
 }
 
-#[handler]
-fn list_model_catalog() -> Response {
+async fn list_model_catalog() -> Response {
     let models_root = model_catalog::models_root();
-    let body = serde_json::to_string(&CatalogResponse {
-        models: model_catalog::CATALOG,
-        installed_ids: model_catalog::installed_ids(&models_root),
-        active_model_dir: generation::active_model_dir().map(|d| d.to_string_lossy().to_string()),
-        disclosure_ja: "このカタログはGPT-2アーキテクチャ互換モデルのみを対象としています。\
-            Llama/Mistral/Qwen等、異なるアーキテクチャのオープンソースLLMは現在のエンジンでは\
-            ロードできません(config.json/model.safetensors/tokenizer.jsonの3ファイル構成で\
-            GPT-2のテンソル名規約に従うモデルのみ対応)。",
-    })
-    .unwrap_or_else(|_| "{}".to_string());
-    Response::builder().status(StatusCode::OK).content_type("application/json").body(body)
+    json_response(
+        StatusCode::OK,
+        &CatalogResponse {
+            models: model_catalog::CATALOG,
+            installed_ids: model_catalog::installed_ids(&models_root),
+            active_model_dir: generation::active_model_dir().map(|d| d.to_string_lossy().to_string()),
+            disclosure_ja: "このカタログはGPT-2アーキテクチャ互換モデルのみを対象としています。\
+                Llama/Mistral/Qwen等、異なるアーキテクチャのオープンソースLLMは現在のエンジンでは\
+                ロードできません(config.json/model.safetensors/tokenizer.jsonの3ファイル構成で\
+                GPT-2のテンソル名規約に従うモデルのみ対応)。",
+        },
+    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -378,30 +404,28 @@ struct SelectModelResponse {
 /// **読み込みに成功した場合のみ**現在使用中のモデルを置き換える——
 /// 指定した`id`が未インストール・破損している等で読み込みに失敗した
 /// 場合、現在動作中のモデルはそのまま維持され、サービスは壊れない。
-#[handler]
-async fn select_model(Json(req): Json<SelectModelRequest>) -> Response {
+async fn select_model(req: Request) -> Response {
+    let Json(req): Json<SelectModelRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
     let dest_dir = model_catalog::models_root().join(&req.id);
     let dir_for_task = dest_dir.clone();
     let result = tokio::task::spawn_blocking(move || generation::select_model(dir_for_task)).await;
     match result {
-        Ok(Ok(())) => {
-            let body = serde_json::to_string(&SelectModelResponse {
+        Ok(Ok(())) => json_response(
+            StatusCode::OK,
+            &SelectModelResponse {
                 id: req.id.clone(),
                 dir: dest_dir.to_string_lossy().to_string(),
                 message_ja: format!("使用するモデルを{}に切り替えました(プロセス再起動は不要です)。", req.id),
-            })
-            .unwrap_or_else(|_| "{}".to_string());
-            Response::builder().status(StatusCode::OK).content_type("application/json").body(body)
-        }
+            },
+        ),
         Ok(Err(e)) => {
             tracing::warn!("select_model({}) failed: {e:#}", req.id);
-            let body = serde_json::to_string(&InstallModelErrorResponse { error: format!("{e:#}") }).unwrap_or_else(|_| "{}".to_string());
-            Response::builder().status(StatusCode::BAD_REQUEST).content_type("application/json").body(body)
+            json_response(StatusCode::BAD_REQUEST, &InstallModelErrorResponse { error: format!("{e:#}") })
         }
-        Err(e) => {
-            let body = serde_json::to_string(&InstallModelErrorResponse { error: format!("select_model task panicked: {e}") }).unwrap_or_else(|_| "{}".to_string());
-            Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).content_type("application/json").body(body)
-        }
+        Err(e) => json_response(StatusCode::INTERNAL_SERVER_ERROR, &InstallModelErrorResponse { error: format!("select_model task panicked: {e}") }),
     }
 }
 
@@ -413,17 +437,20 @@ async fn select_model(Json(req): Json<SelectModelRequest>) -> Response {
 /// `ARUARU_LLM_GPT2_DIR`をこのディレクトリへ向けて`/v1/generate`を叩く
 /// 側のプロセスを再起動する必要がある(現状のロード方式が起動時
 /// `OnceLock`のため、実行中のホットスワップには対応していない)。
-#[handler]
-async fn install_model(Json(req): Json<InstallModelRequest>) -> Response {
+async fn install_model(req: Request) -> Response {
+    let Json(req): Json<InstallModelRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
     let Some(entry) = model_catalog::find(&req.id) else {
-        let body = serde_json::to_string(&InstallModelErrorResponse { error: format!("unknown model id: {}", req.id) }).unwrap_or_else(|_| "{}".to_string());
-        return Response::builder().status(StatusCode::BAD_REQUEST).content_type("application/json").body(body);
+        return json_response(StatusCode::BAD_REQUEST, &InstallModelErrorResponse { error: format!("unknown model id: {}", req.id) });
     };
 
     let dest_dir = model_catalog::models_root().join(entry.id);
     match model_catalog::install(entry, &dest_dir).await {
-        Ok(()) => {
-            let body = serde_json::to_string(&InstallModelResponse {
+        Ok(()) => json_response(
+            StatusCode::OK,
+            &InstallModelResponse {
                 id: entry.id.to_string(),
                 dir: dest_dir.to_string_lossy().to_string(),
                 message_ja: format!(
@@ -431,14 +458,11 @@ async fn install_model(Json(req): Json<InstallModelRequest>) -> Response {
                     entry.display_name_ja,
                     dest_dir.to_string_lossy()
                 ),
-            })
-            .unwrap_or_else(|_| "{}".to_string());
-            Response::builder().status(StatusCode::OK).content_type("application/json").body(body)
-        }
+            },
+        ),
         Err(err) => {
             tracing::warn!("install_model({}) failed: {err:#}", entry.id);
-            let body = serde_json::to_string(&InstallModelErrorResponse { error: format!("{err:#}") }).unwrap_or_else(|_| "{}".to_string());
-            Response::builder().status(StatusCode::BAD_GATEWAY).content_type("application/json").body(body)
+            json_response(StatusCode::BAD_GATEWAY, &InstallModelErrorResponse { error: format!("{err:#}") })
         }
     }
 }
@@ -448,11 +472,8 @@ async fn install_model(Json(req): Json<InstallModelRequest>) -> Response {
 /// `open-directx`(DXGI)/`open-cuda`(Vulkan)いずれかの実GPU検出を試み、
 /// VRAM容量から推奨モデルIDを算出する(正直な開示は`hardware.rs`
 /// モジュールdoc参照)。
-#[handler]
-fn recommend_model() -> Response {
-    let rec = hardware::recommend();
-    let body = serde_json::to_string(&rec).unwrap_or_else(|_| "{}".to_string());
-    Response::builder().status(StatusCode::OK).content_type("application/json").body(body)
+async fn recommend_model() -> Response {
+    json_response(StatusCode::OK, &hardware::recommend())
 }
 
 #[derive(Debug, Serialize)]
@@ -472,12 +493,13 @@ struct RecommendAndDownloadResponse {
 /// 失敗時(ダウンロード失敗・切り替え失敗)は現在動作中のモデルを維持
 /// したまま、エラー内容を正直に返す(サービスを壊さない設計、
 /// `select_model`と同じ思想)。
-#[handler]
 async fn recommend_and_download() -> Response {
     let rec = hardware::recommend();
     let Some(entry) = model_catalog::find(rec.recommended_model_id) else {
-        let body = serde_json::to_string(&InstallModelErrorResponse { error: format!("recommended id {} not in catalog (internal bug)", rec.recommended_model_id) }).unwrap_or_else(|_| "{}".to_string());
-        return Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).content_type("application/json").body(body);
+        return json_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &InstallModelErrorResponse { error: format!("recommended id {} not in catalog (internal bug)", rec.recommended_model_id) },
+        );
     };
 
     let models_root = model_catalog::models_root();
@@ -487,8 +509,7 @@ async fn recommend_and_download() -> Response {
     if !already_installed {
         if let Err(err) = model_catalog::install(entry, &dest_dir).await {
             tracing::warn!("recommend_and_download: install({}) failed: {err:#}", entry.id);
-            let body = serde_json::to_string(&InstallModelErrorResponse { error: format!("{err:#}") }).unwrap_or_else(|_| "{}".to_string());
-            return Response::builder().status(StatusCode::BAD_GATEWAY).content_type("application/json").body(body);
+            return json_response(StatusCode::BAD_GATEWAY, &InstallModelErrorResponse { error: format!("{err:#}") });
         }
     }
 
@@ -503,8 +524,7 @@ async fn recommend_and_download() -> Response {
         Err(e) => (false, format!("切り替え処理がパニックしました({e})。現在動作中のモデルは維持されています。")),
     };
 
-    let body = serde_json::to_string(&RecommendAndDownloadResponse { recommendation: rec, already_installed, switched_to_recommended, message_ja }).unwrap_or_else(|_| "{}".to_string());
-    Response::builder().status(StatusCode::OK).content_type("application/json").body(body)
+    json_response(StatusCode::OK, &RecommendAndDownloadResponse { recommendation: rec, already_installed, switched_to_recommended, message_ja })
 }
 
 /// 現在アクティブなモデルのカタログID(2026-07-27追加、「一つ大きい/
@@ -518,9 +538,7 @@ async fn recommend_and_download() -> Response {
 /// (`generation::default_model_dir`参照)ため、素直にディレクトリ名を
 /// 使うだけでよい。取得できない場合は安全側の"gpt2"を基準にする。
 fn current_model_id() -> String {
-    generation::active_model_dir()
-        .and_then(|dir| dir.file_name().map(|n| n.to_string_lossy().to_string()))
-        .unwrap_or_else(|| "gpt2".to_string())
+    generation::active_model_dir().and_then(|dir| dir.file_name().map(|n| n.to_string_lossy().to_string())).unwrap_or_else(|| "gpt2".to_string())
 }
 
 #[derive(Debug, Serialize)]
@@ -543,15 +561,16 @@ async fn step_model_size(direction_larger: bool) -> Response {
 
     let Some(entry) = next else {
         let label = if direction_larger { "最大" } else { "最小" };
-        let body = serde_json::to_string(&StepModelResponse {
-            from_id: from_id.clone(),
-            to_id: None,
-            already_installed: true,
-            switched: false,
-            message_ja: format!("現在の{from_id}は既にカタログ内で{label}サイズです。これ以上{}できません。", if direction_larger { "大きくする" } else { "小さくする" }),
-        })
-        .unwrap_or_else(|_| "{}".to_string());
-        return Response::builder().status(StatusCode::OK).content_type("application/json").body(body);
+        return json_response(
+            StatusCode::OK,
+            &StepModelResponse {
+                from_id: from_id.clone(),
+                to_id: None,
+                already_installed: true,
+                switched: false,
+                message_ja: format!("現在の{from_id}は既にカタログ内で{label}サイズです。これ以上{}できません。", if direction_larger { "大きくする" } else { "小さくする" }),
+            },
+        );
     };
 
     let models_root = model_catalog::models_root();
@@ -561,8 +580,7 @@ async fn step_model_size(direction_larger: bool) -> Response {
     if !already_installed {
         if let Err(err) = model_catalog::install(entry, &dest_dir).await {
             tracing::warn!("step_model_size: install({}) failed: {err:#}", entry.id);
-            let body = serde_json::to_string(&InstallModelErrorResponse { error: format!("{err:#}") }).unwrap_or_else(|_| "{}".to_string());
-            return Response::builder().status(StatusCode::BAD_GATEWAY).content_type("application/json").body(body);
+            return json_response(StatusCode::BAD_GATEWAY, &InstallModelErrorResponse { error: format!("{err:#}") });
         }
     }
 
@@ -577,14 +595,12 @@ async fn step_model_size(direction_larger: bool) -> Response {
         Err(e) => (false, format!("切り替え処理がパニックしました({e})。現在動作中の{from_id}は維持されています。")),
     };
 
-    let body = serde_json::to_string(&StepModelResponse { from_id, to_id: Some(entry.id.to_string()), already_installed, switched, message_ja }).unwrap_or_else(|_| "{}".to_string());
-    Response::builder().status(StatusCode::OK).content_type("application/json").body(body)
+    json_response(StatusCode::OK, &StepModelResponse { from_id, to_id: Some(entry.id.to_string()), already_installed, switched, message_ja })
 }
 
 /// `POST /v1/download-larger` — 現在のモデルより1段階大きいカタログ
 /// エントリをダウンロード・切り替える(2026-07-27新設、ユーザー指示
 /// 「一つ大きなモデルをダウンロードする、と言うボタンも作って」)。
-#[handler]
 async fn download_larger_model() -> Response {
     step_model_size(true).await
 }
@@ -592,7 +608,6 @@ async fn download_larger_model() -> Response {
 /// `POST /v1/download-smaller` — 現在のモデルより1段階小さいカタログ
 /// エントリをダウンロード・切り替える(2026-07-27新設、ユーザー指示
 /// 「一つ小さなモデルをダウロードする、と言うボタンも作って」)。
-#[handler]
 async fn download_smaller_model() -> Response {
     step_model_size(false).await
 }
@@ -603,18 +618,21 @@ async fn download_smaller_model() -> Response {
 /// 方針通り、過剰実装を避けフレームワーク追加無し)。
 const INDEX_HTML: &str = include_str!("../static/index.html");
 
-#[handler]
-fn index_page() -> Response {
-    Response::builder().status(StatusCode::OK).content_type("text/html; charset=utf-8").body(INDEX_HTML)
+async fn index_page() -> Response {
+    html_page_response(INDEX_HTML)
 }
 
-#[handler]
-fn healthz() -> &'static str {
-    "ok"
+async fn healthz() -> Response {
+    text_response(StatusCode::OK, "ok")
+}
+
+/// 引数を取らないハンドラを`handler_fn`のシグネチャへ橋渡しする。
+fn plain(f: impl Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = Response> + Send>> + Send + Sync + 'static) -> Handler {
+    handler_fn(move |_req, _params| f())
 }
 
 #[tokio::main]
-async fn main() -> Result<(), std::io::Error> {
+async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
     // マルチコア/マルチスレッド前提: #[tokio::main]の既定フレーバーは
@@ -671,25 +689,55 @@ async fn main() -> Result<(), std::io::Error> {
 
     let registry = Arc::new(TenantRegistry::new());
 
-    let app = Route::new()
-        .at("/v1/chat", post(chat))
-        .at("/v1/classify-security", post(classify_security))
-        .at("/v1/generate", post(generate))
-        .at("/v1/models/catalog", get(list_model_catalog))
-        .at("/v1/models/install", post(install_model))
-        .at("/v1/models/select", post(select_model))
-        .at("/v1/recommend", get(recommend_model))
-        .at("/v1/recommend-and-download", post(recommend_and_download))
-        .at("/v1/download-larger", post(download_larger_model))
-        .at("/v1/download-smaller", post(download_smaller_model))
-        .at("/", get(index_page))
-        .at("/admin/tenants", post(admin_register_tenant).get(admin_list_tenants))
-        .at("/admin/tenants/:host", delete(admin_remove_tenant))
-        .at("/healthz", get(healthz))
-        .data(device)
-        .data(registry);
+    let chat_device = Arc::clone(&device);
+    let chat_registry = Arc::clone(&registry);
+    let classify_device = Arc::clone(&device);
+    let classify_registry = Arc::clone(&registry);
+    let generate_device = Arc::clone(&device);
+    let generate_registry = Arc::clone(&registry);
+    let admin_register_registry = Arc::clone(&registry);
+    let admin_list_registry = Arc::clone(&registry);
+    let admin_remove_registry = Arc::clone(&registry);
 
-    let bind_addr = "0.0.0.0:4600";
+    let app = Route::new()
+        .at("/v1/chat", post(handler_fn(move |req, _p| { let device = Arc::clone(&chat_device); let registry = Arc::clone(&chat_registry); async move { chat(req, device, registry).await } })))
+        .at(
+            "/v1/classify-security",
+            post(handler_fn(move |req, _p| {
+                let device = Arc::clone(&classify_device);
+                let registry = Arc::clone(&classify_registry);
+                async move { classify_security(req, device, registry).await }
+            })),
+        )
+        .at(
+            "/v1/generate",
+            post(handler_fn(move |req, _p| {
+                let device = Arc::clone(&generate_device);
+                let registry = Arc::clone(&generate_registry);
+                async move { generate(req, device, registry).await }
+            })),
+        )
+        .at("/v1/models/catalog", get(plain(|| Box::pin(list_model_catalog()))))
+        .at("/v1/models/install", post(handler_fn(|req, _p| Box::pin(install_model(req)))))
+        .at("/v1/models/select", post(handler_fn(|req, _p| Box::pin(select_model(req)))))
+        .at("/v1/recommend", get(plain(|| Box::pin(recommend_model()))))
+        .at("/v1/recommend-and-download", post(plain(|| Box::pin(recommend_and_download()))))
+        .at("/v1/download-larger", post(plain(|| Box::pin(download_larger_model()))))
+        .at("/v1/download-smaller", post(plain(|| Box::pin(download_smaller_model()))))
+        .at("/", get(plain(|| Box::pin(index_page()))))
+        .at(
+            "/admin/tenants",
+            post(handler_fn(move |req, _p| { let registry = Arc::clone(&admin_register_registry); async move { admin_register_tenant(req, registry).await } }))
+                .get(handler_fn(move |req, _p| { let registry = Arc::clone(&admin_list_registry); async move { admin_list_tenants(req, registry).await } })),
+        )
+        .at(
+            "/admin/tenants/:host",
+            delete(handler_fn(move |req, params| { let registry = Arc::clone(&admin_remove_registry); async move { admin_remove_tenant(req, params, registry).await } })),
+        )
+        .at("/healthz", get(plain(|| Box::pin(healthz()))));
+
+    let bind_addr: std::net::SocketAddr = "0.0.0.0:4600".parse().expect("static bind address is always valid");
     tracing::info!("aruaru-llm listening on {bind_addr} (shared multi-tenant instance)");
-    Server::new(TcpListener::bind(bind_addr)).run(app).await
+    let (_addr, handle) = Server::new(TcpListener::bind(bind_addr)).run(app).await?;
+    handle.await.map_err(|e| anyhow::anyhow!("server task panicked: {e}"))
 }

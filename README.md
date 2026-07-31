@@ -140,8 +140,14 @@ cargo run --release --features hw-detect-vulkan
 
 ## 技術スタック
 
-Rust + [Poem](https://github.com/poem-web/poem) + [open-cuda](https://github.com/aon-co-jp/open-cuda)。
-DB非依存・1バイナリ完結。
+Rust + [RPoem](https://github.com/aon-co-jp/RPoem)(`open-runo-poem-compat`、
+本家[Poem](https://github.com/poem-web/poem)クレートには依存せず、
+Poem互換のAPI形状をtokio/hyper直接実装で提供するファサード、
+2026-07-31移行) + [open-cuda](https://github.com/aon-co-jp/open-cuda)。
+DB非依存・1バイナリ完結。RustはもちろんPython等どの言語からでも
+HTTP経由で利用できる(`opencuda-bert`/`opencuda-llm`/`opencuda-whisper`
+というPython製AIライブラリ〈Transformers/vLLM/Whisper〉のRust移植を、
+このサービスがHTTPサーバーとして公開する窓口)。
 
 詳細な設計思想は [CLAUDE.md](CLAUDE.md) を、他プロジェクトへの移植手順は
 [PORTING.md](PORTING.md) を参照してください。

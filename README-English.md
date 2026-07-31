@@ -128,8 +128,14 @@ Management is intended to happen from [open-easy-web](https://github.com/aon-co-
 
 ## Tech stack
 
-Rust + [Poem](https://github.com/poem-web/poem) + [open-cuda](https://github.com/aon-co-jp/open-cuda).
-No DB dependency, single self-contained binary.
+Rust + [RPoem](https://github.com/aon-co-jp/RPoem) (`open-runo-poem-compat`,
+a Poem-API-compatible facade implemented directly on tokio/hyper — no
+dependency on the real [Poem](https://github.com/poem-web/poem) crate,
+migrated 2026-07-31) + [open-cuda](https://github.com/aon-co-jp/open-cuda).
+No DB dependency, single self-contained binary. Usable from Rust or any
+other language over plain HTTP (this service is the HTTP-serving front
+door for Python-AI-library Rust ports — `opencuda-bert`/`opencuda-llm`/
+`opencuda-whisper`, i.e. Transformers/vLLM/Whisper equivalents).
 
 See [CLAUDE.md](CLAUDE.md) for the design philosophy and
 [PORTING.md](PORTING.md) for how to port these patterns elsewhere.

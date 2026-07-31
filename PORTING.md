@@ -34,9 +34,16 @@
 
 ## 3. HTTP API層
 
-`main.rs`の`poem::Route` + `Data<Arc<dyn GpuDevice>>`による依存性注入
-パターン。デバイスをリクエストごとに再生成せず、起動時に1回だけ生成して
-`app.data(device)`で共有する。
+**2026-07-31更新**: `main.rs`は本家`poem`クレートではなく`RPoem`
+(`open-runo-poem-compat`、path依存)を使用する。`Data<T>`抽出子が無いため、
+共有状態(`Arc<dyn GpuDevice>`・`Arc<TenantRegistry>`)はハンドラ登録時の
+クロージャで`Arc::clone`をキャプチャするパターンに置き換わっている
+(デバイスをリクエストごとに再生成しない、という設計意図自体は不変)。
+他プロジェクトへ移植する際は、`open-runo-poem-compat`の
+`Route::new().at(path, get(handler_fn(...)))`+`handler_fn`+
+`Json::from_body(req).await`+`PathParams::from(params)`という組み合わせを
+テンプレートとして使えばよい(本リポジトリの`src/main.rs`がそのまま
+参考実装になる)。
 
 ## 4. 「分身の術」テナント登録パターン(`open-web-server`と共通)
 
