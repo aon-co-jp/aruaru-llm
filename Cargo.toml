@@ -30,11 +30,11 @@ opencuda-cpu = { path = "../open-cuda/crates/opencuda-cpu" }
 opencuda-blas = { path = "../open-cuda/crates/opencuda-blas" }
 # multilingual-e5-small(MIT)による実際の文埋め込み+コサイン類似度で意図分類する
 # (旧: 固定語彙bag-of-words、2026-07-21移行、CLAUDE.md参照)。
-opencuda-bert = { path = "../open-cuda/crates/opencuda-bert" }
+open-cuda-bert = { path = "../open-cuda/crates/open-cuda-bert" }
 # GPT-2 124M(openai-community/gpt2)実学習済み重みをロードし自己回帰的に
 # 文章生成する(2026-07-25追加、CLAUDE.md参照)。意図分類(scoring.rs)とは
 # 別の目的の別エンドポイント(/v1/generate)として提供する。
-opencuda-llm = { path = "../open-cuda/crates/opencuda-llm" }
+open-cuda-llm = { path = "../open-cuda/crates/open-cuda-llm" }
 # モデルカタログ(2026-07-26追加)からのHugging Faceダウンロードに使う
 # HTTPクライアント。OpenSSL不要のrustls-tlsを使用(他リポジトリの既存
 # 方針〈aruaru-db等〉と同じ)。

@@ -1,4 +1,4 @@
-//! `opencuda-llm::GptModel`(GPT-2 124M実学習済み重み)による本格的な
+//! `open-cuda-llm::GptModel`(GPT-2 124M実学習済み重み)による本格的な
 //! 自己回帰テキスト生成。`scoring.rs`(意図分類、軽量・高速)とは目的が
 //! 異なるため無理に統合せず、別エンドポイント(`POST /v1/generate`)として
 //! 提供する。役割分担: 意図分類=軽量・高速な定型応答振り分け、生成=
@@ -16,8 +16,8 @@
 //!   素の事前学習済み言語モデルの貪欲デコード(温度無し、サンプリング無し)
 //!   であるため、対話的に「質問に答える」というより「文の続きを予測する」
 //!   挙動になる。
-//! - `opencuda-llm`自体もPagedAttention・連続バッチング等の本家vLLM最適化を
-//!   持たない単一シーケンス逐次デコードのMVP実装(`opencuda-llm`の
+//! - `open-cuda-llm`自体もPagedAttention・連続バッチング等の本家vLLM最適化を
+//!   持たない単一シーケンス逐次デコードのMVP実装(`open-cuda-llm`の
 //!   モジュールdocコメント参照)。
 //!
 //! ## モデルのホットスワップ(2026-07-27追加)
@@ -37,17 +37,17 @@ use std::sync::{Arc, RwLock};
 
 use anyhow::{Context, Result};
 use opencuda_core::GpuDevice;
-use opencuda_llm::{GptModel, GptTokenizer};
+use open_cuda_llm::{GptModel, GptTokenizer};
 
 /// GPT-2実重みのディレクトリパス。既定は`open-cuda`側で既に検証・
-/// ダウンロード済みの`opencuda-llm/models/gpt2`(sibling path、`../open-cuda`
+/// ダウンロード済みの`open-cuda-llm/models/gpt2`(sibling path、`../open-cuda`
 /// 前提、`PORTING.md`のsibling path依存パターンと同じ)。
 /// `ARUARU_LLM_GPT2_DIR`環境変数で上書き可能。
 fn default_model_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("ARUARU_LLM_GPT2_DIR") {
         return PathBuf::from(dir);
     }
-    PathBuf::from("../open-cuda/crates/opencuda-llm/models/gpt2")
+    PathBuf::from("../open-cuda/crates/open-cuda-llm/models/gpt2")
 }
 
 struct LoadedGpt {
@@ -115,18 +115,18 @@ pub fn active_model_dir() -> Option<PathBuf> {
 /// [`engine_label`]の方を使うこと(2026-07-27修正——「お勧めLLM
 /// ダウンロード」機能でgpt2-medium/large/xl等に切り替えた後も
 /// "gpt2-124m-..."と表示され続けるのは不正直なため)。
-pub const ENGINE_GPT2_GREEDY: &str = "gpt2-124m-greedy-decode-v0-opencuda-llm-cpu";
+pub const ENGINE_GPT2_GREEDY: &str = "gpt2-124m-greedy-decode-v0-open-cuda-llm-cpu";
 
 /// 現在アクティブなモデルディレクトリ名を反映したエンジン識別子。
 /// ディレクトリ名がわかればそれをそのまま埋め込み(例:
-/// `"gpt2-medium-greedy-decode-v0-opencuda-llm-cpu"`)、未ロード
+/// `"gpt2-medium-greedy-decode-v0-open-cuda-llm-cpu"`)、未ロード
 /// (`active_model_dir()`が`None`)ならデフォルトの`ENGINE_GPT2_GREEDY`
 /// を返す。
 pub fn engine_label() -> String {
     match active_model_dir() {
         Some(dir) => {
             let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or("unknown").to_string();
-            format!("{name}-greedy-decode-v0-opencuda-llm-cpu")
+            format!("{name}-greedy-decode-v0-open-cuda-llm-cpu")
         }
         None => ENGINE_GPT2_GREEDY.to_string(),
     }
@@ -138,10 +138,10 @@ pub fn engine_label() -> String {
 /// bag-of-words的な代替は存在しない)。
 pub fn generate(device: &Arc<dyn GpuDevice>, prompt: &str, max_new_tokens: usize) -> Result<String> {
     let loaded = active_or_load_default().map_err(|e| anyhow::anyhow!(e))?;
-    let prompt_ids = loaded.tokenizer.encode(prompt).context("opencuda-llm tokenizer encode failed")?;
+    let prompt_ids = loaded.tokenizer.encode(prompt).context("open-cuda-llm tokenizer encode failed")?;
     anyhow::ensure!(!prompt_ids.is_empty(), "prompt encoded to zero tokens");
     let generated_ids = loaded.model.generate(device, &prompt_ids, max_new_tokens).context("GptModel::generate failed")?;
-    loaded.tokenizer.decode(&generated_ids).context("opencuda-llm tokenizer decode failed")
+    loaded.tokenizer.decode(&generated_ids).context("open-cuda-llm tokenizer decode failed")
 }
 
 #[cfg(test)]
@@ -157,7 +157,7 @@ mod tests {
     /// `cargo test`全体を壊さないため)。
     #[test]
     fn select_model_succeeds_for_a_real_directory_and_updates_active_model_dir() {
-        let dir = PathBuf::from("../open-cuda/crates/opencuda-llm/models/gpt2");
+        let dir = PathBuf::from("../open-cuda/crates/open-cuda-llm/models/gpt2");
         if !dir.join("model.safetensors").exists() {
             eprintln!("skipping select_model test: real GPT-2 weights not present at {dir:?}");
             return;

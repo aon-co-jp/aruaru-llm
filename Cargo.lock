@@ -99,13 +99,13 @@ dependencies = [
  "bytes",
  "hyper",
  "mockito",
+ "open-cuda-bert",
+ "open-cuda-llm",
  "open-runo-poem-compat",
- "opencuda-bert",
  "opencuda-blas",
  "opencuda-core",
  "opencuda-cpu",
  "opencuda-directx",
- "opencuda-llm",
  "opencuda-vulkan",
  "reqwest 0.12.28",
  "serde",
@@ -1613,6 +1613,35 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
+name = "open-cuda-bert"
+version = "0.4.1"
+dependencies = [
+ "anyhow",
+ "libm",
+ "opencuda-blas",
+ "opencuda-core",
+ "safetensors",
+ "serde",
+ "serde_json",
+ "tokenizers",
+ "tracing",
+]
+
+[[package]]
+name = "open-cuda-llm"
+version = "0.4.1"
+dependencies = [
+ "anyhow",
+ "opencuda-blas",
+ "opencuda-core",
+ "safetensors",
+ "serde",
+ "serde_json",
+ "tokenizers",
+ "tracing",
+]
+
+[[package]]
 name = "open-runo-ai-routing"
 version = "0.1.0"
 dependencies = [
@@ -1856,21 +1885,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "opencuda-bert"
-version = "0.4.1"
-dependencies = [
- "anyhow",
- "libm",
- "opencuda-blas",
- "opencuda-core",
- "safetensors",
- "serde",
- "serde_json",
- "tokenizers",
- "tracing",
-]
-
-[[package]]
 name = "opencuda-blas"
 version = "0.4.1"
 dependencies = [
@@ -1916,20 +1930,6 @@ version = "0.4.1"
 dependencies = [
  "anyhow",
  "opencuda-core",
- "tracing",
-]
-
-[[package]]
-name = "opencuda-llm"
-version = "0.4.1"
-dependencies = [
- "anyhow",
- "opencuda-blas",
- "opencuda-core",
- "safetensors",
- "serde",
- "serde_json",
- "tokenizers",
  "tracing",
 ]
 

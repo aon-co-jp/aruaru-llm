@@ -1,6 +1,6 @@
 //! セキュリティ挙動の意味的類似度分類(RS-Guardの「AI二次判定」用)。
 //!
-//! `scoring.rs`と同じ`opencuda-bert`(multilingual-e5-small)埋め込み +
+//! `scoring.rs`と同じ`open-cuda-bert`(multilingual-e5-small)埋め込み +
 //! コサイン類似度の仕組みを流用し、渡されたコード片/振る舞いの説明を
 //! 「マルウェア/スパイウェア/常駐・自動巡回/正常」の代表例と比較して、
 //! 最も近いカテゴリと類似度スコアを返す。RS-Guardの正規表現ベース静的
@@ -18,7 +18,7 @@
 use std::sync::{Arc, OnceLock};
 
 use anyhow::Result;
-use opencuda_bert::cosine_similarity;
+use open_cuda_bert::cosine_similarity;
 use opencuda_core::GpuDevice;
 
 use crate::scoring::{embed, normalize};

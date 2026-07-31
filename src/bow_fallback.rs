@@ -1,4 +1,4 @@
-//! 埋め込みモデル(`opencuda-bert`/multilingual-e5-small)の重みファイルが
+//! 埋め込みモデル(`open-cuda-bert`/multilingual-e5-small)の重みファイルが
 //! `models/multilingual-e5-small/`に存在しない、またはロードに失敗した
 //! 場合に自動的に使われるフォールバック経路(2026-07-25追加)。
 //!
@@ -6,7 +6,7 @@
 //! なく、`scoring.rs`が2026-07-21移行前まで使っていた、固定語彙への
 //! bag-of-wordsドット積という極めて単純なベクトル演算(要素積を
 //! `opencuda_cpu::CpuDevice`上でカーネル実行し、ホスト側で合計するだけ)。
-//! `opencuda-bert`の470MB超のモデル重みを用意できない環境でもサービスを
+//! `open-cuda-bert`の470MB超のモデル重みを用意できない環境でもサービスを
 //! 完全に停止させないための可用性優先のフォールバックであり、`/v1/chat`の
 //! `engine`フィールドには常にこのフォールバックが使われたことを正直に
 //! 返す(`scoring::ENGINE_BOW_FALLBACK`)。分類精度は埋め込みベースより
