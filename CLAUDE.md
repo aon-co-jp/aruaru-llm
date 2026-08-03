@@ -192,6 +192,23 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-08-04 `POST /v1/translate`を新設(ユーザー指示「aruaru-llmに自動翻訳機能を持たせて」)**:
+  `/v1/generate`(GPT-2系テキスト生成)を翻訳プロンプトで呼び出す薄いラッパー。
+  `{text, target_lang, source_lang(任意), tenant(任意)}` → `{translation, engine,
+  disclosure}`。**正直な開示(最重要)**: 専用の翻訳モデル(NLLB/M2M100等)ではなく、
+  英語中心の事前学習のみでファインチューニング無しのGPT-2系(124M-1.5B)を
+  そのまま流用しているため、特に非英語↔非英語の組み合わせで品質が不安定。
+  この限界はレスポンスの`disclosure`フィールドに毎回明記する(`/v1/generate`と
+  同じ設計方針)。`audiocafe.tokyo/rakuten-mobile`の17言語ページ整備
+  (ユーザー指示「毎朝5時に自動翻訳して」)の実現手段として新設したが、
+  当該ページの17言語版自体は今回、生成AIではなく人力翻訳(Claude Code)で
+  作成済みであり、この`/v1/translate`エンドポイントを実際に呼び出す
+  cronジョブの配線は次回以降の課題として未着手のまま(エンドポイント自体は
+  `cargo build --release`で実装・ビルド確認済み、実HTTP検証は未実施)。
+  - 次にすべきこと: (1) 実際に`POST /v1/translate`を呼ぶ検証(モックでなく
+    実リクエスト)、(2) 品質が実用に足るかの評価(現状は理論上の懸念のみ)、
+    (3) 必要であれば`audiocafe-tokyo-php`側のcronから定期呼び出しする配線。
+
 - **2026-07-31 本家`poem`クレートからRPoem(`open-runo-poem-compat`)へ移行完了(ユーザー指示)**:
   ユーザー指示「Python向けAIライブラリとLLMをRustなど他の言語からでも
   利用できるRust製+Rust＋Poem互換のRPoemで開発して」に対応。前回
