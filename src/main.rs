@@ -335,6 +335,78 @@ async fn generate(req: Request, device: Arc<dyn GpuDevice>, registry: Arc<Tenant
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct TranslateRequest {
+    /// 翻訳元テキスト。
+    text: String,
+    /// 翻訳先言語コード(表示ラベル、例: "English"/"Italian"/"日本語"等)。
+    /// ISO言語コードそのものではなく人間可読な言語名文字列でよい
+    /// (プロンプトへそのまま埋め込むため)。
+    target_lang: String,
+    /// 翻訳元言語コード(任意、省略時はプロンプトに明記しない=モデルに
+    /// 自動判定させる)。
+    #[serde(default)]
+    source_lang: Option<String>,
+    #[serde(default)]
+    tenant: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct TranslateResponse {
+    translation: String,
+    engine: String,
+    disclosure: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct TranslateErrorResponse {
+    error: String,
+    engine: String,
+}
+
+/// `POST /v1/translate` — GPT-2系モデル(`generation::generate`)を翻訳
+/// プロンプトで呼び出す薄いラッパー(2026-08-04新設、ユーザー指示
+/// 「aruaru-llmに自動翻訳機能を持たせて」への対応)。
+///
+/// **正直な開示(最重要)**: GPT-2 124M-1.5Bは英語中心の学習データで
+/// 事前学習された素の言語モデルであり、指示追従(instruction-following)
+/// のファインチューニングも翻訳専用の学習も一切受けていない。
+/// 「Translate X to Y:」のようなプロンプトへの続き生成は、しばしば
+/// 翻訳ではなく無関係な文の継続になる(特に日本語→非英語、非英語→
+/// 非英語のような英語を経由しない組み合わせで品質が大きく劣化する)。
+/// これは`/v1/generate`と同じ土台の上に構築した実装であり、専用の
+/// 翻訳モデル(NLLB/M2M100等)ではないことを常にレスポンスへ明記する。
+async fn translate(req: Request, device: Arc<dyn GpuDevice>, registry: Arc<TenantRegistry>) -> Response {
+    let Json(req): Json<TranslateRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    log_tenant_usage("translate", &req.tenant, &registry);
+    let prompt = match &req.source_lang {
+        Some(src) => format!("Translate the following text from {src} to {}:\n{}\nTranslation:", req.target_lang, req.text),
+        None => format!("Translate the following text to {}:\n{}\nTranslation:", req.target_lang, req.text),
+    };
+    // 翻訳は継続生成が長すぎると無関係な文へ発散しやすいため、
+    // /v1/generateの既定(16)より長め・上限より短めの64に固定する。
+    match generation::generate(&device, &prompt, 64) {
+        Ok(completion) => json_response(
+            StatusCode::OK,
+            &TranslateResponse {
+                translation: completion.trim().to_string(),
+                engine: generation::engine_label(),
+                disclosure: "This endpoint reuses the GPT-2 family text-generation engine (124M-1.5B, 2019-era, English-centric \
+                    pretraining) with a translation-style prompt — it is NOT a dedicated translation model (e.g. NLLB/M2M100) and has \
+                    received no instruction-following or translation-specific fine-tuning. Quality is unreliable, especially for \
+                    non-English source/target language pairs; always spot-check output before publishing it.",
+            },
+        ),
+        Err(err) => {
+            tracing::warn!("translate failed: {err:#}");
+            json_response(StatusCode::SERVICE_UNAVAILABLE, &TranslateErrorResponse { error: format!("{err:#}"), engine: generation::engine_label() })
+        }
+    }
+}
+
 /// `GET /v1/models/catalog` — インストール可能なGPT-2アーキテクチャ互換
 /// モデルの一覧(ダウンロード前、どのモデルが選択可能かを提示するため)。
 #[derive(Debug, Serialize)]
@@ -695,6 +767,8 @@ async fn main() -> anyhow::Result<()> {
     let classify_registry = Arc::clone(&registry);
     let generate_device = Arc::clone(&device);
     let generate_registry = Arc::clone(&registry);
+    let translate_device = Arc::clone(&device);
+    let translate_registry = Arc::clone(&registry);
     let admin_register_registry = Arc::clone(&registry);
     let admin_list_registry = Arc::clone(&registry);
     let admin_remove_registry = Arc::clone(&registry);
@@ -715,6 +789,14 @@ async fn main() -> anyhow::Result<()> {
                 let device = Arc::clone(&generate_device);
                 let registry = Arc::clone(&generate_registry);
                 async move { generate(req, device, registry).await }
+            })),
+        )
+        .at(
+            "/v1/translate",
+            post(handler_fn(move |req, _p| {
+                let device = Arc::clone(&translate_device);
+                let registry = Arc::clone(&translate_registry);
+                async move { translate(req, device, registry).await }
             })),
         )
         .at("/v1/models/catalog", get(plain(|| Box::pin(list_model_catalog()))))
