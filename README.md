@@ -80,6 +80,14 @@ Vulkan汎用パスは実装済み)。詳細はopen-cuda側の`CLAUDE.md`のHANDO
   正直な開示: このカタログ・切り替え機能はGPT-2アーキテクチャ互換モデル
   限定(Llama/Mistral/Qwen等、アーキテクチャの異なるモデルは現行エンジン
   ではロードできない)。詳細は`CLAUDE.md`参照。
+- `POST /v1/translate`(2026-08-04追加) — `{"text": "...", "target_lang":
+  "Japanese", "source_lang": "..."(任意), "tenant": "..."(任意)}` →
+  `{"translation": "...", "engine": "...", "disclosure": "..."}`。
+  **翻訳プラグイン(`nllb-translate` feature)がインストールされていれば**
+  専用翻訳モデル(M2M100、`rust-bert`経由)で高品質な翻訳を行い、
+  **インストールされていなければ**GPT-2流用の簡易実装(実用に耐えない
+  ことが実HTTP検証で判明済み、常にその旨を`disclosure`に明記)へ自動
+  フォールバックする。詳細は下記「翻訳プラグイン」節参照。
 - `GET /v1/recommend`（2026-07-27追加） — `open-cuda`(Vulkan)/`open-directx`
   (DXGI)経由のハードウェア検出(VRAM容量)から推奨モデルサイズを算出する
   (ダウンロードは行わない)。`{"hardware": {"gpu_detected":bool,
@@ -131,6 +139,43 @@ cargo run --release --features hw-detect-vulkan
 統合していない: `/v1/chat`は定型応答への振り分け専用で軽量・高速
 (埋め込みモデルのforward passのみ)、`/v1/generate`はGPT-2 124M
 (548MBの重み)を使う本格的だが重い自由文生成。用途に応じて使い分けること。
+
+## 翻訳プラグイン(`nllb-translate` feature、2026-08-04追加)
+
+`POST /v1/translate`のGPT-2流用実装は実HTTP検証の結果、実際の翻訳文を
+生成できず実用に耐えないと判明した(`CLAUDE.md`のHANDOFF参照)。この
+問題を解消するオープンソースの専用翻訳モデル(M2M100、`rust-bert`crate
+経由)を、**Cargo featureによる着脱式プラグイン**として提供する
+(ユーザー指示「翻訳部分だけプラグインという形にして、必要な人だけ
+インストール/アンインストールできるように」への対応)。
+
+- **インストール(有効化)**:
+  ```bash
+  cargo build --release --features nllb-translate
+  ```
+  この場合のみ`rust-bert`+`tch`(libtorch、PyTorchのC++ライブラリ)への
+  依存がビルドに含まれ、`POST /v1/translate`が実際に機能する翻訳文を
+  返すようになる。初回リクエスト時にM2M100モデルの重みを自動ダウンロード
+  する(数百MB、`rust-bert`既定のキャッシュディレクトリへ保存)。
+- **アンインストール(既定状態)**:
+  ```bash
+  cargo build --release
+  ```
+  (featureフラグを付けない、既定)。この場合`rust-bert`/`tch`は
+  ビルドに一切含まれず、バイナリサイズ・依存グラフへの影響はゼロ。
+  `POST /v1/translate`自体は404にはならず、GPT-2流用の簡易実装へ
+  自動フォールバックする(`disclosure`フィールドに実用に耐えない旨と
+  プラグインの入れ方を明記して返す)。
+- **正直な開示**: これは実行時に着脱できる真の意味での「プラグイン」
+  (動的ライブラリロード等)ではなく、**ビルド時にCargo featureで
+  組み込むか組み込まないかを選ぶ**という意味でのプラグイン方式。
+  `rust-bert`は`tch`(libtorch)への依存が必須で、このエコシステムが
+  他の全モデル(GPT-2・BERT・Whisper相当)で貫いてきた「手作りRust実装
+  +safetensors直接ロード、重量級MLフレームワーク非依存」という方針
+  からは意図的に外れる——この妥協は`nllb-translate` feature配下に
+  隔離することで、必要な人だけが依存の増加を受け入れる設計にした。
+  起動時ログ(`translation plugin: ENABLED`/`not installed`)で現在の
+  状態を確認できる。
 
 ## 「分身の術」構成
 

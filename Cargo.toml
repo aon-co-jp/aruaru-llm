@@ -48,10 +48,22 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 # フォールバックのみで動作する(安全側)。
 opencuda-vulkan = { path = "../open-cuda/crates/opencuda-vulkan", optional = true }
 opencuda-directx = { path = "../open-cuda/crates/opencuda-directx", optional = true }
+# オープンソース専用翻訳モデル(M2M100/NLLB)によるPOST /v1/translateの
+# 品質改善(2026-08-04追加、ユーザー指示「翻訳精度が低ければオープン
+# ソースの翻訳システムを組み込んで」)。GPT-2流用実装は実HTTP検証で
+# 実用に耐えないと判明したための対応(CLAUDE.md参照)。**正直な開示**:
+# `rust-bert`は`tch`(libtorch、PyTorchのC++ライブラリ)への依存が必須で、
+# このエコシステムの「重量級MLフレームワーク非依存」という既定方針とは
+# 異なる大きな依存を持ち込むため、既定featureには含めず`nllb-translate`
+# feature配下でのみ有効にする(未指定時は既存のGPT-2流用実装のまま
+# 動作し、この変更による既存ビルドへの影響はゼロ)。
+rust-bert = { version = "0.23", optional = true }
+tch = { version = "0.17", optional = true }
 
 [features]
 default = []
 hw-detect-vulkan = ["dep:opencuda-vulkan", "opencuda-vulkan/real-vulkan"]
+nllb-translate = ["dep:rust-bert", "dep:tch"]
 hw-detect-directx = ["dep:opencuda-directx", "opencuda-directx/real-dx12"]
 
 [dev-dependencies]

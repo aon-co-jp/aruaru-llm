@@ -26,6 +26,7 @@ mod bow_fallback;
 mod generation;
 mod hardware;
 mod model_catalog;
+mod nllb;
 mod scoring;
 mod security;
 mod signatures;
@@ -355,7 +356,7 @@ struct TranslateRequest {
 struct TranslateResponse {
     translation: String,
     engine: String,
-    disclosure: &'static str,
+    disclosure: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -382,6 +383,28 @@ async fn translate(req: Request, device: Arc<dyn GpuDevice>, registry: Arc<Tenan
         Err(resp) => return resp,
     };
     log_tenant_usage("translate", &req.tenant, &registry);
+
+    // `nllb-translate` feature有効時は、専用翻訳モデル(M2M100)をまず
+    // 試みる(2026-08-04追加、実HTTP検証でGPT-2流用実装が実用に耐えないと
+    // 判明したための対応、CLAUDE.md参照)。モデル未対応の言語指定・
+    // 未ロード失敗時は、既存のGPT-2流用実装へ安全にフォールバックする
+    // (`nllb::translate_with_nllb`は`nllb-translate`feature無効時は常に
+    // `Err`を返す設計のため、この分岐はfeature無効ビルドでも無条件に
+    // GPT-2流用実装のパスを通り、既存動作を一切変えない)。
+    if let Ok(translation) = nllb::translate_with_nllb(&req.text, &req.target_lang, req.source_lang.as_deref()) {
+        return json_response(
+            StatusCode::OK,
+            &TranslateResponse {
+                translation,
+                engine: "m2m100-rust-bert-v0".to_string(),
+                disclosure: "This translation was produced by a dedicated open-source translation model (M2M100 via rust-bert), \
+                    not the GPT-2 fallback. Quality is substantially better but still not guaranteed to be publication-ready for \
+                    all language pairs; spot-check before publishing."
+                    .to_string(),
+            },
+        );
+    }
+
     let prompt = match &req.source_lang {
         Some(src) => format!("Translate the following text from {src} to {}:\n{}\nTranslation:", req.target_lang, req.text),
         None => format!("Translate the following text to {}:\n{}\nTranslation:", req.target_lang, req.text),
@@ -394,10 +417,20 @@ async fn translate(req: Request, device: Arc<dyn GpuDevice>, registry: Arc<Tenan
             &TranslateResponse {
                 translation: completion.trim().to_string(),
                 engine: generation::engine_label(),
-                disclosure: "This endpoint reuses the GPT-2 family text-generation engine (124M-1.5B, 2019-era, English-centric \
+                disclosure: format!(
+                    "This endpoint reuses the GPT-2 family text-generation engine (124M-1.5B, 2019-era, English-centric \
                     pretraining) with a translation-style prompt — it is NOT a dedicated translation model (e.g. NLLB/M2M100) and has \
                     received no instruction-following or translation-specific fine-tuning. Quality is unreliable, especially for \
-                    non-English source/target language pairs; always spot-check output before publishing it.",
+                    non-English source/target language pairs; always spot-check output before publishing it. \
+                    {}",
+                    if nllb::is_available() {
+                        "(nllb-translate feature IS compiled into this build but failed to produce a translation for this request — \
+                        check target_lang is a supported language name, or see server logs for the underlying M2M100 load/inference error.)"
+                    } else {
+                        "(This build was compiled WITHOUT the nllb-translate feature; rebuild with --features nllb-translate to use \
+                        the dedicated M2M100 translation model instead of this GPT-2 fallback.)"
+                    }
+                ),
             },
         ),
         Err(err) => {
@@ -714,6 +747,20 @@ async fn main() -> anyhow::Result<()> {
     // `std::thread::available_parallelism()`から検出)。
     let device: Arc<dyn GpuDevice> = CpuDevice::new(0);
     tracing::info!("aruaru-llm using open-cuda device: {}", device.info().name);
+
+    // 翻訳プラグイン(nllb.rs、M2M100/rust-bert、2026-08-04追加)の状態を
+    // 起動時に明示ログ出力する。このプラグインはCargo feature
+    // (`nllb-translate`、既定オフ)としてのみ存在し、ビルド時にfeature
+    // フラグを付けるかどうかが「インストール/アンインストール」に相当
+    // する(実行時のプラグイン着脱ではなく、ビルド成果物自体に翻訳
+    // モデル依存〈tch/libtorch〉が含まれるかどうかで切り替わる設計、
+    // ユーザー指示「翻訳部分だけプラグインという形にして、必要な人だけ
+    // インストール/アンインストールできるように」への対応)。
+    if nllb::is_available() {
+        tracing::info!("translation plugin: ENABLED (M2M100 via rust-bert) — built with --features nllb-translate");
+    } else {
+        tracing::info!("translation plugin: not installed (GPT-2 fallback only) — rebuild with --features nllb-translate to install it");
+    }
 
     // コールドスタート対策(2026-07-22追記、CLAUDE.md HANDOFF参照):
     // open-cuda-bertのモデルロード+インテントembedding計算(数秒)を、

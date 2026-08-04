@@ -1145,3 +1145,45 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
      エンドポイントへの依存は避けるべき。(3) cronからの定期呼び出し
      配線は、上記(1)のモデル差し替えが完了するまで見送るべき(実用に
      ならない出力を自動生成・公開してしまうリスクを避けるため)。
+
+- **2026-08-04(続き2) 翻訳プラグイン(M2M100/rust-bert)を新設(ユーザー
+  指示「翻訳精度が低ければオープンソースの翻訳システムを組み込んで」
+  →「翻訳部分だけプラグインという形にして、必要な人だけインストール/
+  アンインストールできるように」)**:
+  1. **背景**: 直前エントリで`/v1/translate`(GPT-2流用実装)を実HTTP
+     検証したところ、実際の翻訳文を生成できず実用に耐えないと判明
+     していた。ユーザーへ組み込み方式を確認したところ`rust-bert`
+     (M2M100/NLLB対応)を選択(他候補: ONNX Runtime+NLLB-200蒸留版、
+     外部API併用〈契約不要方針と非整合のため除外〉)。
+  2. **プラグイン方式の実装**: 新規`src/nllb.rs`+Cargo feature
+     `nllb-translate`(既定オフ、`rust-bert`/`tch`をoptional依存化)。
+     `translate()`ハンドラは、featureが有効かつM2M100モデルロード・
+     翻訳が成功すればその結果を返し、それ以外(feature無効/対応言語外/
+     モデルロード失敗)は既存のGPT-2流用実装へ安全にフォールバックする。
+     起動時ログで`translation plugin: ENABLED`/`not installed`を出力し、
+     現在の状態を明示。
+  3. **「プラグイン」の実体(正直な開示)**: 実行時の動的着脱(dylibロード
+     等)ではなく、**ビルド時のCargo feature選択**による着脱
+     (`cargo build --release --features nllb-translate`=インストール、
+     フラグ無し=アンインストール)。`rust-bert`は`tch`(libtorch)への
+     依存が必須で、このエコシステムが他の全モデルで貫いてきた
+     「手作りRust実装+safetensors直接ロード、重量級MLフレームワーク
+     非依存」という方針から意図的に外れる大きな依存——この妥協を
+     feature配下に隔離することで、既定ビルド(featureフラグ無し)には
+     一切影響を与えない設計にした。
+  4. **検証**: 既定ビルド(`nllb-translate`feature無し)で
+     `cargo build`・`cargo test`とも**46件全green**(回帰なし、新規
+     `nllb.rs`のfeature無効時ユニットテスト2件を含む)。
+     **正直な開示・未検証事項**: `nllb-translate` feature有効時の
+     実ビルド・実M2M100モデルロード・実翻訳品質の検証は、この開発
+     環境にlibtorch(tchクレートのビルド要件)が存在せず、
+     ダウンロードには相応の時間・ディスク容量を要するため**このパスでは
+     未実施**——コードレビュー・既定ビルドへの非破壊性の確認までに
+     留まる。次回、実際に`--features nllb-translate`でビルドし、
+     実際にM2M100で翻訳が機能することを実HTTPで確認する必要がある。
+  5. **ドキュメント**: `README.md`に「翻訳プラグイン」節を新設し、
+     インストール/アンインストール手順(`cargo build --features
+     nllb-translate`の有無)・正直な開示を記載。
+  - 次にすべきこと: (1) `--features nllb-translate`での実ビルド・
+    実M2M100翻訳品質の実HTTP検証、(2) 検証後、
+    `audiocafe.tokyo/rakuten-mobile`等の実用途への適用を再検討。
