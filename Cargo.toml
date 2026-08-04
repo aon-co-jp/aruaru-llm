@@ -58,6 +58,10 @@ opencuda-directx = { path = "../open-cuda/crates/opencuda-directx", optional = t
 # feature配下でのみ有効にする(未指定時は既存のGPT-2流用実装のまま
 # 動作し、この変更による既存ビルドへの影響はゼロ)。
 rust-bert = { version = "0.23", optional = true }
+# libtorchはビルド時Web自動ダウンロード(download-libtorch feature)ではなく、
+# PCへ一度だけローカルインストールし`LIBTORCH`環境変数で固定パスを指す方式を
+# 採用する(2026-08-04、ユーザー指示「libtorchは、WEB上ではなく、PCに
+# インストール形で使用可能でしたらその様にしたい」)。
 tch = { version = "0.17", optional = true }
 
 [features]
