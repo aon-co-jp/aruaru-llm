@@ -192,6 +192,97 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-08-04(続き2) `real-vulkan` feature配線を実装、実機検証の結果
+  「単純な配線では動作しない」ことが判明(前回HANDOFFの「次にすべきこと
+  (1)」への対応、ユーザー指示「open-directx open-cuda aruaru-llmなどの
+  使いやすさ向上と連携と実用性と完成度を向上させて」の一環)**:
+  1. **実装**: `Cargo.toml`に`opencuda-vulkan`をoptional path依存として
+     追加し、`real-vulkan = ["dep:opencuda-vulkan", "opencuda-vulkan/real-vulkan"]`
+     を新設(既存の`hw-detect-vulkan`——ハードウェア検出専用——とは別軸、
+     推論ディスパッチ先を切り替えるためのfeature)。`src/main.rs`の
+     デバイス選択(従来`CpuDevice::new(0)`固定)を`#[cfg(feature =
+     "real-vulkan")]`で分岐し、有効時は`opencuda_vulkan::real::
+     VulkanDevice::new(0)`を使う(構築失敗時はCPUへ安全側フォールバック、
+     サービスを壊さない設計)。既定ビルド(feature無し)への影響はゼロ
+     (`cargo build --release`〈featureなし〉が引き続き成功することを
+     確認済み)。
+  2. **ビルド検証**: `cargo build --release --features real-vulkan`
+     成功。`cargo test --release`(featureなし)・`cargo test --release
+     --features real-vulkan`いずれも**46件全green**、リグレッション無し。
+  3. **実機検証(NVIDIA GT 730、型チェックのみで完了と報告しない方針を
+     徹底)、そして重要な負の結果**: 実際にサーバーを起動し
+     `POST /v1/generate`へ実HTTPリクエストを送った。
+     - **CPU版(feature無し)**: `{"prompt":"The quick brown fox",
+       "max_new_tokens":20}` → `"es are a great way to get a little bit
+       of a kick out of your dog.\n\n"`(200)、所要時間**約6.0〜6.8秒**
+       (`time curl`で2回計測、6.796s/6.060s)。
+     - **Vulkan版(`--features real-vulkan`)**: 起動ログでは
+       `real-vulkan feature enabled: using VulkanDevice for inference
+       dispatch`・`device: OpenCUDA Vulkan Device (NVIDIA GeForce GT
+       730)`が確認できたが、**`POST /v1/generate`への実リクエストは
+       0.228秒で即座に失敗**した:
+       `"error":"GptModel::generate failed: sgemm: GemmPath::
+       VulkanGeneric selected (device.supports_spirv()==true,
+       vendor-specific path is still a stub) but no spirv bytes were
+       provided; pass the compiled matmul.spv bytes via the `spirv`
+       argument"`
+  4. **根本原因の特定**: `open-cuda`側`open-cuda-llm/src/lib.rs:224`の
+     `Linear::forward`が`opencuda_blas::sgemm(..., None)`と、`spirv`引数
+     に常に`None`を渡す実装になっている(CPU実行のみを前提とした既存の
+     呼び出し)。`opencuda_blas::select_gemm_path`は`VulkanDevice`に対して
+     `GemmPath::VulkanGeneric`を選ぶが、この経路は`spirv`バイト列
+     (コンパイル済み`matmul.spv`)が必須で、`None`だと`sgemm`が
+     `Err`を返す設計(`opencuda-blas/src/lib.rs`の`sgemm`関数、意図的な
+     安全策——「実装していないという誤ったシグナルを出さない」既存の
+     エコシステム方針通り、黙ってCPUへフォールバックせず正直にエラーに
+     している)。同じ理由で、`scoring::warmup`/`security::warmup`
+     (`open-cuda-bert`経由のBERT埋め込み計算)もVulkan版サーバー起動直後
+     に同一エラーで警告ログを出していた(`warmup failed ...: sgemm:
+     GemmPath::VulkanGeneric selected ... but no spirv bytes were
+     provided`)——`generation`側のwarmupだけは重み・トークナイザの
+     ロードのみで実際に`sgemm`を呼ばないため警告なしに完了しており、
+     初回`/v1/generate`呼び出しで初めて失敗が表面化した。
+  5. **正直な評価(誇張しない)**: 前回HANDOFF(2026-07-26)で示した
+     「安易な配線は逆に遅くなりうる」という**性能上の懸念**は、今回の
+     実測では検証できなかった——実際には性能比較以前に**機能しない**
+     (即座にエラーで失敗する)ことが判明した。これは`aruaru-llm`側の
+     feature配線自体のバグではなく(配線・デバイス切り替えは設計通り
+     正しく動作している——ログで実際にVulkanDeviceが選択されたことは
+     確認済み)、`opencuda-blas`/`open-cuda-llm`側がまだ「呼び出し側が
+     コンパイル済みSPIR-Vシェーダバイト列を明示的に渡す」設計のままで、
+     `open-cuda-llm`のLinear層がその配線を実装していない、という
+     `open-cuda`側の既知のギャップに起因する。「成功した」と誇張せず、
+     この負の結果をそのまま記録する。
+  6. **スコープの判断(ユーザー指示「open-cuda側のコードは今回変更しない
+     こと」に従う)**: 根本原因は`open-cuda-llm/src/lib.rs`の
+     `Linear::forward`が`matmul.spv`のコンパイル済みバイト列を`sgemm`へ
+     渡していない点にあり、修正には(a)`open-cuda-llm`側で`matmul.spv`を
+     ロードし`Linear`構造体が保持する、(b)`VulkanDevice`固有の
+     `sgemm_vulkan_generic`をどこかで呼ぶよう`Linear::forward`を変更する、
+     という`open-cuda`側の実装変更が必要(`opencuda-vulkan`側には
+     `tools/compile-vulkan-shaders.*`で`matmul.spv`をビルドする仕組みが
+     既に存在するため、シェーダ自体は用意されている)。これは
+     `open-cuda-llm`クレート内部の変更であり、今回のタスク範囲
+     「`open-cuda`側のコードは変更しないこと」に明確に抵触するため、
+     **今回は修正を行わなかった**(ユーザー指示通り、正直に開示するのみ
+     に留める)。
+  7. **`aruaru-llm`側の変更のみで到達可能な範囲の結論**: `real-vulkan`
+     featureの配線自体(Cargo feature新設・デバイス選択の分岐・既定
+     ビルドへの無影響・ビルド/テストの回帰無し)は完了・検証済みだが、
+     実際にVulkan経由での生成が機能するには`open-cuda-llm`側への
+     追加実装(上記6番)が前提条件として必要、という結論に至った。
+  - 次にすべきこと: (1) (`open-cuda`専用セッションとしてスコープを切り、
+    ユーザーの了承を得た上で)`open-cuda-llm::Linear::forward`が
+    `matmul.spv`のコンパイル済みバイト列を`sgemm`へ渡すよう変更する
+    (`opencuda-vulkan`の`tools/compile-vulkan-shaders.*`で生成済みの
+    シェーダを`Linear`構造体または`GptModel`がロード・保持する設計)、
+    (2) 上記が実装され次第、本HANDOFFで実施した同じ手順(`cargo build
+    --release --features real-vulkan`→サーバー起動→`POST /v1/generate`
+    実HTTPリクエスト)でCPU版とVulkan版の生成結果の数値一致・実際の速度差
+    を再検証する、(3) `open-cuda-bert`(scoring/security)側も同じ根本
+    原因で警告が出ているため、修正時は`open-cuda-llm`と合わせて
+    `opencuda-blas`側の呼び出し全体を横断的に確認する価値がある。
+
 - **2026-08-04(続き) `open-cuda`側`open-cuda-llm::GptModel`にプリフィル/
   デコード分離+QKV融合GEMMを実装(直前の2026-07-26 HANDOFF「安易なGPU
   配線は逆に遅くなりうる」で示した設計変更(a)(b)への対応、詳細は

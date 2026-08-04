@@ -745,6 +745,26 @@ async fn main() -> anyhow::Result<()> {
     // (bag-of-wordsスコアリング)自体はopencuda-cpuのrayonが
     // 利用可能な全論理コアへ並列ディスパッチする(`CpuDevice::new`が
     // `std::thread::available_parallelism()`から検出)。
+    // デバイス選択(2026-08-04追記、CLAUDE.md 2026-08-04 HANDOFF参照):
+    // `real-vulkan` feature(既定無効のオプトイン)が有効な場合のみ
+    // `opencuda_vulkan::real::VulkanDevice`へ切り替える。VulkanDeviceの
+    // 構築(実GPU列挙・論理デバイス作成)に失敗した場合は、サービスを
+    // 落とさずCPUへ安全側フォールバックする(既存の「サービスを壊さない」
+    // 設計方針を踏襲、hardware.rsのGPU検出失敗時フォールバックと同じ考え方)。
+    #[cfg(feature = "real-vulkan")]
+    let device: Arc<dyn GpuDevice> = match opencuda_vulkan::real::VulkanDevice::new(0) {
+        Ok(vulkan_device) => {
+            tracing::info!("real-vulkan feature enabled: using VulkanDevice for inference dispatch");
+            vulkan_device
+        }
+        Err(err) => {
+            tracing::warn!(
+                "real-vulkan feature enabled but VulkanDevice::new failed ({err}); falling back to CpuDevice"
+            );
+            CpuDevice::new(0)
+        }
+    };
+    #[cfg(not(feature = "real-vulkan"))]
     let device: Arc<dyn GpuDevice> = CpuDevice::new(0);
     tracing::info!("aruaru-llm using open-cuda device: {}", device.info().name);
 

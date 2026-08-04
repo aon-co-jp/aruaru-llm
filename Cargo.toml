@@ -69,6 +69,14 @@ default = []
 hw-detect-vulkan = ["dep:opencuda-vulkan", "opencuda-vulkan/real-vulkan"]
 nllb-translate = ["dep:rust-bert", "dep:tch"]
 hw-detect-directx = ["dep:opencuda-directx", "opencuda-directx/real-dx12"]
+# 実推論ディスパッチ先としてVulkanDeviceを使うオプトインfeature
+# (2026-08-04追加、CLAUDE.md 2026-08-04 HANDOFF参照)。上記の
+# `hw-detect-vulkan`はハードウェア検出(推奨LLMサイズ算出)専用であり、
+# 本featureとは別軸——`main()`のデバイス選択(従来`CpuDevice::new(0)`
+# 固定)を`opencuda_vulkan::real::VulkanDevice`へ切り替える。既定では
+# 無効(CPUのみの環境やAndroid等クロスコンパイル環境にVulkanローダー
+# 依存を強制しないため、既存の`hw-detect-vulkan`と同じ設計方針)。
+real-vulkan = ["dep:opencuda-vulkan", "opencuda-vulkan/real-vulkan"]
 
 [dev-dependencies]
 tempfile = "3"
