@@ -192,6 +192,50 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-08-04(続き) `open-cuda`側`open-cuda-llm::GptModel`にプリフィル/
+  デコード分離+QKV融合GEMMを実装(直前の2026-07-26 HANDOFF「安易なGPU
+  配線は逆に遅くなりうる」で示した設計変更(a)(b)への対応、詳細は
+  `open-cuda`側CLAUDE.md 2026-08-04 HANDOFF参照、ユーザー指示
+  「open-directx open-cuda aruaru-llmなどの使いやすさ向上と連携と実用性と
+  完成度を向上させて」)**:
+  1. **要旨**: `open-cuda-llm/src/lib.rs`のQ/K/V(3本の`Linear`)を1本の
+     融合`Linear`(`qkv`)へ統合し(GPT-2 safetensorsが元々`c_attn`という
+     融合`Conv1D`で保存している構造をそのまま活かす形)、プロンプトの
+     初回forward(プリフィル)を`forward_prefill`(`seq_len`をGEMMの`m`
+     パラメータとする本当のバッチ処理)へ変更した。生成トークンの逐次
+     デコードは従来通り`forward_step`(`seq_len=1`)のまま(prefill/decode
+     分離)。
+  2. **検証**: 実GPT-2 124M重み(`../open-cuda/crates/open-cuda-llm/
+     models/gpt2/`、本リポジトリが既定で使うのと同じ重み)で、変更前後の
+     生成結果(プロンプト`"The quick brown fox"`・`max_new_tokens=12`)が
+     `[274, 389, 257, 1049, 835, 284, 651, 257, 1310, 1643, 286, 257]`
+     (`"es are a great way to get a little bit of a"`)で完全一致する
+     ことを確認(挙動を変えない最適化であることの実証)。`cargo test -p
+     open-cuda-llm --release`9件全green、`cargo build --workspace`/
+     `cargo test --workspace`全クレートregression無し。
+  3. **本リポジトリ(`aruaru-llm`)側の変更は無い**: 今回の変更は
+     `open-cuda`側`open-cuda-llm`クレート内部の最適化に留まり、
+     `aruaru-llm`はこの依存クレートを`path`依存で参照しているだけ
+     (`Cargo.lock`不使用のpath依存のため、次回`cargo build`時に自動的に
+     新しいコードが使われる。既存の`POST /v1/generate`のAPI契約
+     〈入出力形式〉は無変更)。
+  4. **正直な開示・スコープ外(直前HANDOFFの(c)は今回未着手)**:
+     `aruaru-llm`側にオプトインの`real-vulkan` feature(デバイス選択を
+     `CpuDevice`から`opencuda-vulkan::real::VulkanDevice`へ切り替える
+     配線)は**今回も実装していない**。(a)(b)の実装・「挙動を変えない
+     ことの実証」までを確実にやり切ることを優先したため
+     (ユーザー指示の優先順位通り)。ディスパッチ回数削減
+     (レイヤーあたりプリフィルが`4*seq_len`→`4`)によりVulkan配線時の
+     オーバーヘッド懸念はプリフィル側について理論上緩和されているはず
+     だが、実際にVulkanDevice経由で走らせての速度実測・CPU版との数値
+     一致検証はまだ行っていない。
+  - 次にすべきこと: (1) `main.rs`のデバイス選択箇所に`real-vulkan`
+    feature(既定無効)を追加し`VulkanDevice`へ切り替え、(2) 実機
+    (NVIDIA GT 730)でCPU版とVulkan版の生成結果が数値的に一致すること・
+    実際の速度差(遅くなっていないか)をベンチマークで確認、(3) 上記が
+    確認できれば`README.md`/`README-English.md`に`real-vulkan`
+    feature(有効化方法・既知の制約)を追記。
+
 - **2026-08-04 `POST /v1/translate`を新設(ユーザー指示「aruaru-llmに自動翻訳機能を持たせて」)**:
   `/v1/generate`(GPT-2系テキスト生成)を翻訳プロンプトで呼び出す薄いラッパー。
   `{text, target_lang, source_lang(任意), tenant(任意)}` → `{translation, engine,
