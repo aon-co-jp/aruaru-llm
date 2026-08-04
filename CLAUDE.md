@@ -1187,3 +1187,41 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
   - 次にすべきこと: (1) `--features nllb-translate`での実ビルド・
     実M2M100翻訳品質の実HTTP検証、(2) 検証後、
     `audiocafe.tokyo/rakuten-mobile`等の実用途への適用を再検討。
+
+- **2026-08-04(続き3) 自動翻訳の運用方針を撤回、`libtorch`はWindows PC
+  ローカル限定に変更(ユーザー指示「libtorchは、LINUXのVPS上で運用すると
+  VPSのメモリーを逼迫するので、WindowsPCにインストール形で使用したい」
+  「ですから毎朝自動クロールして、自動翻訳するのは辞めましょう」
+  「毎朝自動クロールしたら日本語の原文をそのまま利用しましょう」)**:
+  1. **cron自動翻訳配線は行わない(方針撤回)**: 直前エントリまで検討して
+     いた「`audiocafe.tokyo/rakuten-mobile`の毎朝自動クロール結果を
+     `/v1/translate`で自動翻訳する」という運用は中止。今後、毎朝の
+     自動クロールで取得した文章は**翻訳せず日本語原文のままそのまま
+     利用する**方針に統一する。この`aruaru-llm`側に翻訳cronを配線する
+     実装は行わないこと(コード変更は無し、方針の明記のみ)。
+  2. **`nllb-translate` feature(libtorch依存)はVPSへデプロイしない**:
+     `rust-bert`/`tch`(libtorch、PyTorchのC++ライブラリ)はメモリ消費が
+     大きく、Linux VPS上で常時稼働させるとVPS全体のメモリを逼迫する
+     ため、この機能はVPS本番環境には一切ビルド・デプロイしない
+     (`--features nllb-translate`を付けない既定ビルドのままVPSへ配置)。
+     試す場合はこのWindows開発機など**ローカルPC限定**とする。
+  3. **`Cargo.toml`の`tch`依存からWeb自動ダウンロード(`download-libtorch`
+     feature)を撤回**: 「PCにインストール形で使用したい」という指示に
+     基づき、ビルドの都度Web上から自動取得する`download-libtorch`
+     featureは使わず、`tch = { version = "0.17", optional = true }`
+     (素の状態、`LIBTORCH`環境変数でローカルにインストール済みの
+     libtorchパスを明示的に指す前提)に戻した。
+  4. **正直な開示・現状**: 上記方針転換により、`--features
+     nllb-translate`での実ビルド・実M2M100翻訳検証は**優先度が下がった
+     (production用途が無くなったため)**。ビルド中に`indicatif 0.16.2`
+     と`console 0.16.4`のAPI不整合(`console::Style`/
+     `measure_text_width`が`std` featureの裏に隠された)によるビルド
+     失敗を確認し、`console`を`0.15.11`へダウングレードする対処までは
+     行ったが、その後の再ビルド・実機検証はこの方針転換により保留とした
+     (緊急性が無くなったため)。
+  - 次にすべきこと: (1) 今後、翻訳が本当に必要になった場合のみ、
+    Windows PCローカルで`--features nllb-translate`のビルド・検証を
+    再開する(VPSには絶対にデプロイしない)、(2) 毎朝の自動クロール
+    ロジック(`audiocafe.tokyo/rakuten-mobile`等)側で、翻訳を呼ばず
+    日本語原文をそのまま使う実装になっているかの確認(このリポジトリ
+    ではなく該当リポジトリ側の作業)。
