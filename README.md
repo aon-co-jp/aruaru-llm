@@ -133,6 +133,31 @@ cargo run --release --features hw-detect-vulkan
 # または Windows専用: --features hw-detect-directx
 ```
 
+### 実推論ディスパッチ先としてのVulkan(`real-vulkan` feature、2026-08-04新設、既知の未解決課題あり)
+
+上記のハードウェア検出(`hw-detect-vulkan`)とは別軸で、`/v1/generate`の
+実際の推論計算そのものをGPU(Vulkan)へディスパッチするオプトイン
+feature`real-vulkan`を追加した。既定では無効(CPUのみ)、有効時は
+`main()`のデバイス選択が`opencuda_vulkan::real::VulkanDevice`に切り替わる
+(構築失敗時はCPUへ自動フォールバックし、サービスを壊さない設計)。
+
+```
+cargo run --release --features real-vulkan
+```
+
+**正直な開示(重要、未解決の既知バグ)**: 実機(NVIDIA GeForce GT 730)で
+検証したところ、デバイス選択自体は正しく機能する(起動ログに
+`OpenCUDA Vulkan Device (NVIDIA GeForce GT 730)`が出る)が、
+`POST /v1/generate`への実リクエストは**約0.2秒で即座にエラー失敗する**。
+原因は`open-cuda`側`open-cuda-llm`クレートの`Linear::forward`が
+`opencuda_blas::sgemm`へ`spirv`引数を常に`None`で渡しており、
+`GemmPath::VulkanGeneric`選択時に必須のコンパイル済みシェーダバイト列
+(`matmul.spv`)が渡っていないため。これは「配線しても遅い」という
+以前の設計上の懸念より根本的な、単純に**機能しない**という結果であり、
+性能比較のベンチマークはまだ実施できていない。修正には`open-cuda`
+リポジトリ側で`Linear::forward`に`matmul.spv`を配線する変更が必要
+(詳細・次にすべきことは`CLAUDE.md`のHANDOFF 2026-08-04エントリ参照)。
+
 ### 意図分類 vs 生成、どちらを使うか
 
 `/v1/chat`(意図分類)と`/v1/generate`(生成)は目的が異なるため、あえて

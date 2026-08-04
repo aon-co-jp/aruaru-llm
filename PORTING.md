@@ -142,6 +142,21 @@ Cargo featureの着脱式プラグインとして追加した(`src/nllb.rs`)。
    すること。`nllb-translate` feature未指定であれば依存は一切ビルドに
    含まれないため、既定では影響ゼロ。
 
+## 8. 実推論のVulkanディスパッチ(`real-vulkan` feature、2026-08-04追加、未完成につき移植非推奨)
+
+`main()`のデバイス選択を`opencuda_vulkan::real::VulkanDevice`へ
+切り替えるオプトインfeature。移植手順自体は`hw-detect-vulkan`と同型
+(`Cargo.toml`に`opencuda-vulkan`をoptional path依存として追加、
+`real-vulkan = ["dep:opencuda-vulkan", "opencuda-vulkan/real-vulkan"]`、
+`main()`を`#[cfg(feature = "real-vulkan")]`で分岐、構築失敗時はCPUへ
+フォールバック)だが、**現時点では実際のGEMMディスパッチが機能しない
+既知バグが`open-cuda`側`open-cuda-llm`クレートにある**(`Linear::forward`
+が`matmul.spv`を`sgemm`へ渡していないため`GemmPath::VulkanGeneric`選択時に
+即座にエラー、詳細はREADME.md「実推論ディスパッチ先としてのVulkan」節・
+`CLAUDE.md`HANDOFF参照)。**このfeatureパターン自体を他プロジェクトへ
+移植するのは、`open-cuda`側の修正が完了し実機で速度改善が確認できてから
+にすること**(現状は「配線したが動かない」状態を複製するだけになる)。
+
 ## 注意事項
 
 - 本プロジェクトは「LLM」を名乗り、2026-07-25以降`/v1/generate`で実際の
