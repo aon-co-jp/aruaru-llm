@@ -117,6 +117,31 @@
    `poem`から`text/html`で配信)のような最小構成に留めること
    (過剰実装を避ける、このエコシステム共通の設計方針)。
 
+## 7. 翻訳プラグイン(`nllb-translate` feature、2026-08-04追加)
+
+`POST /v1/translate`のGPT-2流用実装は実用に耐えないと実HTTP検証で判明
+したため、`rust-bert`(M2M100)によるオープンソース専用翻訳モデルを
+Cargo featureの着脱式プラグインとして追加した(`src/nllb.rs`)。
+
+移植手順:
+1. `Cargo.toml`に`rust-bert = { version = "0.23", optional = true }`・
+   `tch = { version = "0.17", optional = true }`を追加し、
+   `[features]`に`nllb-translate = ["dep:rust-bert", "dep:tch"]`
+   (既定オフ)を追加する。
+2. `src/nllb.rs`をそのままコピーする(`#[cfg(feature = "nllb-translate")]`
+   で完全に分岐しており、移植先のCargo.tomlに同名featureを用意すれば
+   無変更で動く設計)。
+3. 翻訳エンドポイントのハンドラで、まず`nllb::translate_with_nllb(...)`
+   を試み、`Err`の場合のみ既存の生成実装(GPT-2等)へフォールバックする
+   構成にする。
+4. **正直な開示・移植時の注意**: `rust-bert`は`tch`(libtorch、
+   PyTorchのC++ライブラリ)への依存が必須で、このエコシステムの他の
+   モデル(GPT-2・BERT・Whisper相当)が貫く「手作りRust実装+
+   safetensors直接ロード」方針から意図的に外れる大きな依存。移植先が
+   このビルド時間・依存グラフの増加を許容できるか、着手前に判断
+   すること。`nllb-translate` feature未指定であれば依存は一切ビルドに
+   含まれないため、既定では影響ゼロ。
+
 ## 注意事項
 
 - 本プロジェクトは「LLM」を名乗り、2026-07-25以降`/v1/generate`で実際の
