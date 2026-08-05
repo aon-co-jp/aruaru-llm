@@ -1360,3 +1360,76 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
     ロジック(`audiocafe.tokyo/rakuten-mobile`等)側で、翻訳を呼ばず
     日本語原文をそのまま使う実装になっているかの確認(このリポジトリ
     ではなく該当リポジトリ側の作業)。
+
+- **2026-08-05 `real-vulkan`のGEMM未配線バグ修正を実機検証、`/v1/generate`が
+  実際にVulkanDevice経由で動作することを確認(優先度3位・未着手として
+  指示された本リポジトリの「次にすべきこと」対応)**:
+  1. **前提**: 作業開始時点で`src/generation.rs`に未コミットの変更が
+     存在していた(`wire_matmul_spirv`関数、`GptModel::load`後に
+     `../open-cuda/examples/matmul_vulkan_real/shaders/matmul.spv`を
+     読み込み`set_matmul_spirv`で配線する処理)。これは直前HANDOFF
+     (2026-08-04)で報告されていた「`open-cuda`側`Linear::forward`が
+     spirvを`sgemm`へ渡していないため`real-vulkan` featureが機能しない」
+     というバグに対応する配線コードで、`open-cuda`リポジトリ側
+     (`F:\runo\open-cuda`)を確認したところ、該当バグ修正コミット
+     `6452ae4`("Fix Linear::forward never passing spirv to sgemm")が
+     既に存在し、`GptModel::set_matmul_spirv`もマージ済みと判明した。
+     つまり両リポジトリ側の実装は既に揃っており、**実機検証だけが
+     未実施のまま残っていた**状態だった。
+  2. **実施した検証(実バイナリ・実HTTP、モックなし)**:
+     - `cargo build --release --features real-vulkan`でビルド成功。
+     - 実際にプロセスを起動し、起動ログで
+       `real-vulkan feature enabled: using VulkanDevice for inference
+       dispatch`→`OpenCUDA Vulkan Device (NVIDIA GeForce GT 730)`→
+       `real-vulkan feature enabled: loaded matmul.spv (2732 bytes) ...
+       and wired into GptModel via set_matmul_spirv`→
+       `generation (GPT-2 124M) warmup complete`まで一気通貫で成功する
+       ことを確認(直前HANDOFFで報告されていた「約0.2秒で即座に失敗する」
+       という症状は解消)。
+     - `POST /v1/generate`へ実HTTPリクエストを2件送信
+       (`"The quick brown fox jumps over"`→
+       `" the fence and runs into the bushes.\n\n\"I"`、
+       `"Once upon a time"`→
+       `", the world was a place of great beauty and great danger. ..."`)。
+       いずれも`200 OK`で文法的に自然な英文が実際に生成され、エラーは
+       発生しなかった。2件目は生成に約42.7秒を要した(このマシンの
+       NVIDIA GeForce GT 730はVulkan GEMMのディスパッチオーバーヘッドが
+       CPU実行より大きく出るローエンドGPUであるため、速度面のベンチ
+       マーク・CPU比較は未実施——今回の検証範囲は「機能するか」の確認
+       までで、「速いか」は別問題として残っている)。
+     - `scoring::warmup`/`security::warmup`(BERT系、`open-cuda-bert`)は
+       依然として`wire_matmul_spirv`相当の配線が無いため、`real-vulkan`
+       feature有効時は起動時ウォームアップが同じ「spirv未提供」エラーで
+       失敗する(ただし可用性優先の設計により初回リクエスト時に遅延
+       リトライされるだけでサービス自体は止まらない)。今回の対応範囲は
+       `/v1/generate`(GPT-2)のみで、`/v1/chat`(意図分類)・
+       `/v1/admin`のセキュリティ分類側のVulkan配線は未対応のまま。
+     - 既定ビルド(featureフラグ無し、VPS本番相当)でも
+       `cargo build --release`→実プロセス起動→`/v1/generate`への実
+       HTTPリクエストで正常動作することを別途確認し、今回の変更が
+       既定ビルドを壊していないことを検証した。
+     - `cargo test --release`(既定feature)は46件全green
+       (回帰なし)。**正直な開示**: 検証の途中、直前に起動していた
+       サーバープロセスがポート/メモリを保持したまま`cargo test`を
+       実行してしまい、一度`memory allocation of 384056832 bytes
+       failed`でクラッシュした(プロセスをkillしてから再実行したところ
+       正常に46件全green)——テスト自体の欠陥ではなく、この開発環境
+       での実行手順ミスだったことを確認済み。
+  3. **正直な開示・気づいた既存の粗(今回は未修正)**: `/v1/generate`の
+     `engine`フィールドはVulkan/CPUどちらで実行されたかに関わらず常に
+     `"gpt2-...-open-cuda-llm-cpu"`という固定文字列を返す
+     (`src/generation.rs`の`ENGINE_GPT2_GREEDY`定数、`-cpu`が
+     ハードコード)。実際にVulkanDeviceで実行されていても`engine`
+     ラベル上は判別できない——`/v1/chat`側は既に実際の経路
+     (`embedding-cosine-v0-opencuda-bert-cpu`等)を正直に返す設計に
+     なっているのと対照的。今回のタスク範囲外と判断し修正していないが、
+     次に`/v1/generate`まわりを触る際はラベルにも実行経路(vulkan/cpu)を
+     反映させることを検討すべき。
+  - 次にすべきこと: (1) `scoring`/`security`(BERT系)側にも
+    `wire_matmul_spirv`相当のVulkan GEMM配線を追加するかどうかの判断
+    (現状は意図分類・セキュリティ分類はCPU固定のまま、GPT-2生成のみ
+    Vulkan対応)。(2) このGT-730のような非力なGPUでのVulkan実行が
+    CPU実行と比べて実際に速いのか遅いのかのベンチマーク未実施——
+    `real-vulkan`を既定featureへ昇格させるかどうかの判断material。
+    (3) `engine`ラベルの`-cpu`ハードコードを実行経路に応じて動的に
+    する改修(正直な開示の一貫性向上)。

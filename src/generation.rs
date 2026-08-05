@@ -63,9 +63,63 @@ struct LoadedGpt {
 /// `load_or_get`が都度ロードを試みて返すため、ここでは成功状態のみを保持)。
 static ACTIVE: RwLock<Option<Arc<LoadedGpt>>> = RwLock::new(None);
 
+/// コンパイル済み`matmul.spv`のパス(`real-vulkan` feature有効時のみ使用)。
+/// `default_model_dir()`と同じsibling path前提(`../open-cuda`、
+/// `PORTING.md`のsibling path依存パターン)。`open-cuda`側の
+/// `examples/matmul_vulkan_real/shaders/matmul.spv`が、`Linear::forward`
+/// のVulkan GEMMテスト(`open-cuda-llm`側`set_matmul_spirv_makes_linear_
+/// forward_use_vulkan_and_matches_cpu_output`)でも使っている既存の
+/// 共有シェーダパスであり、新規にこのリポジトリ用のコピーは作らず
+/// そのまま参照する(`tools/compile-vulkan-shaders.*`で生成済みのものを
+/// 前提とする)。`ARUARU_LLM_MATMUL_SPIRV`環境変数で上書き可能。
+#[cfg(feature = "real-vulkan")]
+fn default_matmul_spirv_path() -> PathBuf {
+    if let Ok(path) = std::env::var("ARUARU_LLM_MATMUL_SPIRV") {
+        return PathBuf::from(path);
+    }
+    PathBuf::from("../open-cuda/examples/matmul_vulkan_real/shaders/matmul.spv")
+}
+
+/// `real-vulkan` feature有効時のみ、コンパイル済み`matmul.spv`を
+/// `GptModel::set_matmul_spirv`経由で全`Linear`層(QKV/attn_out/
+/// intermediate/output/lm_head)へ配線する(2026-08-05追加、`open-cuda`
+/// 側commit `6452ae4`——`Linear::forward`がspirvをsgemmへ渡していなかった
+/// バグの修正——を受けての配線)。これが無いと、`real-vulkan` feature
+/// でVulkanDeviceを選択していても`Linear::forward`は`spirv_matmul: None`
+/// のままなので`GemmPath::VulkanGeneric`に必要なSPIR-Vが無く、
+/// `sgemm`が即座に失敗する(CLAUDE.md 2026-08-04 HANDOFF参照)。
+/// 読み込み失敗時はサービスを落とさず、CPU実行と同じ`spirv_matmul: None`
+/// のまま(=CPU GEMMパス)で継続する(既存の「サービスを壊さない」設計
+/// 方針を踏襲)。
+#[cfg(feature = "real-vulkan")]
+fn wire_matmul_spirv(model: &mut GptModel) {
+    let path = default_matmul_spirv_path();
+    match std::fs::read(&path) {
+        Ok(bytes) => {
+            let len = bytes.len();
+            model.set_matmul_spirv(bytes);
+            tracing::info!(
+                "real-vulkan feature enabled: loaded matmul.spv ({len} bytes) from {} and wired into GptModel via set_matmul_spirv",
+                path.display()
+            );
+        }
+        Err(err) => {
+            tracing::warn!(
+                "real-vulkan feature enabled but failed to load matmul.spv from {} ({err}); \
+                 Linear layers will keep using the CPU GEMM path even if VulkanDevice was selected \
+                 (run tools/compile-vulkan-shaders.* in open-cuda first, or set ARUARU_LLM_MATMUL_SPIRV)",
+                path.display()
+            );
+        }
+    }
+}
+
 fn load_from_dir(dir: &std::path::Path) -> Result<LoadedGpt, String> {
-    let model = GptModel::load(dir).map_err(|e| format!("failed to load GPT-2 weights from {dir:?}: {e:#}"))?;
+    #[allow(unused_mut)]
+    let mut model = GptModel::load(dir).map_err(|e| format!("failed to load GPT-2 weights from {dir:?}: {e:#}"))?;
     let tokenizer = GptTokenizer::load(dir).map_err(|e| format!("failed to load GPT-2 tokenizer from {dir:?}: {e:#}"))?;
+    #[cfg(feature = "real-vulkan")]
+    wire_matmul_spirv(&mut model);
     Ok(LoadedGpt { model, tokenizer, dir: dir.to_path_buf() })
 }
 
