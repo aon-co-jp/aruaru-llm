@@ -197,6 +197,19 @@ fn default_matmul_spirv_path() -> PathBuf {
     PathBuf::from("../open-cuda/examples/matmul_vulkan_real/shaders/matmul.spv")
 }
 
+/// コンパイル済み`softmax.spv`のパス(`real-vulkan` feature有効時のみ使用、
+/// 2026-08-06追加)。`generation.rs::default_softmax_spirv_path`と同じ
+/// sibling path前提、`open-cuda-bert::BertModel::set_softmax_spirv`
+/// (2026-08-06新設)へ渡す。`ARUARU_LLM_SOFTMAX_SPIRV`環境変数で
+/// (`generation.rs`側と共通に)上書き可能。
+#[cfg(feature = "real-vulkan")]
+fn default_softmax_spirv_path() -> PathBuf {
+    if let Ok(path) = std::env::var("ARUARU_LLM_SOFTMAX_SPIRV") {
+        return PathBuf::from(path);
+    }
+    PathBuf::from("../open-cuda/examples/softmax_vulkan_real/shaders/softmax.spv")
+}
+
 /// `open-cuda-bert::Linear::forward`が`GemmPath::VulkanGeneric`を使える
 /// よう、コンパイル済み`matmul.spv`を配線する(2026-08-06新設、
 /// `generation.rs::wire_matmul_spirv`と同じ設計、CLAUDE.md 2026-08-05
@@ -224,6 +237,36 @@ fn wire_matmul_spirv(model: &mut BertModel) {
                 "real-vulkan feature enabled but failed to load matmul.spv from {} ({err}); \
                  scoring/security Linear layers will keep using the CPU GEMM path even if VulkanDevice was selected \
                  (run tools/compile-vulkan-shaders.* in open-cuda first, or set ARUARU_LLM_MATMUL_SPIRV)",
+                path.display()
+            );
+        }
+    }
+}
+
+/// `open-cuda-bert::BertModel::set_softmax_spirv`が実際に成功したか
+/// どうかを`wire_matmul_spirv`と同じ設計で配線する(2026-08-06追加、
+/// `generation.rs::wire_softmax_spirv`と同じパターン)。`set_matmul_spirv`
+/// と併用して初めてAttention計算全体(QKᵀ・softmax・P·V)がGPU常駐になる
+/// (「GPU GEMM + CPU softmax」から「GPU GEMM + GPU softmax」への移行)。
+/// 読み込み失敗時はサービスを落とさず、softmaxはホスト側CPU実行のまま
+/// 継続する(既存の「サービスを壊さない」設計方針を踏襲)。
+#[cfg(feature = "real-vulkan")]
+fn wire_softmax_spirv(model: &mut BertModel) {
+    let path = default_softmax_spirv_path();
+    match std::fs::read(&path) {
+        Ok(bytes) => {
+            let len = bytes.len();
+            model.set_softmax_spirv(bytes);
+            tracing::info!(
+                "real-vulkan feature enabled: loaded softmax.spv ({len} bytes) from {} and wired into BertModel via set_softmax_spirv (scoring/security)",
+                path.display()
+            );
+        }
+        Err(err) => {
+            tracing::warn!(
+                "real-vulkan feature enabled but failed to load softmax.spv from {} ({err}); \
+                 scoring/security Attention softmax will keep using the CPU path even if matmul.spv is wired \
+                 (run tools/compile-vulkan-shaders.* in open-cuda first, or set ARUARU_LLM_SOFTMAX_SPIRV)",
                 path.display()
             );
         }
@@ -268,7 +311,10 @@ fn get_model() -> Result<&'static EmbeddingModel> {
     let tokenizer = BertTokenizer::load(&dir)
         .with_context(|| format!("open-cuda-bert: tokenizer.jsonのロードに失敗しました({dir:?})"))?;
     #[cfg(feature = "real-vulkan")]
-    wire_matmul_spirv(&mut model);
+    {
+        wire_matmul_spirv(&mut model);
+        wire_softmax_spirv(&mut model);
+    }
     // 別スレッドと競合してもどちらか片方が採用されればよい(結果は同一)。
     let _ = MODEL.set(EmbeddingModel { model, tokenizer });
     Ok(MODEL.get().expect("MODEL was just set"))

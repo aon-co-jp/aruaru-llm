@@ -86,6 +86,19 @@ fn default_matmul_spirv_path() -> PathBuf {
     PathBuf::from("../open-cuda/examples/matmul_vulkan_real/shaders/matmul.spv")
 }
 
+/// コンパイル済み`softmax.spv`のパス(`real-vulkan` feature有効時のみ使用、
+/// 2026-08-06追加)。`default_matmul_spirv_path`と同じsibling path前提。
+/// `open-cuda`側`GptModel::set_softmax_spirv`(2026-08-06新設、
+/// `opencuda_blas::softmax_vulkan_generic`との連携)へ渡す。
+/// `ARUARU_LLM_SOFTMAX_SPIRV`環境変数で上書き可能。
+#[cfg(feature = "real-vulkan")]
+fn default_softmax_spirv_path() -> PathBuf {
+    if let Ok(path) = std::env::var("ARUARU_LLM_SOFTMAX_SPIRV") {
+        return PathBuf::from(path);
+    }
+    PathBuf::from("../open-cuda/examples/softmax_vulkan_real/shaders/softmax.spv")
+}
+
 /// `real-vulkan` feature有効時のみ、コンパイル済み`matmul.spv`を
 /// `GptModel::set_matmul_spirv`経由で全`Linear`層(QKV/attn_out/
 /// intermediate/output/lm_head)へ配線する(2026-08-05追加、`open-cuda`
@@ -122,6 +135,41 @@ fn wire_matmul_spirv(model: &mut GptModel) -> bool {
     }
 }
 
+/// `real-vulkan` feature有効時のみ、コンパイル済み`softmax.spv`を
+/// `GptModel::set_softmax_spirv`経由で配線する(2026-08-06追加、
+/// `open-cuda`側`GptModel::set_softmax_spirv`——`opencuda_blas::
+/// softmax_vulkan_generic`との連携——が新設されたことを受けての配線)。
+/// これと`wire_matmul_spirv`の両方が成功して初めて、Attention計算の
+/// QKᵀ・softmax・P·Vのすべてが実Vulkanデバイス上でディスパッチされる
+/// (「GPU GEMM + CPU softmax」のハイブリッドから「GPU GEMM + GPU
+/// softmax」への移行)。読み込み失敗時はサービスを落とさず、softmaxは
+/// ホスト側CPU実行のまま継続する(既存の「サービスを壊さない」設計
+/// 方針を踏襲)。
+#[cfg(feature = "real-vulkan")]
+fn wire_softmax_spirv(model: &mut GptModel) -> bool {
+    let path = default_softmax_spirv_path();
+    match std::fs::read(&path) {
+        Ok(bytes) => {
+            let len = bytes.len();
+            model.set_softmax_spirv(bytes);
+            tracing::info!(
+                "real-vulkan feature enabled: loaded softmax.spv ({len} bytes) from {} and wired into GptModel via set_softmax_spirv",
+                path.display()
+            );
+            true
+        }
+        Err(err) => {
+            tracing::warn!(
+                "real-vulkan feature enabled but failed to load softmax.spv from {} ({err}); \
+                 Attention softmax will keep using the CPU path even if matmul.spv is wired \
+                 (run tools/compile-vulkan-shaders.* in open-cuda first, or set ARUARU_LLM_SOFTMAX_SPIRV)",
+                path.display()
+            );
+            false
+        }
+    }
+}
+
 fn load_from_dir(dir: &std::path::Path) -> Result<LoadedGpt, String> {
     #[allow(unused_mut)]
     let mut model = GptModel::load(dir).map_err(|e| format!("failed to load GPT-2 weights from {dir:?}: {e:#}"))?;
@@ -131,6 +179,10 @@ fn load_from_dir(dir: &std::path::Path) -> Result<LoadedGpt, String> {
     #[cfg(feature = "real-vulkan")]
     {
         matmul_spirv_wired = wire_matmul_spirv(&mut model);
+        // softmax配線はmatmul配線とは独立(片方が失敗してももう片方は試みる)。
+        // ただし実際にGPU常駐softmaxが効くのはmatmul_spirv_wiredも真の場合のみ
+        // (opencuda_blas側がGEMM経路とsoftmax経路を常に一致させる設計のため)。
+        let _softmax_wired = wire_softmax_spirv(&mut model);
     }
     Ok(LoadedGpt { model, tokenizer, dir: dir.to_path_buf(), matmul_spirv_wired })
 }
