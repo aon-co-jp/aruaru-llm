@@ -100,7 +100,7 @@ fn log_tenant_usage(endpoint: &str, tenant: &Option<String>, registry: &TenantRe
 #[derive(Debug, Serialize)]
 struct ChatResponse {
     reply: String,
-    engine: &'static str,
+    engine: String,
     matched_intent: Option<&'static str>,
     /// 実際に返した応答の言語(`"ja"`または`"en"`、現状の対応言語)。
     reply_lang: &'static str,
@@ -160,7 +160,7 @@ struct ClassifySecurityResponse {
     description: &'static str,
     score: f32,
     is_suspicious: bool,
-    engine: &'static str,
+    engine: String,
     /// 2026-07-26追加: embeddingコサイン類似度とは別に検出された、決定的に
     /// 検証可能な静的特徴(既知シグネチャ一致・エントロピー・API組み合わせ)。
     /// 空配列はそれらが何も検出されなかった(embeddingのみの判定)ことを示す。
@@ -182,6 +182,12 @@ async fn classify_security(req: Request, device: Arc<dyn GpuDevice>, registry: A
         Err(resp) => return resp,
     };
     log_tenant_usage("classify-security", &req.tenant, &registry);
+    // 2026-08-06修正: `engine`が実行経路(Vulkan/CPU)に関わらず常に
+    // `-cpu`固定文字列だった粗を修正(CLAUDE.md 2026-08-05 HANDOFF参照)。
+    // `scoring::dispatch_suffix`は`scoring::get_model()`内の`SPIRV_WIRED`を
+    // 見るため、security側も同じ埋め込みモデルを共有している(`security.rs`
+    // が`crate::scoring::embed`を呼ぶ設計)ことからそのまま使える。
+    let suffix = scoring::dispatch_suffix(&device);
     match security::classify_security(&device, &req.text) {
         Ok(v) => {
             let had_static_signals = !v.static_signals.is_empty();
@@ -193,9 +199,9 @@ async fn classify_security(req: Request, device: Arc<dyn GpuDevice>, registry: A
                     score: v.score,
                     is_suspicious: v.is_suspicious,
                     engine: if had_static_signals {
-                        "embedding-cosine-heuristic-v0-open-cuda-bert-cpu+static-signatures-v1-opencuda-cpu"
+                        format!("embedding-cosine-heuristic-v0-open-cuda-bert{suffix}+static-signatures-v1-opencuda-cpu")
                     } else {
-                        "embedding-cosine-heuristic-v0-open-cuda-bert-cpu"
+                        format!("embedding-cosine-heuristic-v0-open-cuda-bert{suffix}")
                     },
                     static_signals: v
                         .static_signals
@@ -217,7 +223,7 @@ async fn classify_security(req: Request, device: Arc<dyn GpuDevice>, registry: A
                     description: "classification failed; rely on static findings only",
                     score: 0.0,
                     is_suspicious: false,
-                    engine: "embedding-cosine-heuristic-v0-open-cuda-bert-cpu-error",
+                    engine: format!("embedding-cosine-heuristic-v0-open-cuda-bert{suffix}-error"),
                     static_signals: Vec::new(),
                 },
             )
@@ -294,7 +300,7 @@ struct GenerateResponse {
     completion: String,
     /// 2026-07-27修正: `model_catalog`経由のホットスワップ後も実際に
     /// 使用中のモデルディレクトリ名を反映するよう動的化
-    /// (`generation::engine_label()`)——固定文字列のままだと、例えば
+    /// (`generation::engine_label(&device)`)——固定文字列のままだと、例えば
     /// gpt2-mediumへ切り替えた後も"gpt2-124m-..."と表示され続け不正直
     /// だったため。
     engine: String,
@@ -323,7 +329,7 @@ async fn generate(req: Request, device: Arc<dyn GpuDevice>, registry: Arc<Tenant
             StatusCode::OK,
             &GenerateResponse {
                 completion,
-                engine: generation::engine_label(),
+                engine: generation::engine_label(&device),
                 disclosure: "GPT-2 family models (124M-1.5B) are small 2019-era models, not comparable to modern commercial LLMs (e.g. GPT-4). \
                     This demonstrates self-contained text generation without an external LLM API contract, not state-of-the-art quality. \
                     Output may be grammatically fluent but is not guaranteed to be factually accurate.",
@@ -331,7 +337,7 @@ async fn generate(req: Request, device: Arc<dyn GpuDevice>, registry: Arc<Tenant
         ),
         Err(err) => {
             tracing::warn!("generate failed: {err:#}");
-            json_response(StatusCode::SERVICE_UNAVAILABLE, &GenerateErrorResponse { error: format!("{err:#}"), engine: generation::engine_label() })
+            json_response(StatusCode::SERVICE_UNAVAILABLE, &GenerateErrorResponse { error: format!("{err:#}"), engine: generation::engine_label(&device) })
         }
     }
 }
@@ -416,7 +422,7 @@ async fn translate(req: Request, device: Arc<dyn GpuDevice>, registry: Arc<Tenan
             StatusCode::OK,
             &TranslateResponse {
                 translation: completion.trim().to_string(),
-                engine: generation::engine_label(),
+                engine: generation::engine_label(&device),
                 disclosure: format!(
                     "This endpoint reuses the GPT-2 family text-generation engine (124M-1.5B, 2019-era, English-centric \
                     pretraining) with a translation-style prompt — it is NOT a dedicated translation model (e.g. NLLB/M2M100) and has \
@@ -435,7 +441,7 @@ async fn translate(req: Request, device: Arc<dyn GpuDevice>, registry: Arc<Tenan
         ),
         Err(err) => {
             tracing::warn!("translate failed: {err:#}");
-            json_response(StatusCode::SERVICE_UNAVAILABLE, &TranslateErrorResponse { error: format!("{err:#}"), engine: generation::engine_label() })
+            json_response(StatusCode::SERVICE_UNAVAILABLE, &TranslateErrorResponse { error: format!("{err:#}"), engine: generation::engine_label(&device) })
         }
     }
 }

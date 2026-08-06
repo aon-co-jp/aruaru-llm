@@ -56,6 +56,12 @@ struct LoadedGpt {
     /// 現在アクティブなモデルの読み込み元ディレクトリ(診断・
     /// `GET /v1/models/catalog`等での表示用)。
     dir: PathBuf,
+    /// `wire_matmul_spirv`が実際に成功したか(=このモデルの全`Linear`に
+    /// コンパイル済みSPIR-Vが配線済みかどうか)。2026-08-06追加、
+    /// `engine_label`が実行経路(Vulkan/CPU)を正直に反映するために使う
+    /// (CLAUDE.md 2026-08-05 HANDOFFで指摘された「`engine`が常に`-cpu`
+    /// 固定文字列」の粗の修正)。`real-vulkan` feature無効時は常に`false`。
+    matmul_spirv_wired: bool,
 }
 
 /// 現在アクティブなモデル(`None`は「まだ一度もロードを試みていない」
@@ -92,7 +98,7 @@ fn default_matmul_spirv_path() -> PathBuf {
 /// のまま(=CPU GEMMパス)で継続する(既存の「サービスを壊さない」設計
 /// 方針を踏襲)。
 #[cfg(feature = "real-vulkan")]
-fn wire_matmul_spirv(model: &mut GptModel) {
+fn wire_matmul_spirv(model: &mut GptModel) -> bool {
     let path = default_matmul_spirv_path();
     match std::fs::read(&path) {
         Ok(bytes) => {
@@ -102,6 +108,7 @@ fn wire_matmul_spirv(model: &mut GptModel) {
                 "real-vulkan feature enabled: loaded matmul.spv ({len} bytes) from {} and wired into GptModel via set_matmul_spirv",
                 path.display()
             );
+            true
         }
         Err(err) => {
             tracing::warn!(
@@ -110,6 +117,7 @@ fn wire_matmul_spirv(model: &mut GptModel) {
                  (run tools/compile-vulkan-shaders.* in open-cuda first, or set ARUARU_LLM_MATMUL_SPIRV)",
                 path.display()
             );
+            false
         }
     }
 }
@@ -118,9 +126,13 @@ fn load_from_dir(dir: &std::path::Path) -> Result<LoadedGpt, String> {
     #[allow(unused_mut)]
     let mut model = GptModel::load(dir).map_err(|e| format!("failed to load GPT-2 weights from {dir:?}: {e:#}"))?;
     let tokenizer = GptTokenizer::load(dir).map_err(|e| format!("failed to load GPT-2 tokenizer from {dir:?}: {e:#}"))?;
+    #[allow(unused_mut)]
+    let mut matmul_spirv_wired = false;
     #[cfg(feature = "real-vulkan")]
-    wire_matmul_spirv(&mut model);
-    Ok(LoadedGpt { model, tokenizer, dir: dir.to_path_buf() })
+    {
+        matmul_spirv_wired = wire_matmul_spirv(&mut model);
+    }
+    Ok(LoadedGpt { model, tokenizer, dir: dir.to_path_buf(), matmul_spirv_wired })
 }
 
 /// 現在アクティブなモデルを返す。まだ一度もロードしていなければ
@@ -171,18 +183,39 @@ pub fn active_model_dir() -> Option<PathBuf> {
 /// "gpt2-124m-..."と表示され続けるのは不正直なため)。
 pub const ENGINE_GPT2_GREEDY: &str = "gpt2-124m-greedy-decode-v0-open-cuda-llm-cpu";
 
-/// 現在アクティブなモデルディレクトリ名を反映したエンジン識別子。
-/// ディレクトリ名がわかればそれをそのまま埋め込み(例:
-/// `"gpt2-medium-greedy-decode-v0-open-cuda-llm-cpu"`)、未ロード
-/// (`active_model_dir()`が`None`)ならデフォルトの`ENGINE_GPT2_GREEDY`
-/// を返す。
-pub fn engine_label() -> String {
-    match active_model_dir() {
-        Some(dir) => {
-            let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or("unknown").to_string();
-            format!("{name}-greedy-decode-v0-open-cuda-llm-cpu")
+/// 現在アクティブなモデルの実行経路(Vulkan/CPU)を示す接尾辞。
+/// **2026-08-06修正**: 以前は`engine_label`が常に`-cpu`固定文字列を
+/// 返しており、`real-vulkan` feature有効時にVulkanDevice経由で実際に
+/// 生成していても`engine`ラベル上は判別できなかった(CLAUDE.md
+/// 2026-08-05 HANDOFFで指摘済みの粗)。`device.supports_spirv()`
+/// (呼び出し側が実際に選択したデバイス)と`matmul_spirv_wired`
+/// (モデル側の配線が実際に成功したか)の**両方**が真の場合のみ
+/// `-vulkan`を返す——配線が失敗していればCPU GEMMパスへ安全側
+/// フォールバックしているため、その場合は正直に`-cpu`を返す。
+fn dispatch_suffix(device: &Arc<dyn GpuDevice>, loaded: &LoadedGpt) -> &'static str {
+    if device.supports_spirv() && loaded.matmul_spirv_wired {
+        "-vulkan"
+    } else {
+        "-cpu"
+    }
+}
+
+/// 現在アクティブなモデルディレクトリ名・実際の実行経路(Vulkan/CPU)を
+/// 反映したエンジン識別子。ディレクトリ名がわかればそれをそのまま
+/// 埋め込み(例: `"gpt2-medium-greedy-decode-v0-open-cuda-llm-vulkan"`)、
+/// 未ロード(まだ一度もモデルをロードしていない)なら`device`のみを見て
+/// デフォルトの`ENGINE_GPT2_GREEDY`相当のラベルを返す。
+pub fn engine_label(device: &Arc<dyn GpuDevice>) -> String {
+    match ACTIVE.read().unwrap().clone() {
+        Some(loaded) => {
+            let suffix = dispatch_suffix(device, &loaded);
+            let name = loaded.dir.file_name().and_then(|n| n.to_str()).unwrap_or("unknown").to_string();
+            format!("{name}-greedy-decode-v0-open-cuda-llm{suffix}")
         }
-        None => ENGINE_GPT2_GREEDY.to_string(),
+        None => {
+            let suffix = if device.supports_spirv() { "-vulkan" } else { "-cpu" };
+            format!("gpt2-124m-greedy-decode-v0-open-cuda-llm{suffix}")
+        }
     }
 }
 
