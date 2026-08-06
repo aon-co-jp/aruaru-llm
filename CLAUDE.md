@@ -192,6 +192,87 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-08-06 softmax専用SPIR-Vカーネルをaruaru-llm側でも実配線、
+  「GPU GEMM + GPU softmax」経路の実HTTP検証まで完了(直前コミット
+  「Vulkan GEMM配線バグを解消、softmax専用カーネル連携を実機検証」の
+  次にすべきこと=Attention経路への本格統合、ユーザー指示「aruaru-llm
+  連携性向上」への対応)**:
+  1. **前回コミットの正直な補足記録**: 直前コミット(`f7030ca`、CLAUDE.md
+     未記録のまま残っていたため今回まとめて記録)は、`engine_label`が
+     実行経路(Vulkan/CPU)を`matmul_spirv_wired`フラグで正しく判定する
+     よう修正したのみで、**softmaxカーネル自体はこの時点ではまだ
+     aruaru-llm側に一切参照されていなかった**(`grep softmax src/`が
+     0件)——コミットメッセージの「softmax専用カーネル連携を実機検証」は
+     `open-cuda`側(`opencuda-blas`)でのスタンドアロン検証を指しており、
+     aruaru-llm側の実配線は未着手だった。この節でその配線を実施した。
+  2. **`open-cuda`側の対応**(このセッションでopen-cuda本体にも着手、
+     詳細は`open-cuda/CLAUDE.md` 2026-08-06 HANDOFF参照): 前回
+     (2026-08-06付`open-cuda`側HANDOFF)で実装・実機検証済みだった
+     `softmax_vulkan_generic`(スタンドアロンのsoftmaxカーネル、Attention
+     経路には未配線)を、`opencuda_blas::scaled_dot_product_attention_
+     with_spirv_and_softmax`という新関数経由でAttention計算(QKᵀ→softmax
+     →P·V)へ実際に組み込んだ。`open-cuda-llm::GptModel`・`open-cuda-bert::
+     BertModel`双方に`set_softmax_spirv`を新設(`set_matmul_spirv`と同じ
+     パターン)。
+  3. **`aruaru-llm`側の配線**: `src/generation.rs`に`default_softmax_
+     spirv_path`(`ARUARU_LLM_SOFTMAX_SPIRV`環境変数で上書き可)・
+     `wire_softmax_spirv`を追加し、`load_from_dir`内で`wire_matmul_spirv`
+     と並べて呼ぶよう変更(`GptModel::set_softmax_spirv`経由)。
+     `src/scoring.rs`にも同じパターンで`default_softmax_spirv_path`・
+     `wire_softmax_spirv`を追加し、`get_model()`内で`BertModel::
+     set_softmax_spirv`を呼ぶよう変更(`scoring`/`security`共通、
+     `security.rs`は`scoring::embed`を再利用する既存設計のため無改修)。
+  4. **実機検証(型チェックのみで完了と報告しない方針を徹底、NVIDIA
+     GeForce GT 730)**:
+     - `cargo build --release`(featureなし)/`cargo build --release
+       --features real-vulkan`いずれも成功。`cargo test --release`/
+       `cargo test --release --features real-vulkan`いずれも既存
+       **46件全green**(regression無し、テスト自体の新規追加は今回無し
+       ——このリポジトリ側の新規ロジックは「起動時にファイルを読んで
+       配線する」だけの薄い層で、実質的な検証は`open-cuda`側の
+       `open-cuda-llm`/`opencuda-blas`テストで既に実施済みのため)。
+     - **実際にサーバーを起動**(`--features real-vulkan`、
+       `RUST_LOG=info`)し、起動ログで`generation`・`scoring`双方について
+       `loaded matmul.spv (2732 bytes) ... via set_matmul_spirv`・
+       `loaded softmax.spv (4680 bytes) ... via set_softmax_spirv`の
+       **両方**が記録されることを確認(片方だけの配線ではないことの
+       裏取り)。
+     - **実HTTPリクエスト**: `POST /v1/generate
+       {"prompt":"The quick brown fox","max_new_tokens":5}`へ実際に
+       リクエストを送り、`"completion":"es are a great way"`(CPU版の
+       既知の継続文`"es are a great way to get a little bit of a"`の
+       先頭一致、生成内容が壊れていないことを確認)・
+       `"engine":"gpt2-greedy-decode-v0-open-cuda-llm-vulkan"`
+       (`-vulkan`接尾辞、実際にVulkan経由で動作したことをエンジン
+       ラベルからも確認)という正しい応答を得た。
+  5. **正直な開示・性能(誇張しない)**: 上記`POST /v1/generate`
+     (`max_new_tokens=5`)の実測所要時間は**約35.9秒**——CPU版の既存記録
+     (`max_new_tokens=20`で約6〜7秒)と比較して大幅に遅い。これは
+     `open-cuda`側2026-07-26 HANDOFFで示した「1トークンデコードは
+     `seq_len=1`のGEMM/softmaxが極めて軽く、Vulkanのディスパッチ固定
+     オーバーヘッドの方が支配的になり、CPU実行より遅くなりうる」という
+     設計上の懸念が、今回softmax専用カーネルの追加ディスパッチ
+     (レイヤーあたりQKᵀ・softmax・P・Vの3回、従来のGEMMのみ版の1.5倍の
+     ディスパッチ回数)によりさらに悪化する形で実測された。
+     **「正しく動く」ことは実証できたが「速くなる」ことは実証していない**
+     ——`real-vulkan` featureは既定無効(opt-in)のままであり、この結果を
+     もって既定を切り替える判断はしない。
+  6. **検証結果まとめ**: `cargo build --workspace`/`cargo test
+     --workspace`(open-cuda側含む)全クレートregression無し。
+     `cargo clippy --workspace --all-targets --release -- -D warnings`
+     (open-cuda側)警告0件。
+  - 次にすべきこと: (1) デコード側(`forward_step`、`seq_len=1`)への
+    Vulkanディスパッチはオーバーヘッドが支配的で実用上不利なことが
+    改めて確認されたため、プリフィル(`forward_prefill`、バッチGEMM)
+    側でのみVulkan経路を使い、デコード側はCPU固定にする「経路ごとの
+    使い分け」の設計(`open-cuda`側の変更が必要な増分)、(2) 真に
+    GPU常駐率を上げるにはAttention全体を1回のディスパッチにまとめる
+    融合(fused)カーネルが必要(`open-cuda`側スコープ)、(3) 現状の
+    `real-vulkan`(opt-in、既定無効)のまま据え置き、既定を切り替える
+    判断は行わない(性能が実証されるまでは)、(4) `flash_attention`
+    (タイル化+オンラインsoftmax)側は依然ホスト側CPU実装のまま
+    未着手(`open-cuda`側スコープ)。
+
 - **2026-08-04(続き2) `real-vulkan` feature配線を実装、実機検証の結果
   「単純な配線では動作しない」ことが判明(前回HANDOFFの「次にすべきこと
   (1)」への対応、ユーザー指示「open-directx open-cuda aruaru-llmなどの
