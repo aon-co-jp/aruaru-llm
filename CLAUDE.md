@@ -1,5 +1,39 @@
 # 設計思想＆開発方針＆開発環境ルール(aruaru-llm)
 
+> **📌 保留タスク(2026-08-06、次回セッションで着手予定)/ Pending task (added 2026-08-06, to be started next session)**:
+> ユーザー指示により、**東芝の疑似量子コンピューター技術(Simulated
+> Bifurcation Machine)**と**DeepSeekの技術**(インターネットニュースだけ
+> でなく、論文〈DeepSeek-V3/R1テクニカルレポート等〉・実装ノウハウの
+> ブログまで日英両言語でGoogle/GitHub調査)を、`dream-os`/`open-directx`/
+> `open-cuda`/`aruaru-llm`/`open-web-server`/`RPoem`/`open-raid-z`/
+> `aruaru-db`の8リポジトリへ組み込む構想がある。東芝SBMは`dream-os`
+> (`sbm_ising`カーネル、64スピンPoC)に実装済み——他リポジトリへの適用は
+> 各リポジトリで「何を最適化するか」を先に特定してから着手すること
+> (このリポジトリ固有の候補は未検討、次回調査対象)。DeepSeekは前回調査で
+> 「数千枚のGPUを1枚に圧縮する技術」という主張は確認できなかった(誤解・
+> 誇張と判断済み)——今回は論文・実装ブログまで調査範囲を広げ、実在する
+> 技術(MLA・DeepSeekMoE・FP8混合精度学習等)を特定してから適用箇所を
+> 検討すること。詳細は`dream-os/CLAUDE.md`の同日HANDOFF参照。
+>
+> By user instruction, there is a plan to incorporate **Toshiba's
+> pseudo-quantum-computer technology (Simulated Bifurcation Machine)**
+> and **DeepSeek's technology** (researched via Google/GitHub in both
+> Japanese and English, going beyond news articles to actual papers
+> like the DeepSeek-V3/R1 technical reports and implementation-notes
+> blogs) into 8 repositories: `dream-os`, `open-directx`, `open-cuda`,
+> `aruaru-llm`, `open-web-server`, `RPoem`, `open-raid-z`, and
+> `aruaru-db`. Toshiba SBM is already implemented in `dream-os` (the
+> `sbm_ising` kernel, a 64-spin PoC) — applying it elsewhere requires
+> first identifying a concrete optimization problem in each repo (not
+> yet investigated for this repo). The previous DeepSeek research found
+> no evidence for a "compress thousands of GPUs into one" technology
+> (judged to be a misunderstanding/exaggeration) — this time, broaden
+> the research to papers and implementation blogs, identify real
+> techniques (MLA, DeepSeekMoE, FP8 mixed-precision training, etc.),
+> then decide where they apply. See the same-day HANDOFF entry in
+> `dream-os/CLAUDE.md` for details.
+
+
 作業ドライブは`F:\open-runo`。この節は[`open-raid-z`](https://github.com/aon-co-jp/open-raid-z)の
 `CLAUDE.md`を正本とし、各プロジェクトへコピーして同期する方針に準じる。
 GitHubリポジトリ: [aon-co-jp/aruaru-llm](https://github.com/aon-co-jp/aruaru-llm)。

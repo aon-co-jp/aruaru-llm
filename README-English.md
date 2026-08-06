@@ -1,5 +1,7 @@
 # aruaru-llm
 
+> 📌 Pending task (2026-08-06): a plan exists to incorporate Toshiba SBM / DeepSeek techniques. See [CLAUDE.md](CLAUDE.md) for details.
+
 > **Updated 2026-07-25**: The dev-policy file (`CLAUDE.md`) heading was
 > renamed from "Development Policy & Dev Environment Rules" to
 > "Design Philosophy & Development Policy & Dev Environment Rules",
