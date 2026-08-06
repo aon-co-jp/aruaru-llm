@@ -21,6 +21,7 @@
 //! 実際に何を計算しているかを誇張しないための開示(詳しくはCLAUDE.md参照)。
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context, Result};
@@ -35,7 +36,11 @@ const SIMILARITY_THRESHOLD: f32 = 0.86;
 /// `/v1/chat`の`engine`フィールドに返す、実際に使われた分類経路の名前。
 /// 呼び出し側が「本物の対話生成AIかどうか」「意味理解の質(埋め込み/
 /// bag-of-words)」を判別できるよう、常に実際に使った経路を正直に返す
-/// (CLAUDE.md「正直な開示」節参照)。
+/// (CLAUDE.md「正直な開示」節参照)。**2026-08-06修正**: 以前は`-cpu`が
+/// 実行経路(Vulkan/CPU)に関わらず常に固定文字列だった(既知の粗、
+/// CLAUDE.md 2026-08-05 HANDOFF参照)。実際の分類経路を反映するには
+/// [`engine_embedding_label`](実行時に`-cpu`/`-vulkan`を判定して返す)
+/// を使うこと——この定数は後方互換の参考値として残す。
 pub const ENGINE_EMBEDDING: &str = "embedding-cosine-v0-open-cuda-bert-cpu";
 /// 埋め込みモデル(`models/multilingual-e5-small/`)が存在しない、または
 /// ロードに失敗したときに自動的に使われるフォールバック経路
@@ -180,15 +185,90 @@ fn model_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models/multilingual-e5-small")
 }
 
+/// `generation.rs::default_matmul_spirv_path`と同じsibling path前提
+/// (`../open-cuda`、`ARUARU_LLM_MATMUL_SPIRV`環境変数で共通に上書き可能)。
+/// `open-cuda-bert::BertModel::set_matmul_spirv`(2026-08-06新設、
+/// `open-cuda-llm::GptModel::set_matmul_spirv`と同じパターン)へ渡す。
+#[cfg(feature = "real-vulkan")]
+fn default_matmul_spirv_path() -> PathBuf {
+    if let Ok(path) = std::env::var("ARUARU_LLM_MATMUL_SPIRV") {
+        return PathBuf::from(path);
+    }
+    PathBuf::from("../open-cuda/examples/matmul_vulkan_real/shaders/matmul.spv")
+}
+
+/// `open-cuda-bert::Linear::forward`が`GemmPath::VulkanGeneric`を使える
+/// よう、コンパイル済み`matmul.spv`を配線する(2026-08-06新設、
+/// `generation.rs::wire_matmul_spirv`と同じ設計、CLAUDE.md 2026-08-05
+/// HANDOFFで報告されていた「`scoring`/`security`側には同様のVulkan GEMM
+/// 配線が無く、`real-vulkan`有効時は起動時ウォームアップが失敗する」への
+/// 対応)。読み込み失敗時はサービスを落とさず、CPU実行のまま継続する
+/// (既存の「サービスを壊さない」設計方針を踏襲)。成功した場合のみ
+/// [`SPIRV_WIRED`]をセットし、[`dispatch_suffix`]が正しく`-vulkan`を
+/// 報告できるようにする。
+#[cfg(feature = "real-vulkan")]
+fn wire_matmul_spirv(model: &mut BertModel) {
+    let path = default_matmul_spirv_path();
+    match std::fs::read(&path) {
+        Ok(bytes) => {
+            let len = bytes.len();
+            model.set_matmul_spirv(bytes);
+            SPIRV_WIRED.store(true, Ordering::Relaxed);
+            tracing::info!(
+                "real-vulkan feature enabled: loaded matmul.spv ({len} bytes) from {} and wired into BertModel via set_matmul_spirv (scoring/security)",
+                path.display()
+            );
+        }
+        Err(err) => {
+            tracing::warn!(
+                "real-vulkan feature enabled but failed to load matmul.spv from {} ({err}); \
+                 scoring/security Linear layers will keep using the CPU GEMM path even if VulkanDevice was selected \
+                 (run tools/compile-vulkan-shaders.* in open-cuda first, or set ARUARU_LLM_MATMUL_SPIRV)",
+                path.display()
+            );
+        }
+    }
+}
+
+/// [`wire_matmul_spirv`]が実際に成功したかどうか(=`BertModel`の全
+/// `Linear`にコンパイル済みSPIR-Vが配線済みかどうか)。`real-vulkan`
+/// feature無効時は常に`false`のまま(既定ビルドへの影響ゼロ)。
+static SPIRV_WIRED: AtomicBool = AtomicBool::new(false);
+
+/// `engine`フィールドに実際の実行経路(Vulkan/CPU)を反映させるための
+/// 判定(2026-08-06追加、CLAUDE.md 2026-08-05 HANDOFFで指摘された
+/// 「`engine`フィールドが実行経路に関わらず常に`-cpu`固定文字列を返す」
+/// 粗の修正)。`device.supports_spirv()`(呼び出し側が実際に選択した
+/// デバイス)と[`SPIRV_WIRED`](モデル側の配線が実際に成功したか)の
+/// **両方**が真の場合のみ`-vulkan`を返す——デバイスがVulkanでも配線が
+/// 失敗していればCPU GEMMパスへフォールバックしているため、その場合は
+/// 正直に`-cpu`を返す。
+pub fn dispatch_suffix(device: &Arc<dyn GpuDevice>) -> &'static str {
+    if device.supports_spirv() && SPIRV_WIRED.load(Ordering::Relaxed) {
+        "-vulkan"
+    } else {
+        "-cpu"
+    }
+}
+
+/// [`ENGINE_EMBEDDING`]の動的版。実際の実行経路(Vulkan/CPU)を
+/// `-vulkan`/`-cpu`接尾辞で反映する(2026-08-06追加)。
+pub fn engine_embedding_label(device: &Arc<dyn GpuDevice>) -> String {
+    format!("embedding-cosine-v0-open-cuda-bert{}", dispatch_suffix(device))
+}
+
 fn get_model() -> Result<&'static EmbeddingModel> {
     if let Some(m) = MODEL.get() {
         return Ok(m);
     }
     let dir = model_dir();
-    let model = BertModel::load(&dir)
+    #[allow(unused_mut)]
+    let mut model = BertModel::load(&dir)
         .with_context(|| format!("open-cuda-bert: multilingual-e5-smallのロードに失敗しました({dir:?})"))?;
     let tokenizer = BertTokenizer::load(&dir)
         .with_context(|| format!("open-cuda-bert: tokenizer.jsonのロードに失敗しました({dir:?})"))?;
+    #[cfg(feature = "real-vulkan")]
+    wire_matmul_spirv(&mut model);
     // 別スレッドと競合してもどちらか片方が採用されればよい(結果は同一)。
     let _ = MODEL.set(EmbeddingModel { model, tokenizer });
     Ok(MODEL.get().expect("MODEL was just set"))
@@ -269,7 +349,7 @@ pub fn best_intent(device: &Arc<dyn GpuDevice>, user_text: &str) -> Result<Optio
 /// (`ENGINE_EMBEDDING`/`ENGINE_BOW_FALLBACK`/`ENGINE_CLASSIFICATION_UNAVAILABLE`)。
 pub struct ClassifyResult {
     pub intent: Option<&'static Intent>,
-    pub engine: &'static str,
+    pub engine: String,
 }
 
 /// 意図分類のエントリポイント。まず`open-cuda-bert`による埋め込み
@@ -281,16 +361,16 @@ pub struct ClassifyResult {
 /// `engine`フィールドで必ずどちらの経路が使われたかを呼び出し側へ伝える。
 pub fn classify(device: &Arc<dyn GpuDevice>, user_text: &str) -> ClassifyResult {
     match best_intent(device, user_text) {
-        Ok(intent) => ClassifyResult { intent, engine: ENGINE_EMBEDDING },
+        Ok(intent) => ClassifyResult { intent, engine: engine_embedding_label(device) },
         Err(err) => {
             tracing::warn!(
                 "embedding-based classification unavailable ({err}); falling back to bag-of-words (models/multilingual-e5-small/ missing or failed to load)"
             );
             match crate::bow_fallback::best_intent_bow(device, user_text) {
-                Ok(intent) => ClassifyResult { intent, engine: ENGINE_BOW_FALLBACK },
+                Ok(intent) => ClassifyResult { intent, engine: ENGINE_BOW_FALLBACK.to_string() },
                 Err(bow_err) => {
                     tracing::warn!("bag-of-words fallback also failed: {bow_err}");
-                    ClassifyResult { intent: None, engine: ENGINE_CLASSIFICATION_UNAVAILABLE }
+                    ClassifyResult { intent: None, engine: ENGINE_CLASSIFICATION_UNAVAILABLE.to_string() }
                 }
             }
         }
