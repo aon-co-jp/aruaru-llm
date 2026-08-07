@@ -323,6 +323,21 @@ async fn generate(req: Request, device: Arc<dyn GpuDevice>, registry: Arc<Tenant
         Err(resp) => return resp,
     };
     log_tenant_usage("generate", &req.tenant, &registry);
+    // 2026-08-07追加: 空prompt(または空白のみ)は、以前はトークナイザで
+    // 0トークンにエンコードされた後`generation::generate`内部の
+    // `ensure!(!prompt_ids.is_empty(), ...)`まで進んでから失敗し、その
+    // エラーがバックエンド障害と同じ`503 Service Unavailable`として
+    // 返っていた——呼び出し側からは「サーバーが落ちている」のか
+    // 「自分のリクエストが不正」なのか区別できず不便だった。クライアント
+    // 起因の入力不備は`400 Bad Request`で即座に、モデル側の状態には触れず
+    // 明確なメッセージで返す(APIの使いやすさ改善、`open-cuda`側の変更は
+    // 不要でこのリポジトリ単体で完結する修正)。
+    if req.prompt.trim().is_empty() {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            &GenerateErrorResponse { error: "prompt must not be empty".to_string(), engine: generation::engine_label(&device) },
+        );
+    }
     let max_new_tokens = req.max_new_tokens.clamp(1, MAX_NEW_TOKENS_LIMIT);
     match generation::generate(&device, &req.prompt, max_new_tokens) {
         Ok(completion) => json_response(
@@ -389,6 +404,22 @@ async fn translate(req: Request, device: Arc<dyn GpuDevice>, registry: Arc<Tenan
         Err(resp) => return resp,
     };
     log_tenant_usage("translate", &req.tenant, &registry);
+
+    // 2026-08-07追加: `/v1/generate`と同じ理由(下記コメント参照)で、
+    // 空`text`・空`target_lang`は`400 Bad Request`で即座に返す
+    // (以前は空`text`がGPT-2フォールバック経路で`503`扱いになっていた)。
+    if req.text.trim().is_empty() {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            &TranslateErrorResponse { error: "text must not be empty".to_string(), engine: generation::engine_label(&device) },
+        );
+    }
+    if req.target_lang.trim().is_empty() {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            &TranslateErrorResponse { error: "target_lang must not be empty".to_string(), engine: generation::engine_label(&device) },
+        );
+    }
 
     // `nllb-translate` feature有効時は、専用翻訳モデル(M2M100)をまず
     // 試みる(2026-08-04追加、実HTTP検証でGPT-2流用実装が実用に耐えないと
