@@ -45,6 +45,18 @@
 テンプレートとして使えばよい(本リポジトリの`src/main.rs`がそのまま
 参考実装になる)。
 
+## 3.5. 空入力の入力検証パターン(2026-08-06追加)
+
+`POST /v1/generate`/`POST /v1/translate`が空の`prompt`/`text`を受け
+取った場合、以前はトークナイザ内部の「0トークン」エラーが本物のバック
+エンド障害と区別できず、誤解を招く`503 Service Unavailable`を返して
+いた実バグがあった。`main.rs`のハンドラ冒頭で明示的な入力検証
+(`prompt must not be empty`等、`400 Bad Request`)を追加して解消。
+他プロジェクトのAPIハンドラでも、「内部コンポーネントのエラーを
+そのまま外部エラーコードへ透過させていないか」(特に空入力・境界値)を
+確認する価値がある——本件と同型のバグが`/v1/chat`・
+`/v1/classify-security`にも潜んでいないかは未監査(次回課題)。
+
 ## 4. 「分身の術」テナント登録パターン(`open-web-server`と共通)
 
 `src/tenants.rs`の`TenantRegistry`(`RwLock<HashMap<String, TenantInfo>>`)
