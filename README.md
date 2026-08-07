@@ -2,6 +2,18 @@
 
 > 📌 保留タスク(2026-08-06): 東芝SBM・DeepSeek技術の組み込み構想あり。詳細は[CLAUDE.md](CLAUDE.md)参照。
 
+> 📌 **最近の更新(2026-08-07)**: `/v1/chat`・`/v1/classify-security`が
+> 以前`/v1/generate`・`/v1/translate`で見つかった「空入力→503誤判定」
+> バグの影響を受けていないか実バイナリ・実HTTPで検証。両エンドポイント
+> とも空入力で200(フォールバック応答/benign判定)を正しく返すことを
+> 確認、コード変更は不要と判明した。詳細は[CLAUDE.md](CLAUDE.md)参照。
+>
+> *English*: Verified via a real running binary + live HTTP requests that
+> `/v1/chat` and `/v1/classify-security` do **not** suffer the
+> "empty input → 503" bug previously fixed for `/v1/generate` and
+> `/v1/translate` — both correctly return 200 for empty input. No code
+> change was needed.
+
 > **2026-07-25 更新**: 開発方針ファイル(`CLAUDE.md`)の見出しを
 > 「開発方針＆開発環境ルール」から「設計思想＆開発方針＆開発環境ルール」
 > へ改名しました。プロジェクトの設計思想(何を大事にしているか)・

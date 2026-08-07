@@ -2,6 +2,13 @@
 
 > 📌 Pending task (2026-08-06): a plan exists to incorporate Toshiba SBM / DeepSeek techniques. See [CLAUDE.md](CLAUDE.md) for details.
 
+> 📌 **Recent update (2026-08-07)**: verified via a real running binary +
+> live HTTP requests that `/v1/chat` and `/v1/classify-security` do
+> **not** suffer the "empty input → 503" bug previously fixed for
+> `/v1/generate` and `/v1/translate` — both correctly return 200 for
+> empty input. No code change was needed. See [CLAUDE.md](CLAUDE.md) for
+> details.
+
 > **Updated 2026-07-25**: The dev-policy file (`CLAUDE.md`) heading was
 > renamed from "Development Policy & Dev Environment Rules" to
 > "Design Philosophy & Development Policy & Dev Environment Rules",
