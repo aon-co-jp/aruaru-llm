@@ -226,6 +226,61 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-08-07(続き) `/v1/chat`・`/v1/classify-security`の空入力挙動を実HTTPで
+  検証(前回HANDOFFの「次にすべきこと(2)」への対応、ユーザー指示
+  「dream-os/open-directx/open-cuda/aruaru-llmの関連性・連携性・実用性・
+  完成度を向上」の一環)**:
+  1. **背景**: 直前2026-08-07 HANDOFF(`/v1/generate`・`/v1/translate`の
+     空入力`400`化)の「次にすべきこと(2)」で、同様の粗が`/v1/chat`
+     (`message`)・`/v1/classify-security`(`text`)にも無いか未確認のまま
+     残っていた(コード読解上は`scoring::classify`/`security::classify_
+     security`が空文字列でも例外を投げず正常応答する設計と推測されて
+     いたが、実HTTPでの確認は未実施だった)。
+  2. **検証(型チェックのみで完了と報告しない方針を徹底)**:
+     `cargo build`(debugビルド、`target/debug/aruaru-llm.exe`)後、
+     実際にサーバーを起動し(`0.0.0.0:4600`)、以下を実HTTPリクエストで
+     確認した:
+     - `POST /v1/chat {"message":""}` → `200`
+       `{"reply":"e-gov.infoへようこそ...","engine":"embedding-cosine-v0-
+       open-cuda-bert-cpu","matched_intent":null,...}`(既定のフォール
+       バック応答、`503`にならず正常応答)。
+     - `POST /v1/classify-security {"text":""}` → `200`
+       `{"label":"benign","score":0.886...,"is_suspicious":false,
+       "engine":"embedding-cosine-heuristic-v0-open-cuda-bert-cpu",
+       "static_signals":[]}`(空入力を`benign`判定、`503`にならず正常
+       応答)。
+     - 回帰確認として`POST /v1/generate {"prompt":""}`→`400`・
+       `POST /v1/translate {"text":"","target_lang":"Japanese"}`→`400`
+       も再実行し、前回HANDOFFの修正(コミット`b500023`)が引き続き
+       正しく動作していることを確認した。
+  3. **結論・コード変更は無し**: `/v1/chat`・`/v1/classify-security`は
+     いずれも空入力で`503`化する問題を再現できなかった——前回HANDOFFの
+     「`scoring::classify`/`security::classify_security`は空文字列でも
+     例外を投げずNone/低スコアで正常応答する設計」という推測が実HTTPで
+     裏付けられた。**このため`src/main.rs`等への変更は行っていない**
+     (「確認のみでよい」という前回の優先度判断が正しかったことの実証、
+     誤りを見逃していないことの正直な報告)。
+  4. **正直な開示・今回スコープ外のまま**: `open-cuda`側で今回同時に
+     `open-cuda-llm`のAttention経路へ`flash_attention_with_spirv`
+     (1ディスパッチで完結するfused attentionカーネル)を配線した
+     (`open-cuda/CLAUDE.md` 2026-08-07(続き5)HANDOFF参照)が、
+     `aruaru-llm`側で`GptModel::set_flash_attention_spirv`を実際に呼ぶ
+     配線は**今回は行っていない**(このリポジトリでは検証専任のパスに
+     留め、影響範囲拡大を避けた——`generation.rs::wire_matmul_spirv`
+     相当の追加配線+実機速度計測は次回の増分として残す)。
+     `scoring`/`security`側のVulkan GEMM配線・GT-730でのVulkan vs CPU
+     ベンチマークも前回から変更なく未着手。dream-os・open-directx側との
+     具体的な連携強化(API呼び出し経路の実装等)も本リポジトリ内では
+     引き続き未着手。
+  - 次にすべきこと: (1) `GptModel::set_flash_attention_spirv`の
+    `aruaru-llm`側オプトイン配線(`generation.rs`に`wire_matmul_spirv`と
+    並ぶ`wire_flash_attention_spirv`相当を追加し、
+    `--features real-vulkan`で実機速度計測——「GEMM+CPU softmax」
+    「GEMM+GPU softmax」「GEMM+fused flash attention」の3経路比較)、
+    (2) `scoring`/`security`側のVulkan GEMM配線・GT-730でのベンチマークは
+    引き続き未着手、(3) dream-os・open-directx側との具体的な連携強化は
+    未着手のまま。
+
 - **2026-08-06 softmax専用SPIR-Vカーネルをaruaru-llm側でも実配線、
   「GPU GEMM + GPU softmax」経路の実HTTP検証まで完了(直前コミット
   「Vulkan GEMM配線バグを解消、softmax専用カーネル連携を実機検証」の
