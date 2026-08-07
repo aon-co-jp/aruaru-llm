@@ -69,7 +69,13 @@ Vulkan汎用パスは実装済み)。詳細はopen-cuda側の`CLAUDE.md`のHANDO
   (GPT-2 124M実重みによる自己回帰生成、本格的だが重い。プロンプトは英語推奨——
   GPT-2のBPE語彙は英語中心のため。実験例:
   `{"prompt": "The quick brown fox", "max_new_tokens": 16}` →
-  `"completion": "es are a great way to get a little bit of a kick out of your"`)
+  `"completion": "es are a great way to get a little bit of a kick out of your"`)。
+  **2026-08-07修正**: `prompt`が空文字列(または空白のみ)の場合は
+  `400 Bad Request`(`{"error": "prompt must not be empty", "engine": "..."}`)
+  を即座に返すようにした——以前はトークナイザが0トークンにエンコード
+  した後の内部エラーが`503 Service Unavailable`としてそのまま返っており、
+  呼び出し側から見て「サーバー障害」なのか「自分の入力が不正」なのか
+  区別できず不便だったための修正(実HTTPで`400`が返ることを検証済み)。
 - `GET /v1/models/catalog` — インストール可能なGPT-2アーキテクチャ互換モデル
   (`gpt2`/`distilgpt2`/`gpt2-medium`/`gpt2-large`/`gpt2-xl`〈2026-07-27追加〉)
   の一覧・インストール済みID・現在使用中のモデルディレクトリを返す
@@ -90,6 +96,9 @@ Vulkan汎用パスは実装済み)。詳細はopen-cuda側の`CLAUDE.md`のHANDO
   **インストールされていなければ**GPT-2流用の簡易実装(実用に耐えない
   ことが実HTTP検証で判明済み、常にその旨を`disclosure`に明記)へ自動
   フォールバックする。詳細は下記「翻訳プラグイン」節参照。
+  **2026-08-07修正**: `text`または`target_lang`が空(空白のみ含む)の
+  場合は`400 Bad Request`を即座に返す(`/v1/generate`と同じ理由、
+  実HTTPで検証済み)。
 - `GET /v1/recommend`（2026-07-27追加） — `open-cuda`(Vulkan)/`open-directx`
   (DXGI)経由のハードウェア検出(VRAM容量)から推奨モデルサイズを算出する
   (ダウンロードは行わない)。`{"hardware": {"gpu_detected":bool,

@@ -1548,3 +1548,60 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
     `real-vulkan`を既定featureへ昇格させるかどうかの判断material。
     (3) `engine`ラベルの`-cpu`ハードコードを実行経路に応じて動的に
     する改修(正直な開示の一貫性向上)。
+
+- **2026-08-07 API使いやすさ改善(`/v1/generate`・`/v1/translate`の空入力が
+  誤って`503`扱いになる粗を修正)、他リポジトリ(dream-os・open-directx・
+  open-cuda)と並列作業中・本リポジトリ担当分**:
+  1. **前提・背景**: ユーザー指示「dream-os・open-directx・open-cuda・
+     aruaru-llmの連携性強化・実用性向上・利便性向上・完成度向上」
+     (4リポジトリ並列作業、`open-cuda`は別エージェントが同時作業中の
+     ため本セッションでは読み取りのみ・変更禁止という制約)。直前
+     HANDOFF(2026-08-05・2026-08-06)の「次にすべきこと」は主に
+     `open-cuda`側の変更(decode/prefill経路分離・ベンチマーク)を
+     要するため本セッションの範囲外と判断し、代わりにユーザー指示の
+     もう一つの候補「実際に使ってみて不便な点(API使いやすさ・エラー
+     メッセージ)」を本リポジトリ単体で完結する形で対応した。
+  2. **見つけたバグ**: `POST /v1/generate`へ空文字列(または空白のみ)の
+     `prompt`を送ると、`generation::generate`内部でトークナイザが
+     0トークンにエンコードした後の`ensure!`失敗が、正常なバックエンド
+     障害(モデル未ロード等)と同じ`503 Service Unavailable`として
+     そのまま返っていた。呼び出し側からは「サーバーが落ちている」のか
+     「自分の入力が不正」なのか区別できず、実用上のエラーハンドリングが
+     困難だった。`POST /v1/translate`も同じ生成エンジンを土台にしている
+     ため`text`が空の場合に同じ症状が起きることを確認した。
+  3. **修正内容**(`src/main.rs`): `generate`ハンドラの先頭で
+     `req.prompt.trim().is_empty()`を検査し、真なら`400 Bad Request`
+     (`{"error": "prompt must not be empty", "engine": "..."}`)を
+     即座に返すようにした。`translate`ハンドラも同様に`text`・
+     `target_lang`それぞれの空チェックを追加し`400`を返すようにした。
+     `open-cuda`側のファイルは一切変更していない(本リポジトリの
+     `src/main.rs`のみの変更)。
+  4. **検証(実バイナリ・実HTTP、モックなし)**: `cargo build --release`
+     成功(ビルド中、並列作業中の`open-cuda`側が一時的に壊れていた
+     タイミングと重なり8分半ほど待つ場面があったが、最終的に問題なく
+     ビルド完了)。`cargo test --release`46件全green(回帰なし)。
+     実際に`target/release/aruaru-llm.exe`を起動し、
+     `POST /v1/generate {"prompt": ""}` → `400`
+     `{"error":"prompt must not be empty",...}`、
+     `POST /v1/generate {"prompt": "Hello there", "max_new_tokens": 8}`
+     → `200` `{"completion": ", I'm sorry. I'm sorry", ...}`(正常系は
+     従来通り動作)、
+     `POST /v1/translate {"text": "", "target_lang": "Japanese"}` →
+     `400` `{"error":"text must not be empty",...}`、
+     `POST /v1/translate {"text": "Hello", "target_lang": ""}` →
+     `400` `{"error":"target_lang must not be empty",...}`
+     をいずれも実HTTPリクエストで確認した。
+  5. **ドキュメント**: `README.md`の`/v1/generate`・`/v1/translate`の
+     節にこの`400`検証の挙動を追記済み。
+  - 次にすべきこと: (1) 前回HANDOFF(2026-08-05/06)の残課題
+     (`scoring`/`security`側のVulkan GEMM配線・GT-730でのVulkan vs CPU
+     ベンチマーク)は引き続き未着手、`open-cuda`側の実装・実機を
+     伴うため次回`open-cuda`が空いているタイミングで着手する。
+     (2) 同様の「空入力が`503`扱いになる」粗が`/v1/chat`
+     (`message`)・`/v1/classify-security`(`text`)にも無いか未確認
+     ——ただしこちらは`scoring::classify`/`security::classify_security`が
+     空文字列でも例外を投げずNone/低スコアで正常応答する設計のため
+     優先度は低いと見ている(次回確認のみでよい)。
+     (3) dream-os・open-directx側との具体的な連携強化(API呼び出し
+     経路の実装等)は、今回は本リポジトリ内で完結する改善に留めた
+     ため未着手のまま。
