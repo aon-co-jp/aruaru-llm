@@ -226,6 +226,64 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-08-08(続き3) PCA較正版MLA(`open-cuda`側同日新設
+  `enable_mla_kv_compression_calibrated`)をオプトイン配線
+  (直下2026-08-08(続き2)エントリで「乱数射影は品質を明確に劣化させる」
+  と実測したことを受け、`open-cuda`側で修正できるか調査・実装した
+  結果への対応)**:
+  1. **`open-cuda`側の対応**: 乱数射影の代わりに、実サンプル文の
+     プリフィルで集めた本物のK/V活性化にPCA(`nalgebra`の対称固有値
+     分解)を適用し、分散最大の上位`d_c`方向を射影基底として使う
+     `GptModel::enable_mla_kv_compression_calibrated(d_c, device,
+     sample_prompts)`が新設された(詳細・数学的根拠・実測結果は
+     `open-cuda/CLAUDE.md`同日HANDOFF参照)。
+  2. **`aruaru-llm`側の実装**(`src/generation.rs`):
+     `mla_calibrated_enabled()`(`ARUARU_LLM_MLA_CALIBRATED=1`または
+     `true`で有効化、**既定off**)・`mla_calibration_prompts()`
+     (8文の一般的な英文がデフォルト、トピック分散を意図、
+     `ARUARU_LLM_MLA_CALIBRATION_PROMPTS`〈`;`区切り〉で上書き可)・
+     `wire_mla_kv_compression_calibrated`(トークナイザで較正文を
+     エンコードし`opencuda_cpu::CpuDevice`で較正、`real-vulkan`
+     feature有無に関わらず動作)を新設。既存の乱数射影版
+     (`wire_mla_kv_compression`)とは`wire_mla_kv_compression_any`で
+     排他的に呼び分ける(`ARUARU_LLM_MLA_CALIBRATED=1`が優先、
+     両方同時に有効化しても`GptModel`側は`layer.mla`を1つしか
+     保持できず混乱するだけのため)。
+  3. **実機検証(型チェックのみで完了と報告しない方針を徹底)**:
+     `cargo build --release`成功(既存2件のdead_code警告のみ、
+     pre-existingで無関係)。`cargo test --release -- --test-threads=1`
+     **46件全green**(regression無し)。実際にサーバーを
+     `ARUARU_LLM_ENABLE_MLA_KV_COMPRESSION=1
+     ARUARU_LLM_MLA_CALIBRATED=1`で起動し、起動ログで
+     `ARUARU_LLM_MLA_CALIBRATED set: wired PCA-calibrated MLA-style
+     KV cache compression (head_dim=64 -> d_c=16, 75.0% smaller...
+     calibrated on 8 sample prompts)`を確認した上で、実HTTP
+     リクエスト`POST /v1/generate {"prompt":"The quick brown fox",
+     "max_new_tokens":16}`を送信し、
+     `"completion":"es are a bit of a lot of the way to the forest.\n\n"`
+     という応答を得た——これは`open-cuda`側の単体テスト
+     `calibrated_pca_mla_kv_compression_on_real_gpt2_weights`が実測した
+     PCA較正版の出力と**完全一致**しており、配線が正しく機能して
+     いることを実際のHTTPレスポンスで裏付けた(直下2026-08-08(続き2)
+     エントリで実測した乱数射影版の出力
+     `"es, and the government, and away from the government and point
+     of the government"`のような反復破綻は再現しなかった)。
+  4. **正直な評価(誇張しない)**: PCA較正版は乱数射影版より明らかに
+     改善しているが、**非圧縮版と比較すればなお明確に品質が劣化して
+     いる**(`open-cuda`側同日HANDOFFの評価と同じ)。よって
+     `ARUARU_LLM_MLA_CALIBRATED`も乱数射影版と同じく既定offのopt-in
+     機能として提供するに留めた——実ユーザー向け応答の既定挙動を
+     置き換える判断はしない。
+  - 次にすべきこと: (1) `open-cuda`側同日HANDOFFの「次にすべきこと」
+    (較正サンプル数の拡大・中心化PCAの検証・`d_c`のトレードオフ実測)が
+    進めば、このリポジトリ側でも再度品質検証を行う、(2) 較正データ
+    (`mla_calibration_prompts`の既定8文)を、このサービスが実際に
+    受け取るプロンプトの分布(`/v1/generate`・`/v1/translate`の実
+    トラフィック)に近づけた場合に品質が変わるかの検証は未実施、
+    (3) `real-vulkan`有効時にPCA較正MLAと`set_flash_attention_spirv`/
+    `set_softmax_spirv`を同時有効化した場合の相互作用(速度・メモリ
+    両面)は今回も未計測。
+
 - **2026-08-08(続き2) `GptModel::enable_mla_kv_compression`(DeepSeek-V3
   風MLA、KVキャッシュ低ランク圧縮、`open-cuda`側2026-08-07実装・実機
   検証済み)を`aruaru-llm`側からオプトイン配線(直前2026-08-08 HANDOFFの

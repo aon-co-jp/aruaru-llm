@@ -6,7 +6,13 @@
 > 有効化、GPT-2 124Mでhead_dim=64→d_c=16(75%削減)。**正直な開示**:
 > 射影行列が乱数初期化(未学習)のため非可逆圧縮であり、実際に生成品質を
 > 目視で明確に劣化させることを実測で確認した(既定offとした理由)。
-> 詳細は[CLAUDE.md](CLAUDE.md)参照。
+> 追加で、`open-cuda`側にPCA較正版(`enable_mla_kv_compression_calibrated`、
+> 実サンプル文の活性化統計から主成分分析で射影基底を求める)も新設された
+> ため、こちらも`ARUARU_LLM_MLA_CALIBRATED=1`(`ARUARU_LLM_ENABLE_MLA_KV_
+> COMPRESSION=1`と併用)でオプトイン配線した。乱数射影版の反復破綻
+> (例: "...and point of the government"の無限ループ)は回避するが、
+> **非圧縮版と比較すればなお明確に品質が劣化しており**、こちらも既定offの
+> ままとした。詳細は[CLAUDE.md](CLAUDE.md)参照。
 >
 > *English*: Wired an opt-in (default-off) MLA-style KV cache compression
 > path (`open-cuda`'s DeepSeek-V3-inspired implementation) into
@@ -15,7 +21,13 @@
 > **Honest disclosure**: the projection matrices are randomly initialized
 > (untrained), so this is lossy, and measured testing confirmed it
 > visibly degrades generation quality — which is why it defaults off.
-> See [CLAUDE.md](CLAUDE.md) for details.
+> `open-cuda` has since added a PCA-calibrated variant
+> (`enable_mla_kv_compression_calibrated`, basis derived from real
+> activation statistics via PCA instead of random init), wired here via
+> `ARUARU_LLM_MLA_CALIBRATED=1` (used together with `ARUARU_LLM_ENABLE_MLA_
+> KV_COMPRESSION=1`). It avoids the random variant's degenerate repetition
+> loops, but quality is still clearly worse than the uncompressed path, so
+> it also defaults off. See [CLAUDE.md](CLAUDE.md) for details.
 
 > 📌 保留タスク(2026-08-06): 東芝SBM・DeepSeek技術の組み込み構想あり。詳細は[CLAUDE.md](CLAUDE.md)参照。
 
