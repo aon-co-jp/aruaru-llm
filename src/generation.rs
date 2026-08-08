@@ -341,6 +341,111 @@ fn wire_mla_kv_compression(model: &mut GptModel) -> bool {
     }
 }
 
+/// **2026-08-08追加**: `open-cuda`側`GptModel::enable_mla_kv_compression_calibrated`
+/// (PCA較正版MLA、`open-cuda/CLAUDE.md`同日HANDOFF参照)を配線するか判定
+/// するenv変数。`ARUARU_LLM_MLA_CALIBRATED=1`(または`true`)が設定されて
+/// いる場合、乱数射影版(`wire_mla_kv_compression`)の代わりにこちらを使う
+/// (両方同時には有効化しない、下記`wire_mla_kv_compression_any`参照)。
+/// **既定off**——PCA較正版でも実測(open-cuda側同日HANDOFF)では非圧縮版
+/// より明確に品質が劣化したままであり(乱数射影版ほど酷い反復破綻には
+/// 陥らないが、意味的一貫性は依然低い)、実ユーザー向け応答の既定挙動を
+/// これに置き換えるべきではないと判断したため。
+fn mla_calibrated_enabled() -> bool {
+    std::env::var("ARUARU_LLM_MLA_CALIBRATED").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false)
+}
+
+/// PCA較正の較正データに使う既定サンプル文(トピックを分散させた一般的な
+/// 英文、open-cuda側テスト`calibrated_pca_mla_kv_compression_on_real_gpt2_
+/// weights`と同じ発想)。`ARUARU_LLM_MLA_CALIBRATION_PROMPTS`環境変数
+/// (`;`区切り)で上書き可能——実運用でのトラフィックの実文体に近い較正文を
+/// 使いたい場合に差し替えられるようにする。
+fn mla_calibration_prompts() -> Vec<String> {
+    if let Ok(v) = std::env::var("ARUARU_LLM_MLA_CALIBRATION_PROMPTS") {
+        let prompts: Vec<String> = v.split(';').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+        if !prompts.is_empty() {
+            return prompts;
+        }
+    }
+    [
+        "The weather today is quite pleasant and sunny.",
+        "In economics, supply and demand determine prices in a market.",
+        "She walked into the kitchen and started making breakfast.",
+        "The history of ancient Rome spans over a thousand years.",
+        "Computers process information using binary logic circuits.",
+        "The mountain trail was steep but offered a beautiful view.",
+        "Scientists discovered a new species of frog in the rainforest.",
+        "He picked up his guitar and began to play a soft melody.",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect()
+}
+
+/// PCA較正版MLA(`enable_mla_kv_compression_calibrated`)を配線する。
+/// 較正パス自体はGEMM計算のみでデバイス種別に依存しないため、
+/// `real-vulkan` featureの有無に関わらず`opencuda_cpu::CpuDevice`で行う
+/// (较正は起動時に1回だけ、比較的軽量な複数プリフィルで完結するため、
+/// わざわざVulkanDeviceを別途構築する必要はないと判断)。
+fn wire_mla_kv_compression_calibrated(model: &mut GptModel, tokenizer: &GptTokenizer) -> bool {
+    let config = model.config();
+    if config.num_heads == 0 || config.hidden_size % config.num_heads != 0 {
+        tracing::warn!(
+            "ARUARU_LLM_MLA_CALIBRATED set but hidden_size={} is not evenly divisible by num_heads={}; skipping calibrated MLA wiring",
+            config.hidden_size,
+            config.num_heads
+        );
+        return false;
+    }
+    let head_dim = config.hidden_size / config.num_heads;
+    let d_c = mla_d_c(head_dim);
+
+    let prompts = mla_calibration_prompts();
+    let mut sample_prompts = Vec::with_capacity(prompts.len());
+    for text in &prompts {
+        match tokenizer.encode(text) {
+            Ok(ids) if !ids.is_empty() => sample_prompts.push(ids),
+            Ok(_) => tracing::warn!("ARUARU_LLM_MLA_CALIBRATED: calibration prompt {text:?} tokenized to zero tokens; skipping it"),
+            Err(err) => tracing::warn!("ARUARU_LLM_MLA_CALIBRATED: failed to tokenize calibration prompt {text:?} ({err:#}); skipping it"),
+        }
+    }
+    if sample_prompts.is_empty() {
+        tracing::warn!("ARUARU_LLM_MLA_CALIBRATED set but no calibration prompts could be tokenized; skipping calibrated MLA wiring");
+        return false;
+    }
+
+    let device: Arc<dyn GpuDevice> = opencuda_cpu::CpuDevice::new(0);
+    match model.enable_mla_kv_compression_calibrated(d_c, device.as_ref(), &sample_prompts) {
+        Ok(()) => {
+            let reduction_percent = 100.0 * (1.0 - (d_c as f64 / head_dim as f64));
+            tracing::info!(
+                "ARUARU_LLM_MLA_CALIBRATED set: wired PCA-calibrated MLA-style KV cache compression \
+                 (head_dim={head_dim} -> d_c={d_c}, {reduction_percent:.1}% smaller per-token KV storage, \
+                 calibrated on {} sample prompts). This avoids the degenerate repetition failure mode seen \
+                 with the random-projection variant, but still degrades quality versus the uncompressed path \
+                 (see open-cuda's CLAUDE.md 2026-08-08 HANDOFF for the actual measured generations).",
+                sample_prompts.len()
+            );
+            true
+        }
+        Err(err) => {
+            tracing::warn!("ARUARU_LLM_MLA_CALIBRATED set but enable_mla_kv_compression_calibrated failed ({err:#}); keeping full-precision KV cache");
+            false
+        }
+    }
+}
+
+/// `wire_mla_kv_compression`(乱数射影)・`wire_mla_kv_compression_calibrated`
+/// (PCA較正)のどちらを使うか判定して呼び分ける(2026-08-08追加)。
+/// `ARUARU_LLM_MLA_CALIBRATED=1`が優先(両方同時にオンにしても意味が
+/// 無い——`GptModel`側は`layer.mla`を1つしか保持できないため後勝ちに
+/// なるだけ、混乱を避けるため明示的に排他にする)。
+fn wire_mla_kv_compression_any(model: &mut GptModel, tokenizer: &GptTokenizer) -> bool {
+    if mla_calibrated_enabled() {
+        return wire_mla_kv_compression_calibrated(model, tokenizer);
+    }
+    wire_mla_kv_compression(model)
+}
+
 fn load_from_dir(dir: &std::path::Path) -> Result<LoadedGpt, String> {
     #[allow(unused_mut)]
     let mut model = GptModel::load(dir).map_err(|e| format!("failed to load GPT-2 weights from {dir:?}: {e:#}"))?;
@@ -360,7 +465,9 @@ fn load_from_dir(dir: &std::path::Path) -> Result<LoadedGpt, String> {
     }
     // MLA KVキャッシュ圧縮配線はGPU非依存(CPU実行でも成立)のため
     // `real-vulkan` feature配下に置かない。既定offはopt-in(上記doc参照)。
-    let _mla_wired = wire_mla_kv_compression(&mut model);
+    // 2026-08-08: 乱数射影版/PCA較正版のどちらを使うかは
+    // `wire_mla_kv_compression_any`が`ARUARU_LLM_MLA_CALIBRATED`で判定する。
+    let _mla_wired = wire_mla_kv_compression_any(&mut model, &tokenizer);
     Ok(LoadedGpt { model, tokenizer, dir: dir.to_path_buf(), matmul_spirv_wired })
 }
 
