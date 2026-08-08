@@ -170,6 +170,73 @@ fn wire_softmax_spirv(model: &mut GptModel) -> bool {
     }
 }
 
+/// コンパイル済み`flash_attention.spv`のパス(`real-vulkan` feature有効時
+/// のみ使用、2026-08-08追加)。`default_matmul_spirv_path`/`default_softmax_
+/// spirv_path`と同じsibling path前提。`open-cuda`側`GptModel::
+/// set_flash_attention_spirv`(2026-08-07新設、`open-cuda-llm`の
+/// DecoderLayerへ実配線・実機検証済み——QKᵀ・オンラインsoftmax・P·Vが
+/// 1回のディスパッチで完結するfusedカーネル)へ渡す。`Some`が設定されると
+/// `GptModel`側の設計により`softmax_spirv`より**優先**される
+/// (`open-cuda-llm/src/lib.rs`参照、`flash_attn_spirv`が`Some`ならそちらの
+/// 経路を使う)。`ARUARU_LLM_FLASH_ATTENTION_SPIRV`環境変数で上書き可能。
+/// 既定では**wireしない**(下記`ARUARU_LLM_ENABLE_FLASH_ATTENTION=1`で
+/// 明示的にopt-inした場合のみ)——3経路(GEMM+CPU softmax/GEMM+GPU softmax/
+/// GEMM+fused flash attention)を実際に比較計測できるようにするための設計。
+#[cfg(feature = "real-vulkan")]
+fn default_flash_attention_spirv_path() -> PathBuf {
+    if let Ok(path) = std::env::var("ARUARU_LLM_FLASH_ATTENTION_SPIRV") {
+        return PathBuf::from(path);
+    }
+    PathBuf::from("../open-cuda/examples/flash_attention_vulkan_real/shaders/flash_attention.spv")
+}
+
+/// `real-vulkan` feature有効時、かつ`ARUARU_LLM_ENABLE_FLASH_ATTENTION=1`
+/// (または`true`)が明示的に設定されている場合のみ、コンパイル済み
+/// `flash_attention.spv`を`GptModel::set_flash_attention_spirv`経由で
+/// 配線する(2026-08-08追加)。既定でwireしないのは、`wire_softmax_spirv`と
+/// 同時に有効化した場合`GptModel`側の設計によりflash_attentionが常に
+/// softmaxより優先されてしまい、「GEMM+GPU softmax」経路を意図的に選ぶ
+/// ことができなくなるため(3経路の使い分け・比較を可能にするための
+/// 明示的opt-in)。読み込み失敗時はサービスを落とさず、既存のsoftmax/CPU
+/// 経路のまま継続する。
+#[cfg(feature = "real-vulkan")]
+fn wire_flash_attention_spirv(model: &mut GptModel) -> bool {
+    let enabled = std::env::var("ARUARU_LLM_ENABLE_FLASH_ATTENTION")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    if !enabled {
+        return false;
+    }
+    let path = default_flash_attention_spirv_path();
+    match std::fs::read(&path) {
+        Ok(bytes) => {
+            let len = bytes.len();
+            // open-cuda側の実機検証済みテストと同じblock_size=4を既定とする
+            // (`opencuda-blas::flash_attention_with_spirv`はhead_dim/block_size
+            // とも256を超えると失敗する既知の制約があるが、GPT-2 124Mの
+            // head_dim=64はこれを十分下回る)。
+            model.set_flash_attention_spirv(bytes, 4);
+            tracing::info!(
+                "real-vulkan feature enabled + ARUARU_LLM_ENABLE_FLASH_ATTENTION set: \
+                 loaded flash_attention.spv ({len} bytes) from {} and wired into GptModel \
+                 via set_flash_attention_spirv (this takes priority over softmax_spirv)",
+                path.display()
+            );
+            true
+        }
+        Err(err) => {
+            tracing::warn!(
+                "real-vulkan feature enabled + ARUARU_LLM_ENABLE_FLASH_ATTENTION set but failed to \
+                 load flash_attention.spv from {} ({err}); Attention will keep using the softmax/CPU \
+                 path (run tools/compile-vulkan-shaders.* in open-cuda first, or set \
+                 ARUARU_LLM_FLASH_ATTENTION_SPIRV)",
+                path.display()
+            );
+            false
+        }
+    }
+}
+
 fn load_from_dir(dir: &std::path::Path) -> Result<LoadedGpt, String> {
     #[allow(unused_mut)]
     let mut model = GptModel::load(dir).map_err(|e| format!("failed to load GPT-2 weights from {dir:?}: {e:#}"))?;
@@ -183,6 +250,9 @@ fn load_from_dir(dir: &std::path::Path) -> Result<LoadedGpt, String> {
         // ただし実際にGPU常駐softmaxが効くのはmatmul_spirv_wiredも真の場合のみ
         // (opencuda_blas側がGEMM経路とsoftmax経路を常に一致させる設計のため)。
         let _softmax_wired = wire_softmax_spirv(&mut model);
+        // flash-attention配線はopt-in(既定オフ)。有効化されると
+        // GptModel側の設計によりsoftmax配線より優先される(上記doc参照)。
+        let _flash_attention_wired = wire_flash_attention_spirv(&mut model);
     }
     Ok(LoadedGpt { model, tokenizer, dir: dir.to_path_buf(), matmul_spirv_wired })
 }

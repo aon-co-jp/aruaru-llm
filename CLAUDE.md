@@ -226,6 +226,74 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-08-08 `GptModel::set_flash_attention_spirv`のオプトイン配線+
+  「GEMM+GPU softmax」vs「GEMM+fused flash attention」の実機速度比較
+  (rs-sync横断セッション、直前2026-08-07 HANDOFFの「次にすべきこと(1)」
+  への対応)**:
+  1. **実装**(`src/generation.rs`): `default_flash_attention_spirv_path`
+     (`ARUARU_LLM_FLASH_ATTENTION_SPIRV`環境変数で上書き可、既定は
+     `open-cuda`側の`examples/flash_attention_vulkan_real/shaders/
+     flash_attention.spv`)+`wire_flash_attention_spirv`を追加。
+     `wire_matmul_spirv`/`wire_softmax_spirv`とは異なり**既定では
+     wireしない**——`ARUARU_LLM_ENABLE_FLASH_ATTENTION=1`(または`true`)を
+     明示的に設定した場合のみ配線する設計にした。理由: `GptModel`側の
+     実装(`open-cuda/crates/open-cuda-llm/src/lib.rs`)は`flash_attn_spirv`
+     が`Some`なら常にそちらを`softmax_spirv`より優先するため、両方を
+     常時wireすると「GEMM+GPU softmax」経路を意図的に選ぶ手段が無くなり、
+     3経路(GEMM+CPU softmax/GEMM+GPU softmax/GEMM+fused flash attention)
+     の比較ができなくなるため。
+  2. **実機速度比較(NVIDIA GT 730、型チェックのみで完了と報告しない方針を
+     徹底、実際にサーバーを起動し実HTTPリクエストで計測)**:
+     `POST /v1/generate {"prompt":"The quick brown fox",
+     "max_new_tokens":5}`を、同一プロンプト・同一トークン数で2経路
+     それぞれ実測した(いずれも生成結果`"es are a great way"`で完全一致、
+     数値的に壊れていないことも確認):
+     - **GEMM+GPU softmax**(`wire_softmax_spirv`のみ、既定の`real-vulkan`
+       挙動): **約26.2秒**。
+     - **GEMM+fused flash attention**(`ARUARU_LLM_ENABLE_FLASH_ATTENTION=1`
+       追加): **約16.4〜16.6秒**(2回計測、"Artificial intelligence is"の
+       別プロンプトでも再現)。
+     **fused flash attentionへの切り替えで約37%高速化**——レイヤーあたり
+     QKᵀ・softmax・P·Vの3回ディスパッチが1回に統合されたことで、
+     `open-cuda`側2026-08-06 HANDOFFで懸念されていた「Vulkanディスパッチ
+     固定オーバーヘッドが支配的」という問題が実際に緩和されることを
+     初めて実測で確認した(推測ではなく実測、誇張しない範囲で報告する)。
+  3. **正直な開示・それでもなお遅いという事実**: 上記いずれの経路も、
+     同条件でのCPU版(`real-vulkan` feature無し)の実測(2026-08-04
+     HANDOFF記録: `max_new_tokens=20`で約6〜7秒)と比較すると依然として
+     大幅に遅い(`max_new_tokens=5`で16秒台は、単純比例換算でも
+     CPU版の`max_new_tokens=20`実測を上回る)。**「fused flash attentionは
+     softmax分離版より速い」ことは実証したが、「Vulkan経路がCPU版より
+     速い」ことは今回も実証していない**——GT 730のような低性能GPUでは、
+     1トークンあたりのディスパッチ回数をどれだけ減らしても、GPT-2 124M
+     程度の軽い計算に対するVulkanのディスパッチ固定オーバーヘッド自体が
+     依然支配的である可能性が高い。`real-vulkan`(既定無効)を既定へ
+     昇格させる判断はしない。
+  4. **検証結果**: `cargo build --release`(featureなし)/`cargo build
+     --release --features real-vulkan`いずれも成功。`cargo test
+     --release`(featureなし)は既存回帰なし(バックグラウンドで実行、
+     結果は本エントリ確定前に確認済み)。`cargo clippy --release
+     --features real-vulkan --all-targets -- -D warnings`で**pre-existing
+     の3件**(`generation.rs`の`unused_assignments`、`generation.rs`/
+     `scoring.rs`の`ENGINE_GPT2_GREEDY`/`ENGINE_EMBEDDING`の`dead_code`、
+     いずれも今回の変更とは無関係で以前から存在)を検出——今回は変更が
+     本題(実機速度比較)から逸れることを避けるため修正していない、
+     次回clippy運用時にまとめて対応する候補として記録する。
+  5. **正直な開示・スコープ外**: (a) `scoring`/`security`(BERT系)側への
+     flash-attention相当の配線は今回も行っていない(`open-cuda-bert::
+     BertModel`はエンコーダでKVキャッシュを持たないため、`open-cuda`側
+     2026-08-07エントリで指摘されている通り単純な流用はできない)。
+     (b) dream-os/open-directx側との直接連携は本セッションでは
+     `open-cuda`経由の間接連携(同じ`flash_attention.spv`アセットを
+     `dream-os-kernel`も別途参照するようになった、詳細は`dream-os/
+     CLAUDE.md`2026-08-08エントリ参照)のみで、本リポジトリのファイルは
+     変更していない。
+  - 次にすべきこと: (1) 上記clippy pre-existing警告3件のクリーンアップ、
+    (2) `real-vulkan`をこのGT 730のような低性能GPU環境では既定にしない
+    という判断の妥当性を、より高性能なGPU実機が得られた際に再検証する、
+    (3) `scoring`/`security`側のVulkan GEMM配線・ベンチマークは引き続き
+    未着手。
+
 - **2026-08-07(続き) `/v1/chat`・`/v1/classify-security`の空入力挙動を実HTTPで
   検証(前回HANDOFFの「次にすべきこと(2)」への対応、ユーザー指示
   「dream-os/open-directx/open-cuda/aruaru-llmの関連性・連携性・実用性・
