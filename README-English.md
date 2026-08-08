@@ -119,6 +119,31 @@ reported `vram_bytes=2104819712` — exactly matching the value previously
 recorded via DXGI in `open-cuda`'s CLAUDE.md, confirming both detection
 paths agree on this GPU.
 
+### DeepSeek-"Engram"-style KV-cache/weight offload: investigated and declined (2026-08-08)
+
+We investigated whether DeepSeek's "Engram"-style technique — evicting
+static knowledge (KV-cache or weight shards) from VRAM to system RAM and
+reloading on demand — could help this service run on small-VRAM GPUs like
+the GT 730. **After reading the actual code, we declined to implement
+it** — not because it is hard, but because the `open-cuda` inference path
+this repo depends on has no VRAM-resident state to evict in the first
+place. Every GEMM/Attention/softmax dispatch in `opencuda-blas` (i.e.
+every `sgemm` call that goes to Vulkan) allocates a VRAM buffer through a
+`ScopedAlloc` RAII guard (`opencuda-blas/src/lib.rs`), copies host→device,
+computes, copies device→host, and frees it immediately — nothing remains
+in VRAM once the call returns. Both the GPT-2 weights (`GptModel`'s
+`word_embeddings` and per-layer `Linear`s) and the KV cache
+(`open-cuda-llm::KvCacheHead`'s `k`/`v`/`k_latent`/`v_latent`) are plain
+`Vec<f32>` that live in system RAM for their entire lifetime, even when
+running with `--features real-vulkan`. In other words, this architecture
+already ends up — by accident of its design, not by intent — in the state
+Engram aims for: state stays resident in system RAM at all times, and the
+GPU is only ever touched transiently per operation. Adding an LRU
+eviction layer on top would have nothing to evict, so there would be no
+measurable effect to report (we are not going to claim a benefit we
+cannot measure). See the 2026-08-08 CLAUDE.md HANDOFF entry for the exact
+code paths read.
+
 ### Classification vs. generation — which to use
 
 `/v1/chat` (classification) and `/v1/generate` (generation) serve different

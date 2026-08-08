@@ -226,6 +226,94 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-08-08(続き) DeepSeek「Engram」風KVキャッシュ/重みオフロードの
+  実装を検討したが、コードを実際に読んだ結果「退避対象となるVRAM常駐
+  状態がそもそも存在しない」と判明したため実装を見送り(ユーザー指示:
+  DeepSeekのEngram技術〈静的な知識・KVキャッシュ/重みの一部をVRAMから
+  システムRAMへオフロードし必要時に再ロードする手法〉をこのマシンの
+  実GPU〈NVIDIA GT 730、Keplerクラス旧世代・小VRAM・テンソルコア無し〉
+  向けに実装できないか検討せよ、というタスク)**:
+  1. **調査方針**: 「フックできそうな場所を推測して着手」ではなく、
+     まずモデルロード・推論経路の実コードを読んで、実際にVRAM常駐する
+     状態(重み・KVキャッシュ)が存在するかどうかを確認することから
+     始めた。読んだファイル: `aruaru-llm/src/generation.rs`・
+     `aruaru-llm/src/hardware.rs`、`open-cuda/crates/open-cuda-llm/
+     src/lib.rs`(`GptModel`・`KvCacheHead`・`DecoderLayer`)、
+     `open-cuda/crates/opencuda-vulkan/src/real.rs`
+     (`VulkanDevice::alloc`/`free`/`dispatch_spirv`/`launch_kernel`)、
+     `open-cuda/crates/opencuda-blas/src/lib.rs`
+     (`ScopedAlloc`・`sgemm_vulkan_generic`・
+     `scaled_dot_product_attention_with_spirv[_and_softmax]`)。
+  2. **判明した事実(コード上の根拠)**:
+     - `opencuda-blas::ScopedAlloc`(`opencuda-blas/src/lib.rs`
+       104〜130行目付近)は`device.alloc(bytes)`で確保し
+       `Drop`で必ず`device.free(self.ptr)`するRAIIガードであり、
+       `sgemm`/`sgemm_vulkan_generic`/`scaled_dot_product_attention_
+       with_spirv*`等、Vulkan経由でディスパッチする関数は**呼び出しの
+       たびに**これでVRAMバッファを確保し、host→device転送→計算→
+       device→host転送→即解放、という一回性の使い方をしている。
+       関数を抜けた時点でVRAM上には何も残らない。
+     - `open-cuda-llm::GptModel`の重み(`word_embeddings`・各層の
+       `Linear`の`weight_t`等)は普通の`Vec<f32>`フィールドであり、
+       `GptModel::load`でsafetensorsから読み込んだ後は一貫して
+       システムRAM(通常のRustヒープ)上に存在し続ける。GPU実行時
+       (`--features real-vulkan`、`set_matmul_spirv`配線済み)でも、
+       `Linear::forward`のたびにこの`Vec<f32>`から一時的にVRAMへ
+       コピー→計算→結果を`Vec<f32>`へコピー戻す、という形で変わらない。
+     - `open-cuda-llm::KvCacheHead`(`k`/`v`/`k_latent`/`v_latent`、
+       いずれも`Vec<f32>`)も同様——2026-08-07に配線されたDeepSeek MLA
+       (Multi-Head Latent Attention)風の低ランク圧縮
+       (`mla_compress_kv`/`mla_decompress_kv`)経由であっても、圧縮後の
+       潜在表現自体がシステムRAM上の`Vec<f32>`として保持される設計で、
+       VRAM上に永続する形では一切存在しない。
+     - `VulkanDevice::alloc`(`opencuda-vulkan/src/real.rs`788行目
+       付近)自体、host-visibleかつmapされたメモリを都度新規作成する
+       設計で、呼び出し間でバッファをキャッシュ・再利用する仕組みも
+       存在しない。
+  3. **結論(実装を見送った理由)**: Engram的な「VRAMに常駐する静的な
+     知識をLRU等でシステムRAMへ退避し、必要時に再ロードする」という
+     最適化は、**そもそもVRAMに常駐する状態が存在する場合にのみ意味を
+     持つ**。しかしこのアーキテクチャは(意図した設計ではなく、単に
+     「呼び出しのたびにalloc/freeする」という素朴な実装の結果として)
+     既に「重み・KVキャッシュは常時システムRAMに存在し、GPUは1回の
+     演算のたびに一時的に借用されるだけ」という状態になっている。
+     つまりEngramが解決しようとする問題(VRAM容量を圧迫する常駐状態)が
+     この実装には存在しない。ここへLRUエビクション等の追加機構を
+     実装しても、退避すべき対象が無いため意味のある効果を測定しようが
+     ない——「実装したが効果が無かった」という負の実験結果ですらなく、
+     「そもそも適用対象が無い」という前提の不一致であり、無理に
+     コードを追加することは複雑さを増やすだけの誇張的な実装になると
+     判断し、着手しなかった。
+  4. **実機検証(正直な開示)**: 上記の通り実装を見送ったため、
+     GT 730での「以前OOMしていたモデル/コンテキストが動くようになった」
+     「VRAM使用量が実測で減った」といった類の実機効果検証は**行って
+     いない**(検証すべき実装が無いため)。念のため`nvidia-smi`で
+     このマシンの実GPUが引き続きNVIDIA GeForce GT 730(VRAM 2048MiB)の
+     1台のみであることのみ再確認した。既存コードへの変更は一切無い
+     ため、`cargo build`/`cargo test`の再実行も不要と判断した
+     (無変更のリポジトリに対する再ビルドは新しい情報を生まないため)。
+  5. **本当に効果が見込める、Engramに近い将来の増分(次回以降の候補、
+     今回は未着手)**: 今回のアーキテクチャ調査で分かったこと自体は、
+     将来的にVRAM常駐が意味を持つ変更(例: 複数レイヤーの重みを
+     プリフィル処理のためだけVRAMへまとめて常駐させ複数GEMMで再利用
+     する、といった真のバッチ最適化)を行う際の前提知識として価値が
+     ある。ただしこれは現状の「1トークンデコードのGEMMが極めて軽く
+     Vulkanディスパッチのオーバーヘッドが支配的」という既存の性能上の
+     結論(2026-08-06/07/08の各HANDOFF参照)を覆すものではなく、
+     Engram風オフロード単体を今回のスコープとして実装する動機には
+     ならないと判断した。
+  - 次にすべきこと: (1) 上記3番の通り、Engram風オフロードは適用対象が
+    無いため今後もこのままでは着手しない方針とする(前提が変わる
+    ——例えば将来的に重みを本当にVRAM常駐させる設計へ移行する場合)
+    ——が生じない限り再検討しない)、(2) 東芝SBM/DeepSeek技術の
+    このリポジトリへの適用候補としては、既に`open-cuda`側で実装・
+    実機検証済みのMLA(KVキャッシュ低ランク圧縮、2026-08-07)・
+    fused flash attention(2026-08-07/08)を`aruaru-llm`側から実際に
+    有効化するオプトイン配線(`generation.rs`に`wire_flash_attention_
+    spirv`は既にあるが`enable_mla_kv_compression`相当の配線は未着手)
+    の方が、既存のVRAM常駐前提を変えずに着手できる現実的な候補として
+    残しておく。
+
 - **2026-08-08 `GptModel::set_flash_attention_spirv`のオプトイン配線+
   「GEMM+GPU softmax」vs「GEMM+fused flash attention」の実機速度比較
   (rs-sync横断セッション、直前2026-08-07 HANDOFFの「次にすべきこと(1)」

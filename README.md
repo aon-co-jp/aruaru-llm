@@ -181,6 +181,28 @@ cargo run --release --features real-vulkan
 リポジトリ側で`Linear::forward`に`matmul.spv`を配線する変更が必要
 (詳細・次にすべきことは`CLAUDE.md`のHANDOFF 2026-08-04エントリ参照)。
 
+### DeepSeek「Engram」風KVキャッシュ/重みオフロードの検討結果(2026-08-08、見送り)
+
+DeepSeekの技術のうち、静的な知識(KVキャッシュや重みの一部)をVRAMから
+システムRAMへ退避し必要時に再ロードする「Engram」的な手法を、GT 730の
+ような小VRAM GPU向けに実装できないか検討した。**実コード読解の結果、
+実装を見送った**——理由は「難しいから」ではなく「このリポジトリが依存
+する`open-cuda`側の推論経路には、そもそも退避すべき"VRAM常駐状態"が
+存在しない」ため。`opencuda-blas`のGEMM/Attention/softmax(`sgemm`
+経由でVulkanにディスパッチする箇所すべて)は、呼び出しのたびに
+`ScopedAlloc`(`opencuda-blas/src/lib.rs`)というRAIIガードで
+VRAMバッファをalloc→host→device転送→計算→device→host転送→即freeする
+設計になっており、呼び出しが終わるとVRAM上には何も残らない。GPT-2の
+重み(`GptModel`の`word_embeddings`/各層の`Linear`)もKVキャッシュ
+(`open-cuda-llm::KvCacheHead`の`k`/`v`/`k_latent`/`v_latent`)も、
+実体は最初から最後まで`Vec<f32>`としてシステムRAM上に存在し続けている
+(GPU実行時〈`--features real-vulkan`〉でも同じ)。つまりこのアーキテク
+チャは、意図した設計ではないものの結果として既に「常時システムRAM
+常駐、GPUは演算のたびの一時利用のみ」という、Engramが目指す状態に
+近い形になっている。LRUエビクション等の追加機構を実装しても退避対象が
+無いため、意味のある効果は測定しようがない(誇張しない開示)。詳細・
+読んだコード箇所は`CLAUDE.md`のHANDOFF 2026-08-08エントリ参照。
+
 ### 意図分類 vs 生成、どちらを使うか
 
 `/v1/chat`(意図分類)と`/v1/generate`(生成)は目的が異なるため、あえて
