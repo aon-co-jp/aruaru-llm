@@ -237,6 +237,110 @@ fn wire_flash_attention_spirv(model: &mut GptModel) -> bool {
     }
 }
 
+/// `open-cuda-llm::GptModel::enable_mla_kv_compression`(DeepSeek-V3の
+/// Multi-Head Latent Attention風、KVキャッシュの低ランク圧縮、
+/// `open-cuda`側2026-08-07実装・実機検証済み)をこのモデルへ配線するか
+/// 判定するenv変数。**既定は無効(opt-in)**——`real-vulkan`のような
+/// GPU専用機能とは異なりCPU実行でも成立する(`mla_compress_kv`/
+/// `mla_decompress_kv`は`opencuda_blas::sgemm`をVulkan/CPU両対応で
+/// 呼ぶだけの純粋な計算のため、デバイス種別に依存しない)。それでも
+/// 既定offにしたのは速度ではなく**生成品質**の理由——下記
+/// `wire_mla_kv_compression`のdocコメント参照。
+/// `ARUARU_LLM_ENABLE_MLA_KV_COMPRESSION=1`(または`true`)で有効化。
+fn mla_kv_compression_enabled() -> bool {
+    std::env::var("ARUARU_LLM_ENABLE_MLA_KV_COMPRESSION").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false)
+}
+
+/// KVキャッシュの圧縮後次元`d_c`(ヘッドあたり)。既定は
+/// `head_dim / 4`(75%削減、`open-cuda`側テスト
+/// `mla_kv_compression_enabled_model_generates_without_panicking`が
+/// 使っているのと同じ削減率)、最低`1`を保証する。`0 < d_c < head_dim`
+/// (`enable_mla_kv_compression`自身のassert)を満たさない値が
+/// 環境変数で指定された場合は既定値へフォールバックする(サービスを
+/// 壊さない設計)。`ARUARU_LLM_MLA_D_C`環境変数で上書き可能。
+fn mla_d_c(head_dim: usize) -> usize {
+    let default_d_c = (head_dim / 4).max(1);
+    match std::env::var("ARUARU_LLM_MLA_D_C") {
+        Ok(v) => match v.parse::<usize>() {
+            Ok(d_c) if d_c > 0 && d_c < head_dim => d_c,
+            _ => {
+                tracing::warn!(
+                    "ARUARU_LLM_MLA_D_C={v:?} is not a valid 0 < d_c < head_dim={head_dim}; falling back to default d_c={default_d_c}"
+                );
+                default_d_c
+            }
+        },
+        Err(_) => default_d_c,
+    }
+}
+
+/// `ARUARU_LLM_ENABLE_MLA_KV_COMPRESSION=1`(または`true`)が明示的に
+/// 設定されている場合のみ、`GptModel::enable_mla_kv_compression`
+/// (2026-08-07新設、`open-cuda`側で実装・実機検証済み——KVキャッシュを
+/// フル精度`head_dim`次元のまま保持せず、低ランク射影で`d_c`次元へ
+/// 圧縮して保存し、Attention計算直前に復元する)を配線する
+/// (2026-08-08追加)。
+///
+/// ## なぜ既定offか(最重要、正直な開示)
+///
+/// `wire_flash_attention_spirv`(既定off)は「GPUディスパッチオーバー
+/// ヘッドがCPUより遅いことがある」という**速度**上の理由でopt-inに
+/// したが、こちらは事情が異なる——`enable_mla_kv_compression`が使う
+/// down-projection/up-projection行列は`open-cuda`側`open-cuda-llm/
+/// src/lib.rs`の実装(`GptModel::enable_mla_kv_compression`)を確認した
+/// 限り**学習済みではなく乱数初期化**(`random_vec`、DeepSeek-V3本家が
+/// 大規模事前学習で獲得する射影とは無関係)。つまりこの圧縮は
+/// **非可逆**であり、圧縮→復元後のK/Vはこのプロセスが読み込んだ実GPT-2
+/// 124M(またはカタログの他モデル)の学習済み重みが持つ意味的な内容を
+/// 実際に破壊する。`open-cuda`側の回帰テスト
+/// `mla_kv_compression_actually_changes_generation_versus_uncompressed`
+/// 自体が「圧縮ありと無しで生成結果が実際に異なることを確認する」
+/// テストであり、`open-cuda`側は最初から「配線が正しく動くこと」の
+/// 実証に留め生成品質の維持は主張していない(同ファイルのdoc
+/// コメント参照)。`open-cuda`側の実機検証はすべて`GptConfig::tiny`
+/// (ランダム初期化トイモデル)止まりで、**実学習済み重みでの品質検証は
+/// 一度も行われていない**——このリポジトリでの実配線が初めての
+/// 実学習済み重みでの検証機会となる(下記CLAUDE.md HANDOFF参照)。
+/// このため、`wire_flash_attention_spirv`と同じ「複数経路の比較を
+/// 可能にする」意図に加え、**既定で実ユーザー向け応答の品質を落とさ
+/// ない**という可用性優先の理由からも既定offとした。読み込み失敗時
+/// (`d_c`不正等)はサービスを落とさず、フル精度KVキャッシュのまま
+/// 継続する。
+fn wire_mla_kv_compression(model: &mut GptModel) -> bool {
+    if !mla_kv_compression_enabled() {
+        return false;
+    }
+    let config = model.config();
+    if config.num_heads == 0 || config.hidden_size % config.num_heads != 0 {
+        tracing::warn!(
+            "ARUARU_LLM_ENABLE_MLA_KV_COMPRESSION set but hidden_size={} is not evenly divisible by num_heads={}; skipping MLA wiring",
+            config.hidden_size,
+            config.num_heads
+        );
+        return false;
+    }
+    let head_dim = config.hidden_size / config.num_heads;
+    let d_c = mla_d_c(head_dim);
+    let seed: u64 = std::env::var("ARUARU_LLM_MLA_SEED").ok().and_then(|v| v.parse().ok()).unwrap_or(42);
+    match model.enable_mla_kv_compression(d_c, seed) {
+        Ok(()) => {
+            let reduction_percent = 100.0 * (1.0 - (d_c as f64 / head_dim as f64));
+            tracing::info!(
+                "ARUARU_LLM_ENABLE_MLA_KV_COMPRESSION set: wired MLA-style KV cache compression \
+                 (head_dim={head_dim} -> d_c={d_c}, {reduction_percent:.1}% smaller per-token KV storage). \
+                 WARNING: down/up-projection matrices are randomly initialized (not learned), so this is \
+                 lossy and will change/degrade generation output versus the uncompressed path \
+                 (see generation.rs doc comment for details)."
+            );
+            true
+        }
+        Err(err) => {
+            tracing::warn!("ARUARU_LLM_ENABLE_MLA_KV_COMPRESSION set but enable_mla_kv_compression failed ({err:#}); keeping full-precision KV cache");
+            false
+        }
+    }
+}
+
 fn load_from_dir(dir: &std::path::Path) -> Result<LoadedGpt, String> {
     #[allow(unused_mut)]
     let mut model = GptModel::load(dir).map_err(|e| format!("failed to load GPT-2 weights from {dir:?}: {e:#}"))?;
@@ -254,6 +358,9 @@ fn load_from_dir(dir: &std::path::Path) -> Result<LoadedGpt, String> {
         // GptModel側の設計によりsoftmax配線より優先される(上記doc参照)。
         let _flash_attention_wired = wire_flash_attention_spirv(&mut model);
     }
+    // MLA KVキャッシュ圧縮配線はGPU非依存(CPU実行でも成立)のため
+    // `real-vulkan` feature配下に置かない。既定offはopt-in(上記doc参照)。
+    let _mla_wired = wire_mla_kv_compression(&mut model);
     Ok(LoadedGpt { model, tokenizer, dir: dir.to_path_buf(), matmul_spirv_wired })
 }
 

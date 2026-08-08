@@ -1,5 +1,18 @@
 # aruaru-llm
 
+> 📌 **Recent update (2026-08-08)**: Wired an opt-in (default-off)
+> MLA-style KV cache compression path (`open-cuda`'s DeepSeek-V3-inspired
+> implementation, `GptModel::enable_mla_kv_compression`) into
+> `/v1/generate` via `ARUARU_LLM_ENABLE_MLA_KV_COMPRESSION=1`. For GPT-2
+> 124M this is head_dim=64 -> d_c=16 (75% smaller per-token KV storage),
+> computed from the actual loaded model's config, not a device-specific
+> feature (works on CPU as well as `real-vulkan`). **Honest disclosure**:
+> the down/up-projection matrices are randomly initialized (untrained),
+> so this is lossy compression, and a real end-to-end test against the
+> real GPT-2 124M weights showed visibly degraded/more repetitive output
+> compared to the uncompressed path — which is why it defaults off. See
+> [CLAUDE.md](CLAUDE.md) for the measured before/after generations.
+
 > 📌 Pending task (2026-08-06): a plan exists to incorporate Toshiba SBM / DeepSeek techniques. See [CLAUDE.md](CLAUDE.md) for details.
 
 > 📌 **Recent update (2026-08-07)**: verified via a real running binary +

@@ -226,6 +226,80 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-08-08(続き2) `GptModel::enable_mla_kv_compression`(DeepSeek-V3
+  風MLA、KVキャッシュ低ランク圧縮、`open-cuda`側2026-08-07実装・実機
+  検証済み)を`aruaru-llm`側からオプトイン配線(直前2026-08-08 HANDOFFの
+  「次にすべきこと(2)」で名指しされていた候補への対応)**:
+  1. **実装**(`src/generation.rs`): `mla_kv_compression_enabled()`
+     (`ARUARU_LLM_ENABLE_MLA_KV_COMPRESSION=1`または`true`で有効化、
+     **既定off**)・`mla_d_c(head_dim)`(既定`head_dim/4`=75%削減、
+     `ARUARU_LLM_MLA_D_C`で上書き可、`0 < d_c < head_dim`を満たさない
+     値は既定値へ安全にフォールバック)・`wire_mla_kv_compression`を
+     新設し、`load_from_dir`から(`real-vulkan` featureの有無に関わらず)
+     常に呼ぶようにした。`enable_mla_kv_compression`自体は
+     `opencuda_blas::mla_compress_kv`/`mla_decompress_kv`(`sgemm`をCPU/
+     Vulkan両対応で呼ぶだけの計算)を土台にしておりデバイス種別に
+     依存しないため、`wire_matmul_spirv`等とは異なり`#[cfg(feature =
+     "real-vulkan")]`の外に置いた——CPUのみの既定ビルドでも有効化できる。
+  2. **d_cの決定根拠**: 実GPT-2 124Mは`hidden_size=768`・`num_heads=12`
+     なので`head_dim=64`。既定`d_c=64/4=16`(75%削減、`open-cuda`側の
+     自テスト`mla_kv_compression_enabled_model_generates_without_
+     panicking`と同じ削減率を踏襲)。`d_c`は`model.config()`から実際の
+     ロード済みモデルの`hidden_size`/`num_heads`を読んで動的計算する
+     (推測やハードコードではなく、モデルカタログの他サイズ
+     〈distilgpt2/gpt2-medium/large/xl〉に切り替えても追従する設計)。
+  3. **なぜ既定offか(速度ではなく品質、`wire_flash_attention_spirv`とは
+     異なる理由)**: `open-cuda`側`open-cuda-llm/src/lib.rs`の
+     `enable_mla_kv_compression`実装を読んだところ、down/up-projection
+     行列は`random_vec`による**乱数初期化**(DeepSeek本家が大規模事前
+     学習で獲得する射影とは無関係)——`open-cuda`側の回帰テスト
+     `mla_kv_compression_actually_changes_generation_versus_uncompressed`
+     自体が「圧縮ありなしで生成結果が実際に異なることを確認する」
+     テストであり、`open-cuda`側は元から品質維持を主張していない
+     (同ファイルdocコメント参照)。ただし`open-cuda`側の実機検証は
+     すべて`GptConfig::tiny`(ランダム初期化トイモデル)止まりで、
+     **実学習済み重み(実GPT-2 124M)での品質検証は`open-cuda`側にも
+     このリポジトリにも存在しなかった**。今回それを実施し、以下の
+     実測により「品質を落とす」という懸念が推測ではなく事実である
+     ことを確認した。
+  4. **実機検証(型チェックのみで完了と報告しない方針を徹底)**:
+     `cargo build --release`成功(既存2件のdead_code警告のみ、pre-
+     existingで無関係)。`cargo test --release`**46件全green**
+     (1回目実行時に無関係な`memory allocation ... failed`で
+     クラッシュしたが、他プロセスは実行されておらず一時的なメモリ
+     逼迫と判断、再実行で全green・regression無し)。
+     実際にサーバーを2回起動し(実GPT-2 124M、同一プロンプト・同一
+     `max_new_tokens=16`)、`POST /v1/generate
+     {"prompt":"The quick brown fox","max_new_tokens":16}`を実HTTP
+     リクエストで比較:
+     - **MLA無効(既定)**: `"es are a great way to get a little bit of
+       a kick out of your"`(2026-07-25 HANDOFF記録の既知の継続文と
+       完全一致、regression無し)。
+     - **MLA有効**(`ARUARU_LLM_ENABLE_MLA_KV_COMPRESSION=1`、起動ログ
+       で`head_dim=64 -> d_c=16, 75.0% smaller`を確認):
+       `"es, and the government, and away from the government and
+       point of the government"`——文法的な体裁こそ保っているが、
+       同じ単語("government")の反復に陥っており、無効時の自然な
+       継続と比べて**明確に品質が劣化している**ことを実際の出力で
+       確認した(誇張ではなく実測、上記3番の懸念の裏取り)。
+  5. **結論・opt-inとした判断の正当性**: KVキャッシュのメモリ削減
+     (ヘッドあたり75%、`head_dim=64→d_c=16`)自体は`d_c`と`head_dim`の
+     比から機械的に導かれる数値であり実際に成立する一方、これは
+     「学習済み射影が無いことによる代償」を伴う——実ユーザー向け
+     応答を返す`/v1/generate`の既定挙動をこれで置き換えるべきではない
+     と判断し、既定offのopt-in機能として提供するに留めた。学習済みの
+     `down_proj`/`up_proj`重みを読み込めるローダーが`open-cuda`側に
+     実装されない限り、この機能は「配線が正しく動くことの実証」の
+     域を出ない。
+  - 次にすべきこと: (1) `open-cuda`側に学習済みMLA射影重みローダーが
+    実装された場合、そちらへ切り替えて再度品質検証を行う(現状の
+    乱数初期化のままでは既定on化はしない)、(2)
+    `real-vulkan`有効時にMLA圧縮と`set_flash_attention_spirv`/
+    `set_softmax_spirv`を同時に有効化した場合の相互作用(速度・
+    メモリ両面)は今回未計測、(3) `GET /v1/models/catalog`等の
+    レスポンスに現在MLA圧縮が有効かどうかを表示する診断フィールドは
+    未追加(現状は起動ログでのみ確認可能)。
+
 - **2026-08-08(続き) DeepSeek「Engram」風KVキャッシュ/重みオフロードの
   実装を検討したが、コードを実際に読んだ結果「退避対象となるVRAM常駐
   状態がそもそも存在しない」と判明したため実装を見送り(ユーザー指示:
