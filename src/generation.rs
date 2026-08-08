@@ -388,7 +388,7 @@ fn mla_calibration_prompts() -> Vec<String> {
 /// わざわざVulkanDeviceを別途構築する必要はないと判断)。
 fn wire_mla_kv_compression_calibrated(model: &mut GptModel, tokenizer: &GptTokenizer) -> bool {
     let config = model.config();
-    if config.num_heads == 0 || config.hidden_size % config.num_heads != 0 {
+    if config.num_heads == 0 || !config.hidden_size.is_multiple_of(config.num_heads) {
         tracing::warn!(
             "ARUARU_LLM_MLA_CALIBRATED set but hidden_size={} is not evenly divisible by num_heads={}; skipping calibrated MLA wiring",
             config.hidden_size,
