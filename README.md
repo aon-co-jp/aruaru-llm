@@ -1,5 +1,22 @@
 # aruaru-llm
 
+> 📌 **最近の更新(2026-08-08)**: `open-cuda`側で実装・実機検証済みだった
+> DeepSeek-V3風MLA(KVキャッシュ低ランク圧縮)を`/v1/generate`へ
+> オプトイン配線(既定off)した。`ARUARU_LLM_ENABLE_MLA_KV_COMPRESSION=1`で
+> 有効化、GPT-2 124Mでhead_dim=64→d_c=16(75%削減)。**正直な開示**:
+> 射影行列が乱数初期化(未学習)のため非可逆圧縮であり、実際に生成品質を
+> 目視で明確に劣化させることを実測で確認した(既定offとした理由)。
+> 詳細は[CLAUDE.md](CLAUDE.md)参照。
+>
+> *English*: Wired an opt-in (default-off) MLA-style KV cache compression
+> path (`open-cuda`'s DeepSeek-V3-inspired implementation) into
+> `/v1/generate` via `ARUARU_LLM_ENABLE_MLA_KV_COMPRESSION=1`. For GPT-2
+> 124M this is head_dim=64 -> d_c=16 (75% smaller per-token KV storage).
+> **Honest disclosure**: the projection matrices are randomly initialized
+> (untrained), so this is lossy, and measured testing confirmed it
+> visibly degrades generation quality — which is why it defaults off.
+> See [CLAUDE.md](CLAUDE.md) for details.
+
 > 📌 保留タスク(2026-08-06): 東芝SBM・DeepSeek技術の組み込み構想あり。詳細は[CLAUDE.md](CLAUDE.md)参照。
 
 > 📌 **最近の更新(2026-08-07)**: `/v1/chat`・`/v1/classify-security`が
