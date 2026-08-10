@@ -388,6 +388,13 @@ struct GenerateWithSearchResponse {
     disclosure: &'static str,
     used_search: bool,
     search_results: Vec<web_search::SearchResult>,
+    /// `used_search=false`の理由を正直に開示する診断フィールド(ユーザー
+    /// 指摘「早くBUG修正して」への対応——ターミナルログを見なくても
+    /// レスポンスだけで原因が分かるようにした。APIキーの値自体は
+    /// 決して含めない、エラーメッセージはHTTPステータス・パース失敗等の
+    /// 情報のみ)。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    search_error: Option<String>,
 }
 
 async fn generate_with_search(req: Request, device: Arc<dyn GpuDevice>, registry: Arc<TenantRegistry>) -> Response {
@@ -403,20 +410,21 @@ async fn generate_with_search(req: Request, device: Arc<dyn GpuDevice>, registry
         );
     }
 
-    let (augmented_prompt, used_search, search_results) = if web_search::is_configured() {
+    let (augmented_prompt, used_search, search_results, search_error) = if web_search::is_configured() {
         match web_search::search(&req.prompt, 3).await {
             Ok(results) if !results.is_empty() => {
                 let context = web_search::format_results_as_context(&results);
-                (format!("Reference information from a web search:\n{context}\n\n{}", req.prompt), true, results)
+                (format!("Reference information from a web search:\n{context}\n\n{}", req.prompt), true, results, None)
             }
-            Ok(_) => (req.prompt.clone(), false, Vec::new()),
+            Ok(_) => (req.prompt.clone(), false, Vec::new(), Some("Google returned zero results for this query.".to_string())),
             Err(err) => {
-                tracing::warn!("google custom search failed, falling back to no-search generation: {err:#}");
-                (req.prompt.clone(), false, Vec::new())
+                let msg = format!("{err:#}");
+                tracing::warn!("google custom search failed, falling back to no-search generation: {msg}");
+                (req.prompt.clone(), false, Vec::new(), Some(msg))
             }
         }
     } else {
-        (req.prompt.clone(), false, Vec::new())
+        (req.prompt.clone(), false, Vec::new(), Some("Google Custom Search is not configured (no API key/cx set).".to_string()))
     };
 
     let max_new_tokens = req.max_new_tokens.clamp(1, MAX_NEW_TOKENS_LIMIT);
@@ -431,6 +439,7 @@ async fn generate_with_search(req: Request, device: Arc<dyn GpuDevice>, registry
                     This demonstrates self-contained text generation augmented with live search, not state-of-the-art quality.",
                 used_search,
                 search_results,
+                search_error,
             },
         ),
         Err(err) => {
@@ -438,6 +447,44 @@ async fn generate_with_search(req: Request, device: Arc<dyn GpuDevice>, registry
             json_response(StatusCode::SERVICE_UNAVAILABLE, &GenerateErrorResponse { error: format!("{err:#}"), engine: generation::engine_label(&device) })
         }
     }
+}
+
+/// `POST /v1/settings/google-search` — ブラウザの設定パネルから
+/// Google Custom Search APIキー/検索エンジンID(cx)を保存する
+/// (ユーザー指示「利用者がAPIキーの取得とCOPYペーストが簡単な機能を
+/// 搭載して」への対応)。**正直な開示**: メモリ上にのみ保持し、
+/// ディスクへの書き込み・ログ出力は一切行わない(プロセス再起動で
+/// 消える設計、`web_search`モジュールdocコメント参照)。
+#[derive(Debug, Deserialize)]
+struct GoogleSearchSettingsRequest {
+    api_key: String,
+    cx: String,
+}
+
+#[derive(Debug, Serialize)]
+struct GoogleSearchSettingsStatusResponse {
+    /// APIキーの値自体は絶対に返さない(この構造体にキーの値を保持する
+    /// フィールドを持たせないことで、実装ミスによる漏洩を型レベルで
+    /// 防ぐ設計)。
+    configured: bool,
+}
+
+async fn set_google_search_settings(req: Request) -> Response {
+    let Json(body): Json<GoogleSearchSettingsRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    web_search::set_runtime_credentials(body.api_key, body.cx);
+    json_response(StatusCode::OK, &GoogleSearchSettingsStatusResponse { configured: web_search::is_configured() })
+}
+
+async fn clear_google_search_settings() -> Response {
+    web_search::clear_runtime_credentials();
+    json_response(StatusCode::OK, &GoogleSearchSettingsStatusResponse { configured: web_search::is_configured() })
+}
+
+async fn get_google_search_settings_status() -> Response {
+    json_response(StatusCode::OK, &GoogleSearchSettingsStatusResponse { configured: web_search::is_configured() })
 }
 
 #[derive(Debug, Deserialize)]
@@ -1027,6 +1074,12 @@ async fn main() -> anyhow::Result<()> {
             })),
         )
         .at("/v1/models/catalog", get(plain(|| Box::pin(list_model_catalog()))))
+        .at(
+            "/v1/settings/google-search",
+            post(handler_fn(|req, _p| Box::pin(set_google_search_settings(req))))
+                .get(plain(|| Box::pin(get_google_search_settings_status())))
+                .delete(plain(|| Box::pin(clear_google_search_settings()))),
+        )
         .at(
             "/v1/models/optimize-cache",
             post(handler_fn(|req, _p| Box::pin(optimize_model_cache_handler(req)))),
