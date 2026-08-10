@@ -226,6 +226,59 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-08-10 `/v1/generate`の反復ループバグを根本解決(`open-cuda`側
+  `GptModel::generate_with_repetition_penalty`をオプトイン→既定有効で
+  配線)、ユーザー報告「しつこく繰り返すバグ 反応も遅すぎ」への対応**:
+  1. **背景**: `open-english`フロントエンドから「Hello」等の短い発話を
+     送ると、`Student: Hello`を延々繰り返す劣化ループが実際に発生する
+     ことをユーザーが報告した(対話ファインチューニング無しの素の
+     GPT-2貪欲デコードの既知の失敗モード)。以前(2026-08-10、直前の
+     パス)フロントエンド側で「最初の"Student:"手前で切り捨てる」応急
+     処置を実装済みだったが、これは表示上の症状を隠すだけで根本原因
+     (貪欲デコード自体に反復を防ぐ機構が無い)は未解決のままだった。
+  2. **`open-cuda`側の対応**(詳細は`open-cuda/CLAUDE.md`同日HANDOFF
+     参照): `GptModel::generate_with_repetition_penalty`(CTRL方式、
+     既に登場したトークンのlogitを弱める)を新設、既存`generate()`は
+     `penalty=1.0`の薄いラッパーへ変更(数値的に完全同一、回帰無し)。
+     実GPT-2 124M重みで、`open-english`と同じプロンプト構造
+     (`"...Student: Hello\nTrainer:"`)を使い、ペナルティ無しでは実際に
+     ループへ陥ること・`penalty=1.3`で実際に解消し文法的に自然な会話文
+     へ変わることを検証済み。
+  3. **`aruaru-llm`側の実装**(`src/generation.rs`):
+     `default_repetition_penalty()`(`ARUARU_LLM_REPETITION_PENALTY`
+     環境変数、既定値`1.3`、パース失敗・非正数・非有限値は既定値へ
+     安全にフォールバック)を新設し、`generate()`が
+     `loaded.model.generate_with_repetition_penalty(device,
+     &prompt_ids, max_new_tokens, default_repetition_penalty())`を
+     呼ぶよう変更(既定で有効化、`/v1/chat`〈意図分類〉には無関係)。
+  4. **実機検証(型チェックのみで完了と報告しない方針を徹底)**:
+     `cargo build --release`(aruaru-llm)成功。`cargo test --release`
+     **46件全green**(既存機能への回帰なし)。実際にサーバーを起動し、
+     `POST /v1/generate`へ`open-english`と同一のプロンプト構造
+     (`"...Student: Hello\nTrainer:"`、`max_new_tokens=24`)を送信した
+     ところ、`"I'm sorry for the delay in your appointment but it's
+     not too late to get back on track! Thank you so"`(反復なし、
+     文法的に自然な英文)という応答を得た——修正前の同一プロンプトでの
+     応答(`"Hello\nStudent: Hello\nStudent: Hello\n..."`)と比較して
+     劣化ループが実際に解消されたことを実HTTPで確認済み。
+  5. **正直な開示・スコープ**: (a) このペナルティは`/v1/generate`
+     (GPT-2自己回帰生成)のみに適用、`/v1/chat`・`/v1/classify-security`
+     (貪欲デコード自体を使わない意図分類/セキュリティ分類)には無関係。
+     (b) 経験的な既定値`1.3`はこの1シナリオでの実測に基づく——他の
+     プロンプトパターンでの最適値は未検証、必要なら
+     `ARUARU_LLM_REPETITION_PENALTY`で調整可能。(c) サンプリング
+     (温度・top-k/top-p)は依然未実装(貪欲デコード+繰り返しペナルティ
+     のみ)。(d) ユーザー報告のもう一方の懸念「反応も遅すぎ」は、前回
+     パス(フロントエンド側`max_new_tokens`48→24縮小)で既に対応済み
+     のまま変更なし——本パスでは追加のGPU/NPUハードウェア高速化の
+     実験は行っていない(既存HANDOFF記録〈このマシンのGT730では
+     1トークンデコードでCPUよりVulkan経由が遅い、と複数回実測済み〉を
+     踏まえ、ユーザーへその旨を報告し新たな実験は見送った)。
+  - 次にすべきこと: (1) より高性能なGPU実機が得られた場合の
+    `real-vulkan` feature再ベンチマーク、(2) フロントエンドJS
+    (`open-english`)をRust+RPoemへ移植する大規模タスク(ユーザーから
+    言及あり、規模が大きいため別セッションでスコープを切って着手)。
+
 - **2026-08-08(続き3) PCA較正版MLA(`open-cuda`側同日新設
   `enable_mla_kv_compression_calibrated`)をオプトイン配線
   (直下2026-08-08(続き2)エントリで「乱数射影は品質を明確に劣化させる」

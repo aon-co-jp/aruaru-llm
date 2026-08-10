@@ -169,6 +169,29 @@ Cargo featureの着脱式プラグインとして追加した(`src/nllb.rs`)。
 移植するのは、`open-cuda`側の修正が完了し実機で速度改善が確認できてから
 にすること**(現状は「配線したが動かない」状態を複製するだけになる)。
 
+## 繰り返しペナルティ(2026-08-10新設、`open-cuda`側`GptModel::
+generate_with_repetition_penalty`)
+
+`src/generation.rs::generate`は、対話ファインチューニング無しの素の
+GPT-2貪欲デコードが陥る既知の劣化モード(同一文字列の無限ループ)への
+根本対応として、`open-cuda`側の`GptModel::generate_with_repetition_
+penalty`(CTRL方式、penalty>1.0で既に登場したトークンのlogitを弱める)を
+既定`1.3`で呼ぶ。移植手順:
+
+1. `open-cuda`側`crates/open-cuda-llm`が`generate_with_repetition_
+   penalty`(および後方互換ラッパー`generate`)を持つことを確認する
+   (2026-08-10以降のコミットに存在)。
+2. `src/generation.rs::default_repetition_penalty()`
+   (`ARUARU_LLM_REPETITION_PENALTY`環境変数、既定`1.3`)と、`generate()`
+   内の呼び出し(`model.generate_with_repetition_penalty(device,
+   &prompt_ids, max_new_tokens, default_repetition_penalty())`)を
+   そのままコピーする。
+3. `penalty=1.0`にすると既存の`generate()`(ペナルティ無し)と完全に
+   同一の出力になる(`open-cuda`側テスト
+   `repetition_penalty_reduces_degenerate_loop_on_real_gpt2_weights`の
+   `via_generate == no_penalty`アサーションで裏付け済み)ため、移植先で
+   挙動を変えたくない場合はこの値に設定すればよい。
+
 ## 注意事項
 
 - 本プロジェクトは「LLM」を名乗り、2026-07-25以降`/v1/generate`で実際の
