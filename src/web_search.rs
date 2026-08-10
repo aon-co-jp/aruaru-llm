@@ -24,10 +24,39 @@
 //!   転載せず、上位数件のタイトル・スニペット・URLのみをプロンプトへ
 //!   埋め込む(引用の範囲、既存の秋葉原メイドカフェ記事引用と同じ配慮)。
 
+use std::sync::RwLock;
+
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 const GOOGLE_CSE_ENDPOINT: &str = "https://www.googleapis.com/customsearch/v1";
+
+/// 利用者がブラウザの設定パネルから入力したAPIキー/cxを、実行中の
+/// プロセスのメモリ上にのみ保持する(ユーザー指示「利用者がAPIキーの
+/// 取得とCOPYペーストが簡単な機能を搭載して」への対応)。
+///
+/// **正直な開示・セキュリティ配慮**: ディスクへの書き込み・ログ出力は
+/// 一切行わない。プロセス終了(サーバー再起動)で消える——永続化しない
+/// 設計にすることで、誤ってGitリポジトリやログファイルへ紛れ込む
+/// リスクを避けている。`GET /v1/settings/google-search`はキーの値自体を
+/// 一切返さず、設定済みかどうかの真偽値のみを返す。
+static RUNTIME_CREDENTIALS: RwLock<Option<(String, String)>> = RwLock::new(None);
+
+/// ブラウザの設定パネルから送られたAPIキー/cxを実行時に設定する
+/// (`POST /v1/settings/google-search`のハンドラから呼ばれる)。
+pub fn set_runtime_credentials(api_key: String, cx: String) {
+    let mut guard = RUNTIME_CREDENTIALS.write().expect("runtime credentials lock poisoned");
+    if api_key.trim().is_empty() || cx.trim().is_empty() {
+        *guard = None;
+    } else {
+        *guard = Some((api_key, cx));
+    }
+}
+
+/// 実行時設定を消去する(`DELETE /v1/settings/google-search`)。
+pub fn clear_runtime_credentials() {
+    set_runtime_credentials(String::new(), String::new());
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SearchResult {
@@ -58,7 +87,12 @@ pub fn is_configured() -> bool {
     read_credentials().is_some()
 }
 
+/// 実行時設定(ブラウザの設定パネル経由)を優先し、無ければ環境変数
+/// (起動時設定)にフォールバックする。
 fn read_credentials() -> Option<(String, String)> {
+    if let Some(creds) = RUNTIME_CREDENTIALS.read().expect("runtime credentials lock poisoned").clone() {
+        return Some(creds);
+    }
     let api_key = std::env::var("ARUARU_LLM_GOOGLE_SEARCH_API_KEY").ok()?;
     let cx = std::env::var("ARUARU_LLM_GOOGLE_SEARCH_CX").ok()?;
     if api_key.trim().is_empty() || cx.trim().is_empty() {
@@ -95,7 +129,14 @@ pub async fn search(query: &str, max_results: u8) -> Result<Vec<SearchResult>> {
         .context("Google Custom Search request failed")?;
 
     if !res.status().is_success() {
-        bail!("Google Custom Search returned HTTP {}", res.status());
+        let status = res.status();
+        // Googleのエラーレスポンス本文には具体的な理由(例: "API key not
+        // valid"・"Invalid Value"等)が入っており、ステータスコードだけ
+        // より診断に有用——正直な開示: この本文にAPIキーの値自体が
+        // エコーバックされることは無い(Google側の仕様、確認済み)ため、
+        // そのままエラーメッセージへ含めても安全。
+        let body = res.text().await.unwrap_or_else(|_| "(failed to read response body)".to_string());
+        bail!("Google Custom Search returned HTTP {status}: {body}");
     }
 
     let body: CseResponse = res.json().await.context("failed to parse Google Custom Search response")?;
