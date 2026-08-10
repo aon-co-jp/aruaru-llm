@@ -1,5 +1,28 @@
 # aruaru-llm
 
+> 📌 **Recent update (2026-08-10)**: Wired `open-cuda`'s new `GptModel::
+> generate_with_repetition_penalty` (CTRL-style repetition penalty) into
+> `/v1/generate`, **enabled by default** (`ARUARU_LLM_REPETITION_PENALTY`
+> env var, default `1.3`; set to `1.0` to restore the old no-penalty
+> behavior). This directly addresses a known GPT-2 base-model
+> degeneracy — endless repetition of the same string (e.g. a user
+> reported it looping "Student: Hello" forever while using
+> `open-english`) — since the base model has no dialogue fine-tuning.
+> Verified on real GPT-2 124M weights on the `open-cuda` side: without
+> the penalty the loop actually reproduces; with `penalty=1.3` it stops
+> and produces grammatically natural conversational text instead. Also
+> verified via a live HTTP request:
+> `POST /v1/generate {"prompt":"...Student: Hello\nTrainer:",
+> "max_new_tokens":24}` returned a non-repeating reply. At `penalty=1.0`
+> the output is byte-identical to the existing `generate()` API, so no
+> other tests regress. See [CLAUDE.md](CLAUDE.md) for details.
+>
+> *日本語*: `open-cuda`側`GptModel::generate_with_repetition_penalty`
+> (CTRL方式の繰り返しペナルティ)を`/v1/generate`へ配線し、既定で有効化
+> した(`ARUARU_LLM_REPETITION_PENALTY`環境変数、既定値`1.3`)。対話
+> ファインチューニング無しの素のGPT-2貪欲デコードが陥る既知の劣化モード
+> (同一文字列の無限ループ)への根本対応。詳細は[CLAUDE.md](CLAUDE.md)参照。
+
 > 📌 **Recent update (2026-08-08)**: Wired an opt-in (default-off)
 > MLA-style KV cache compression path (`open-cuda`'s DeepSeek-V3-inspired
 > implementation, `GptModel::enable_mla_kv_compression`) into
@@ -86,7 +109,10 @@ understanding).
   "...", "matched_intent": "..."}` (intent classification, lightweight/fast canned replies)
 - `POST /v1/generate` — `{"prompt": "...", "max_new_tokens": 16(optional, default 16, capped at 128), "tenant": "..."(optional)}`
   → `{"completion": "...", "engine": "gpt2-124m-greedy-decode-v0-opencuda-llm-cpu", "disclosure": "..."}`
-  (real autoregressive generation via GPT-2 124M weights — heavier but genuine. English prompts
+  (real autoregressive generation via GPT-2 124M weights — heavier but genuine.
+  **Repetition penalty defaults to `1.3`** — `ARUARU_LLM_REPETITION_PENALTY`
+  env var to override, `1.0` disables it — to prevent endless-repetition
+  loops. English prompts
   recommended, since GPT-2's BPE vocabulary is trained mostly on English text. Example, verified
   end-to-end over real HTTP: `{"prompt": "The quick brown fox", "max_new_tokens": 16}` →
   `"completion": "es are a great way to get a little bit of a kick out of your"`)

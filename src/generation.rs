@@ -555,15 +555,35 @@ pub fn engine_label(device: &Arc<dyn GpuDevice>) -> String {
     }
 }
 
+/// 繰り返しペナルティの既定値(CTRL方式、`open-cuda-llm::GptModel::
+/// generate_with_repetition_penalty`参照)。対話ファインチューニング無しの
+/// 素のGPT-2貪欲デコードが同一文字列(例: "Student: Hello"の無限ループ)へ
+/// 陥る既知の劣化モードへの根本対応——実GPT-2 124M重みでの検証
+/// (`open-cuda-llm`側テスト`repetition_penalty_reduces_degenerate_loop_
+/// on_real_gpt2_weights`)では、この値で反復ループが解消し文法的に自然な
+/// 会話文へ変わることを確認済み。`ARUARU_LLM_REPETITION_PENALTY`環境変数で
+/// 上書き可能(`1.0`にすると従来通りペナルティ無しの挙動に戻る)。
+pub fn default_repetition_penalty() -> f32 {
+    std::env::var("ARUARU_LLM_REPETITION_PENALTY")
+        .ok()
+        .and_then(|s| s.parse::<f32>().ok())
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .unwrap_or(1.3)
+}
+
 /// `prompt`の続きを`max_new_tokens`個、貪欲デコード(argmax、サンプリング
-/// 無し)で生成する。GPT-2実重み・実トークナイザが読み込めない場合はエラー
-/// を返す(黙って別経路にフォールバックしない、意図分類とは別軸のため
-/// bag-of-words的な代替は存在しない)。
+/// 無し)+繰り返しペナルティ(`default_repetition_penalty()`)で生成する。
+/// GPT-2実重み・実トークナイザが読み込めない場合はエラーを返す(黙って
+/// 別経路にフォールバックしない、意図分類とは別軸のためbag-of-words的な
+/// 代替は存在しない)。
 pub fn generate(device: &Arc<dyn GpuDevice>, prompt: &str, max_new_tokens: usize) -> Result<String> {
     let loaded = active_or_load_default().map_err(|e| anyhow::anyhow!(e))?;
     let prompt_ids = loaded.tokenizer.encode(prompt).context("open-cuda-llm tokenizer encode failed")?;
     anyhow::ensure!(!prompt_ids.is_empty(), "prompt encoded to zero tokens");
-    let generated_ids = loaded.model.generate(device, &prompt_ids, max_new_tokens).context("GptModel::generate failed")?;
+    let generated_ids = loaded
+        .model
+        .generate_with_repetition_penalty(device, &prompt_ids, max_new_tokens, default_repetition_penalty())
+        .context("GptModel::generate_with_repetition_penalty failed")?;
     loaded.tokenizer.decode(&generated_ids).context("open-cuda-llm tokenizer decode failed")
 }
 

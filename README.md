@@ -1,5 +1,36 @@
 # aruaru-llm
 
+> 📌 **最近の更新(2026-08-10)**: `open-cuda`側`GptModel::
+> generate_with_repetition_penalty`(CTRL方式の繰り返しペナルティ)を
+> `/v1/generate`へ配線し、**既定で有効化**した(`ARUARU_LLM_REPETITION_
+> PENALTY`環境変数、既定値`1.3`、`1.0`にすると従来のペナルティ無し挙動)。
+> 対話ファインチューニング無しの素のGPT-2貪欲デコードが陥る既知の劣化
+> モード(同一文字列の無限ループ、例: `open-english`利用中のユーザー報告
+> 「しつこく繰り返すバグ」——"Student: Hello"を延々繰り返す)への根本対応。
+> `open-cuda`側の実GPT-2 124M重みでのテストで、ペナルティ無しでは実際に
+> ループへ陥ること・`penalty=1.3`で実際にループが解消し文法的に自然な
+> 会話文へ変わることを確認済み。実HTTPでも
+> `POST /v1/generate {"prompt":"...Student: Hello\nTrainer:",
+> "max_new_tokens":24}` → `"I'm sorry for the delay in your appointment
+> but it's not too late to get back on track! Thank you so"`のように、
+> 反復なしの応答が返ることを確認した。`penalty=1.0`時は`generate()`
+> (既存API)と完全に同一の出力になるため既存の他テストへの回帰は無い。
+> 詳細は[CLAUDE.md](CLAUDE.md)参照。
+>
+> *English*: Wired `open-cuda`'s new `GptModel::generate_with_repetition_
+> penalty` (CTRL-style repetition penalty) into `/v1/generate`, **enabled
+> by default** (`ARUARU_LLM_REPETITION_PENALTY` env var, default `1.3`;
+> set to `1.0` to restore the old no-penalty behavior). This directly
+> addresses a known GPT-2 base-model degeneracy — endless repetition of
+> the same string (e.g. a user reported it looping "Student: Hello"
+> forever while using `open-english`) — since the base model has no
+> dialogue fine-tuning. Verified on real GPT-2 124M weights on the
+> `open-cuda` side: without the penalty the loop actually reproduces;
+> with `penalty=1.3` it stops and produces grammatically natural
+> conversational text instead. Also verified via a live HTTP request. At
+> `penalty=1.0` the output is byte-identical to the existing `generate()`
+> API, so no other tests regress. See [CLAUDE.md](CLAUDE.md) for details.
+
 > 📌 **最近の更新(2026-08-08)**: `open-cuda`側で実装・実機検証済みだった
 > DeepSeek-V3風MLA(KVキャッシュ低ランク圧縮)を`/v1/generate`へ
 > オプトイン配線(既定off)した。`ARUARU_LLM_ENABLE_MLA_KV_COMPRESSION=1`で
@@ -107,7 +138,9 @@ Vulkan汎用パスは実装済み)。詳細はopen-cuda側の`CLAUDE.md`のHANDO
   "...", "matched_intent": "..."}`(意図分類、軽量・高速な定型応答)
 - `POST /v1/generate` — `{"prompt": "...", "max_new_tokens": 16(任意、既定16、上限128), "tenant": "..."(任意)}`
   → `{"completion": "...", "engine": "gpt2-124m-greedy-decode-v0-opencuda-llm-cpu", "disclosure": "..."}`
-  (GPT-2 124M実重みによる自己回帰生成、本格的だが重い。プロンプトは英語推奨——
+  (GPT-2 124M実重みによる自己回帰生成、本格的だが重い。**繰り返しペナルティ
+  既定値`1.3`**〈`ARUARU_LLM_REPETITION_PENALTY`で上書き可、`1.0`で無効化〉
+  で同一文字列の無限ループを防止。プロンプトは英語推奨——
   GPT-2のBPE語彙は英語中心のため。実験例:
   `{"prompt": "The quick brown fox", "max_new_tokens": 16}` →
   `"completion": "es are a great way to get a little bit of a kick out of your"`)。
