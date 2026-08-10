@@ -920,7 +920,8 @@ async fn main() -> anyhow::Result<()> {
             "/admin/tenants/:host",
             delete(handler_fn(move |req, params| { let registry = Arc::clone(&admin_remove_registry); async move { admin_remove_tenant(req, params, registry).await } })),
         )
-        .at("/healthz", get(plain(|| Box::pin(healthz()))));
+        .at("/healthz", get(plain(|| Box::pin(healthz()))))
+        .with_cors();
 
     let bind_addr: std::net::SocketAddr = "0.0.0.0:4600".parse().expect("static bind address is always valid");
     tracing::info!("aruaru-llm listening on {bind_addr} (shared multi-tenant instance)");
