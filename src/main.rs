@@ -24,6 +24,7 @@
 
 mod bow_fallback;
 mod cache_optimizer;
+mod web_search;
 mod generation;
 mod hardware;
 mod model_catalog;
@@ -353,6 +354,87 @@ async fn generate(req: Request, device: Arc<dyn GpuDevice>, registry: Arc<Tenant
         ),
         Err(err) => {
             tracing::warn!("generate failed: {err:#}");
+            json_response(StatusCode::SERVICE_UNAVAILABLE, &GenerateErrorResponse { error: format!("{err:#}"), engine: generation::engine_label(&device) })
+        }
+    }
+}
+
+/// `POST /v1/generate-with-search` — ユーザー指示「open-englishは、人が
+/// しゃべったり文字を入力したら、その都度Google検索するような仕様に
+/// して」への対応(ブリッジ式: 入力文をそのままGoogle Custom Search
+/// JSON APIへ問い合わせ、上位数件のタイトル+スニペットを生成プロンプトへ
+/// コンテキストとして埋め込んでから`/v1/generate`と同じ生成処理を呼ぶ)。
+///
+/// **正直な開示**: (1) 検索は`ARUARU_LLM_GOOGLE_SEARCH_API_KEY`/
+/// `ARUARU_LLM_GOOGLE_SEARCH_CX`環境変数が設定されている場合のみ実際に
+/// 行われる——未設定時は検索無しで通常の`/v1/generate`相当にフォール
+/// バックする(`used_search: false`で判別可能、サービス全体を壊さない)。
+/// (2) 検索結果を埋め込んでもGPT-2系の小型モデルが実際にそれを踏まえた
+/// 応答をするとは保証されない(モデル自体は変わらない、既存の`disclosure`
+/// と同じ限界)。
+#[derive(Debug, Deserialize)]
+struct GenerateWithSearchRequest {
+    prompt: String,
+    #[serde(default = "default_max_new_tokens")]
+    max_new_tokens: usize,
+    #[serde(default)]
+    tenant: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct GenerateWithSearchResponse {
+    completion: String,
+    engine: String,
+    disclosure: &'static str,
+    used_search: bool,
+    search_results: Vec<web_search::SearchResult>,
+}
+
+async fn generate_with_search(req: Request, device: Arc<dyn GpuDevice>, registry: Arc<TenantRegistry>) -> Response {
+    let Json(req): Json<GenerateWithSearchRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    log_tenant_usage("generate-with-search", &req.tenant, &registry);
+    if req.prompt.trim().is_empty() {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            &GenerateErrorResponse { error: "prompt must not be empty".to_string(), engine: generation::engine_label(&device) },
+        );
+    }
+
+    let (augmented_prompt, used_search, search_results) = if web_search::is_configured() {
+        match web_search::search(&req.prompt, 3).await {
+            Ok(results) if !results.is_empty() => {
+                let context = web_search::format_results_as_context(&results);
+                (format!("Reference information from a web search:\n{context}\n\n{}", req.prompt), true, results)
+            }
+            Ok(_) => (req.prompt.clone(), false, Vec::new()),
+            Err(err) => {
+                tracing::warn!("google custom search failed, falling back to no-search generation: {err:#}");
+                (req.prompt.clone(), false, Vec::new())
+            }
+        }
+    } else {
+        (req.prompt.clone(), false, Vec::new())
+    };
+
+    let max_new_tokens = req.max_new_tokens.clamp(1, MAX_NEW_TOKENS_LIMIT);
+    match generation::generate(&device, &augmented_prompt, max_new_tokens) {
+        Ok(completion) => json_response(
+            StatusCode::OK,
+            &GenerateWithSearchResponse {
+                completion,
+                engine: generation::engine_label(&device),
+                disclosure: "GPT-2 family models (124M-1.5B) are small 2019-era models, not comparable to modern commercial LLMs (e.g. GPT-4). \
+                    Web search results (if any) are embedded as extra context, but the model is not guaranteed to actually use them correctly. \
+                    This demonstrates self-contained text generation augmented with live search, not state-of-the-art quality.",
+                used_search,
+                search_results,
+            },
+        ),
+        Err(err) => {
+            tracing::warn!("generate_with_search failed: {err:#}");
             json_response(StatusCode::SERVICE_UNAVAILABLE, &GenerateErrorResponse { error: format!("{err:#}"), engine: generation::engine_label(&device) })
         }
     }
@@ -902,6 +984,8 @@ async fn main() -> anyhow::Result<()> {
     let classify_registry = Arc::clone(&registry);
     let generate_device = Arc::clone(&device);
     let generate_registry = Arc::clone(&registry);
+    let generate_search_device = Arc::clone(&device);
+    let generate_search_registry = Arc::clone(&registry);
     let translate_device = Arc::clone(&device);
     let translate_registry = Arc::clone(&registry);
     let admin_register_registry = Arc::clone(&registry);
@@ -924,6 +1008,14 @@ async fn main() -> anyhow::Result<()> {
                 let device = Arc::clone(&generate_device);
                 let registry = Arc::clone(&generate_registry);
                 async move { generate(req, device, registry).await }
+            })),
+        )
+        .at(
+            "/v1/generate-with-search",
+            post(handler_fn(move |req, _p| {
+                let device = Arc::clone(&generate_search_device);
+                let registry = Arc::clone(&generate_search_registry);
+                async move { generate_with_search(req, device, registry).await }
             })),
         )
         .at(
