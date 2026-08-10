@@ -226,6 +226,34 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-08-10(続き2) open-english向け既定モデルを`gpt2`(124M)から
+  `distilgpt2`(82M)へ切替(ユーザー指示、4項目の優先順位「速度改善→
+  モデル差し替え調査→フロントエンドRust移植→SBM/DeepSeek調査」の
+  1・2番目に対応)**:
+  1. **実測比較**(このマシンの実CPU、`ARUARU_LLM_REPETITION_PENALTY`
+     既定`1.3`込み、同一プロンプト`"...Student: Hello\nTrainer:"`・
+     `max_new_tokens=24`): `gpt2`=8.37秒、`distilgpt2`=4.83秒
+     (**約42%高速化**)。生成文はいずれも反復ループなし・文法的に自然。
+  2. **切替方法**: `POST /v1/models/select {"id":"distilgpt2"}`で
+     ホットスワップ後、Windowsユーザー環境変数
+     `ARUARU_LLM_GPT2_DIR=F:\runo\aruaru-llm\models\distilgpt2`を
+     `setx`相当(`[Environment]::SetEnvironmentVariable`)で設定し、
+     プロセス再起動後も既定でdistilgpt2がロードされるようにした
+     (`default_model_dir()`の環境変数優先ロジックを利用、コード変更は
+     無し)。
+  3. **正直な開示**: (1) 品質比較は上記1プロンプトの実測のみ——複数
+     プロンプトでの体系的な品質比較は未実施。(2) この環境変数はこの
+     Windows開発機のユーザースコープのみに設定されており、他のマシン
+     (VPS等)やこのマシンの別ユーザーには反映されない——本番デプロイ
+     時は同様の環境変数設定、またはサービス起動スクリプト側での
+     明示を忘れないこと。(3) `real-vulkan` featureは既定offのまま
+     変更なし(既存HANDOFFの結論〈GT730ではVulkanの方が遅い〉を再確認
+     済み、今回は再検証していない)。
+  - 次にすべきこと: (1) 複数プロンプトでのdistilgpt2品質の体系的検証、
+    (2) フロントエンドJS(`open-english`)のRust+RPoemへの移植(優先度
+    3番目、別セッションでスコープを切って着手予定)、(3) 冒頭の
+    東芝SBM/DeepSeek技術組み込み構想の調査(優先度4番目)。
+
 - **2026-08-10 `/v1/generate`の反復ループバグを根本解決(`open-cuda`側
   `GptModel::generate_with_repetition_penalty`をオプトイン→既定有効で
   配線)、ユーザー報告「しつこく繰り返すバグ 反応も遅すぎ」への対応**:
