@@ -23,6 +23,7 @@
 //! 移行前と同一。
 
 mod bow_fallback;
+mod cache_optimizer;
 mod generation;
 mod hardware;
 mod model_catalog;
@@ -493,6 +494,36 @@ struct CatalogResponse {
     disclosure_ja: &'static str,
 }
 
+/// `POST /v1/models/optimize-cache` — 東芝SBM(シミュレーテッド分岐)で
+/// 実際に解く、ディスク容量予算下でのモデルキャッシュ選択(0/1ナップサック
+/// 問題)。**正直な開示**: この規模(カタログ5件)であれば全探索・動的
+/// 計画法でも瞬時に厳密解が求まり、SBMを使う実用上の必要性は薄い——
+/// これは「SBMの動作実証をこのサービスの実際の意思決定パスへ配線する」
+/// ことを目的とした機能であり、`aruaru_llm::cache_optimizer`のモジュール
+/// docコメントに詳細な調査結果・限界を明記している。**advisory専用**
+/// (実際のディスク削除は行わない、`evict`は「削除を推奨するモデルID一覧」
+/// を返すのみ)。
+#[derive(Debug, Deserialize)]
+struct OptimizeCacheRequest {
+    budget_mb: u32,
+    #[serde(default)]
+    value_overrides: std::collections::HashMap<String, f64>,
+    #[serde(default)]
+    seed: Option<u64>,
+}
+
+async fn optimize_model_cache_handler(req: Request) -> Response {
+    let body = match Json::<OptimizeCacheRequest>::from_body(req).await {
+        Ok(Json(b)) => b,
+        Err(resp) => return resp,
+    };
+    let entries: Vec<(&str, u32)> =
+        model_catalog::CATALOG.iter().map(|e| (e.id, e.approx_size_mb)).collect();
+    let seed = body.seed.unwrap_or(0xC0FFEE);
+    let result = cache_optimizer::optimize_model_cache(&entries, body.budget_mb, &body.value_overrides, seed);
+    json_response(StatusCode::OK, &result)
+}
+
 async fn list_model_catalog() -> Response {
     let models_root = model_catalog::models_root();
     json_response(
@@ -904,6 +935,10 @@ async fn main() -> anyhow::Result<()> {
             })),
         )
         .at("/v1/models/catalog", get(plain(|| Box::pin(list_model_catalog()))))
+        .at(
+            "/v1/models/optimize-cache",
+            post(handler_fn(|req, _p| Box::pin(optimize_model_cache_handler(req)))),
+        )
         .at("/v1/models/install", post(handler_fn(|req, _p| Box::pin(install_model(req)))))
         .at("/v1/models/select", post(handler_fn(|req, _p| Box::pin(select_model(req)))))
         .at("/v1/recommend", get(plain(|| Box::pin(recommend_model()))))
