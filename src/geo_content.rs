@@ -279,7 +279,10 @@ pub struct GeoLookupResponse {
 /// 「今度オーストラリアに旅行/出張の予定がある」のような発話向けの
 /// 国名検索(2026-08-11新設、ユーザー指示「今度どこどこの国に観光や
 /// お仕事で行く予定があるんだけど、の様なフレーズにもDBで対応して」)。
-/// 日英いずれの国名表記でも大文字小文字・前後の空白を無視して一致させる。
+/// **部分一致で検索する**(実機テストで発覚した実バグの修正: 当初は
+/// クエリ全体と国名の完全一致のみを見ていたため、"I FROM JAPAN."の
+/// ような文全体を渡すと一致しなかった)——`open-english`側は発話文を
+/// そのまま渡す設計のため、文中に国名が含まれていれば一致させる。
 /// 見つからない場合は`found: false`を正直に返す(黙って無関係な結果を
 /// 返さない、既存の「graceful degradation, never silent」方針)。
 pub async fn lookup_country(query: &str) -> GeoLookupResponse {
@@ -295,10 +298,11 @@ pub async fn lookup_country(query: &str) -> GeoLookupResponse {
                     tracing::warn!("aruaru-db geo lookup connection error: {e}");
                 }
             });
+            let pattern = format!("%{needle}%");
             if let Ok(Some(row)) = client
                 .query_opt(
-                    "SELECT country_en, country_ja, capital_en, capital_ja, landmark_en, landmark_ja, food_en, food_ja, souvenir_en, souvenir_ja FROM geo_world_capitals WHERE lower(country_en) = $1 OR country_ja = $2 LIMIT 1",
-                    &[&needle, &query.trim()],
+                    "SELECT country_en, country_ja, capital_en, capital_ja, landmark_en, landmark_ja, food_en, food_ja, souvenir_en, souvenir_ja FROM geo_world_capitals WHERE lower(country_en) LIKE $1 OR $2 LIKE '%' || country_ja || '%' LIMIT 1",
+                    &[&pattern, &query.trim()],
                 )
                 .await
             {
@@ -323,10 +327,11 @@ pub async fn lookup_country(query: &str) -> GeoLookupResponse {
     }
 
     let d = dataset();
+    let trimmed = query.trim();
     let found = d
         .world_capitals
         .iter()
-        .find(|c| c.country_en.to_lowercase() == needle || c.country_ja == query.trim())
+        .find(|c| needle.contains(&c.country_en.to_lowercase()) || trimmed.contains(&c.country_ja))
         .cloned();
     GeoLookupResponse {
         found: found.is_some(),
@@ -367,6 +372,17 @@ mod tests {
         let ja = lookup_country("日本").await;
         assert!(ja.found);
         assert_eq!(ja.capital.unwrap().capital_en, "Tokyo");
+    }
+
+    #[tokio::test]
+    async fn lookup_country_matches_country_name_embedded_in_a_sentence() {
+        // 実機テストで実際に見つかったバグの回帰テスト: open-english側は
+        // ユーザー発話文全体("I FROM JAPAN.")をそのまま渡すため、国名が
+        // 文中の一部であっても一致させる必要がある。
+        std::env::remove_var("ARUARU_LLM_GEO_DATABASE_URL");
+        let resp = lookup_country("I FROM　JAPAN.").await;
+        assert!(resp.found, "expected a sentence containing a country name to match");
+        assert_eq!(resp.capital.unwrap().capital_en, "Tokyo");
     }
 
     #[tokio::test]
