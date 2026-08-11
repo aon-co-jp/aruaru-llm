@@ -226,6 +226,49 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-08-11(続き4) RS-SmartTCPの「AI侵入検知」プラグイン向けに
+  `POST /v1/security/classify-traffic`を新設(ユーザー指示「TLS復号・
+  AI侵入検知の本実装して」→調査の上、実際の機械学習モデル推論として
+  `security.rs`と全く同じ既存の`open-cuda-bert`埋め込み+コサイン類似度
+  基盤を再利用する方針で対応)**:
+  1. **新規モジュール`src/intrusion_detection.rs`**: `security.rs`
+     (RS-Guardの「AI二次判定」)と全く同じ設計パターン(multilingual-
+     e5-small埋め込み+コサイン類似度)で、ポートスキャン/SYNフラッド/
+     ブルートフォース/データ持ち出し/正常の5カテゴリを判定。**正直な
+     開示**: 攻撃トラフィックの実データで訓練した専用分類器ではなく、
+     汎用埋め込みモデルによる意味的類似度のヒューリスティック
+     (`security.rs`と同じ限界)。GPU/NPU実行は`opencuda-bert`が既に
+     共有する`hw-detect-vulkan`/`hw-detect-directx`+`real-vulkan`
+     feature経由で可能なため、本モジュール専用の新規GPU配線は行って
+     いない(既存インフラの再利用)。
+  2. **`POST /v1/security/classify-traffic`**: `{"description": "..."}`
+     (RS-SmartTCP側が数値特徴量から組み立てた短い説明文を受け取る設計)
+     → `{label, description, score, is_suspicious, engine}`。
+  3. **検証(実バイナリ・実HTTP、モックなし)**: `cargo build --release`
+     成功(既存2件のdead_code警告のみ、pre-existing)。`cargo test
+     --release`**63件全green**(既存60件+`intrusion_detection`新規3件)。
+     実際にサーバーを起動し、`curl`で
+     `{"description":"one source IP probed 60 different destination
+     ports within 3 seconds"}`→`{"label":"port-scan",...,
+     "is_suspicious":true,"score":0.90...}`、
+     `{"description":"a normal web browsing session..."}`→
+     `{"label":"normal",...,"is_suspicious":false,"score":0.90...}`を
+     確認(正しく分類、実行経路も`-cpu`まで含め正直に表示)。
+     **正直な開示・気づいた実ミス**: 最初のビルドはルート登録
+     (`.at("/v1/security/classify-traffic", ...)`)を追加する前に
+     バックグラウンドで開始してしまい、古いバイナリで`404`が返る
+     ことに気づいて再ビルドし直した——型チェックだけでなく実際に
+     `curl`で確認する方針を徹底したことで発見できた実例として記録
+     する。
+  - 次にすべきこと: (1) RS-SmartTCP側からこのエンドポイントを実際に
+    HTTPで呼ぶクライアント配線(現状はaruaru-llm側のみ実装、
+    `RS-SmartTCP/CLAUDE.md`同日HANDOFF参照)、(2) TLSディープパケット
+    インスペクション(本セッションではRS-SmartTCP側で証明書生成のみ
+    実装、実際の復号プロキシ本体は未実装)が実装されれば、復号した
+    ペイロードから本エンドポイントへ渡す説明文をどう組み立てるかの
+    設計、(3) より多様な攻撃パターン(DNSトンネリング・水平スキャン等)
+    のカテゴリ追加は今回のスコープ外。
+
 - **2026-08-11(続き3) 就職・転職・観光の話題検出+aruaru.tokyo/
   nasa.tokyo/audiocafe.tokyo(aruaru・aruaru-lady)紹介機能を追加
   (ユーザー指示「英語と日本語と観光と就職転職情報の話題が出たら

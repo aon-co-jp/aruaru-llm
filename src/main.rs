@@ -29,6 +29,7 @@ mod referrals;
 mod web_search;
 mod generation;
 mod hardware;
+mod intrusion_detection;
 mod model_catalog;
 mod nllb;
 mod scoring;
@@ -229,6 +230,66 @@ async fn classify_security(req: Request, device: Arc<dyn GpuDevice>, registry: A
                     is_suspicious: false,
                     engine: format!("embedding-cosine-heuristic-v0-open-cuda-bert{suffix}-error"),
                     static_signals: Vec::new(),
+                },
+            )
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ClassifyTrafficRequest {
+    /// RS-SmartTCP側が観測したトラフィック特徴量から組み立てた短い説明文
+    /// (例: "one source IP probed 60 ports in 3 seconds")。生パケットや
+    /// 数値特徴量そのものではなく、既に自然文化されたものを受け取る設計。
+    description: String,
+    #[serde(default)]
+    tenant: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ClassifyTrafficResponse {
+    label: &'static str,
+    description: &'static str,
+    score: f32,
+    is_suspicious: bool,
+    engine: String,
+}
+
+/// RS-SmartTCPの「AI侵入検知」プラグイン用エンドポイント(2026-08-11新設)。
+/// `classify_security`と同じ`open-cuda-bert`埋め込み+コサイン類似度の
+/// 仕組みで、トラフィック特徴量の説明文をポートスキャン/SYNフラッド/
+/// ブルートフォース/データ持ち出し/正常のいずれかに分類する。
+/// **正直な開示**: 攻撃トラフィックの実データで訓練した専用分類器では
+/// なく、汎用文埋め込みモデルによる意味的類似度のヒューリスティック
+/// (`intrusion_detection.rs`冒頭のモジュールdoc参照)。
+async fn classify_traffic(req: Request, device: Arc<dyn GpuDevice>, registry: Arc<TenantRegistry>) -> Response {
+    let Json(req): Json<ClassifyTrafficRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    log_tenant_usage("security/classify-traffic", &req.tenant, &registry);
+    let suffix = scoring::dispatch_suffix(&device);
+    match intrusion_detection::classify_traffic(&device, &req.description) {
+        Ok(v) => json_response(
+            StatusCode::OK,
+            &ClassifyTrafficResponse {
+                label: v.label,
+                description: v.description,
+                score: v.score,
+                is_suspicious: v.is_suspicious,
+                engine: format!("embedding-cosine-heuristic-v0-open-cuda-bert{suffix}"),
+            },
+        ),
+        Err(err) => {
+            tracing::warn!("classify_traffic failed: {err}");
+            json_response(
+                StatusCode::OK,
+                &ClassifyTrafficResponse {
+                    label: "unknown",
+                    description: "classification failed",
+                    score: 0.0,
+                    is_suspicious: false,
+                    engine: format!("embedding-cosine-heuristic-v0-open-cuda-bert{suffix}-error"),
                 },
             )
         }
@@ -1137,6 +1198,12 @@ async fn main() -> anyhow::Result<()> {
             Ok(()) => tracing::info!("security classifier warmup complete (category embeddings cached)"),
             Err(err) => tracing::warn!("security warmup failed (will retry lazily on first request): {err}"),
         }
+        // RS-SmartTCPの「AI侵入検知」プラグイン用カテゴリ代表ベクトルも
+        // 起動時に前倒しキャッシュ(2026-08-11追加)。
+        match intrusion_detection::warmup(&device) {
+            Ok(()) => tracing::info!("intrusion detection classifier warmup complete (category embeddings cached)"),
+            Err(err) => tracing::warn!("intrusion detection warmup failed (will retry lazily on first request): {err}"),
+        }
         // GPT-2 124M実重み(548MB)のロードも起動時に前倒し(2026-07-25追加)。
         // 失敗しても致命的ではない(/v1/generateへの初回リクエスト時に再試行)。
         match generation::warmup() {
@@ -1175,6 +1242,8 @@ async fn main() -> anyhow::Result<()> {
     let chat_registry = Arc::clone(&registry);
     let classify_device = Arc::clone(&device);
     let classify_registry = Arc::clone(&registry);
+    let classify_traffic_device = Arc::clone(&device);
+    let classify_traffic_registry = Arc::clone(&registry);
     let generate_device = Arc::clone(&device);
     let generate_registry = Arc::clone(&registry);
     let generate_search_device = Arc::clone(&device);
@@ -1193,6 +1262,14 @@ async fn main() -> anyhow::Result<()> {
                 let device = Arc::clone(&classify_device);
                 let registry = Arc::clone(&classify_registry);
                 async move { classify_security(req, device, registry).await }
+            })),
+        )
+        .at(
+            "/v1/security/classify-traffic",
+            post(handler_fn(move |req, _p| {
+                let device = Arc::clone(&classify_traffic_device);
+                let registry = Arc::clone(&classify_traffic_registry);
+                async move { classify_traffic(req, device, registry).await }
             })),
         )
         .at(
