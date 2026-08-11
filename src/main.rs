@@ -1331,7 +1331,13 @@ async fn main() -> anyhow::Result<()> {
         .at("/healthz", get(plain(|| Box::pin(healthz()))))
         .with_cors();
 
-    let bind_addr: std::net::SocketAddr = "0.0.0.0:4600".parse().expect("static bind address is always valid");
+    // `ARUARU_LLM_BIND`環境変数で上書き可能(2026-08-11追加、Android
+    // 単体版向け——端末上で自己完結させるため`127.0.0.1`限定で起動し、
+    // 外部ネットワークへは一切listenしないようにする)。
+    let bind_addr: std::net::SocketAddr = std::env::var("ARUARU_LLM_BIND")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| "0.0.0.0:4600".parse().expect("static bind address is always valid"));
     tracing::info!("aruaru-llm listening on {bind_addr} (shared multi-tenant instance)");
     let (_addr, handle) = Server::new(TcpListener::bind(bind_addr)).run(app).await?;
     handle.await.map_err(|e| anyhow::anyhow!("server task panicked: {e}"))
