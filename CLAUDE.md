@@ -226,6 +226,36 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-08-11(続き) 実機テストで発覚した`lookup_country`の実バグを修正
+  (ユーザー指示「実際のopen-englishでTESTしたい」を受け、
+  `aruaru-llm`+`open-english-server`を実際に起動してブラウザで実際に
+  研修モードを最後まで動かして検証した結果)**:
+  1. **発見した実バグ**: `POST /v1/geo/lookup`は当初、クエリ全体と
+     国名の**完全一致**のみを見ていたため、`open-english`が実際に送信
+     する「発話文そのまま」("I FROM JAPAN."等)を渡すと一致しなかった
+     (ブラウザで実際に「Where are you from?」に「I from Japan.」と
+     入力したところ、DB検索が空振りし固定の一般的な返答にフォール
+     バックしてしまうことを実際の画面で確認)。
+  2. **修正**: `lookup_country`を部分一致(埋め込みJSON側は
+     `needle.contains(country_en)`/`trimmed.contains(country_ja)`、
+     aruaru-db側は`LIKE '%...%'`)へ変更。回帰テスト
+     `lookup_country_matches_country_name_embedded_in_a_sentence`を
+     追加。
+  3. **実機再検証**: 修正後、実際に`cargo build --release`で再ビルド
+     したバイナリを再起動し、ブラウザで同じ操作("I from Japan.")を
+     再現したところ、`"I love Mount Fuji and Sushi! / 私は富士山と
+     寿司が大好きです!\nA popular souvenir there is Folding fan. /
+     そこの人気のお土産は扇子です。"`という正しいDB駆動の応答が実際に
+     表示されることを確認した(型チェック・単体テストだけで完了と
+     報告しない方針の実践——実際にサーバーを2回起動し直し、ブラウザ
+     操作で再現・修正確認まで行った)。
+  4. **検証結果**: `cargo test --release`**56件全green**(既存55件+
+     回帰テスト1件)。
+  - 次にすべきこと: 特になし(この不具合自体は解消済み)。今後国名検索
+    ロジックを変更する際は、必ず「発話文全体を渡す」実際の呼び出し
+    パターンで再テストすること(単発の国名のみを渡す単体テストだけでは
+    この種のバグを見逃す)。
+
 - **2026-08-11 地理・観光・名物データベースを新設(`geo_content.rs`+
   `POST /v1/geo/random`・`POST /v1/geo/lookup`)、ユーザー指示
   「open-englishの自己紹介トレーニングが『I'm from Australia. I love
