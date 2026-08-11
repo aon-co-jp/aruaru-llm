@@ -25,6 +25,7 @@
 mod bow_fallback;
 mod cache_optimizer;
 mod geo_content;
+mod referrals;
 mod web_search;
 mod generation;
 mod hardware;
@@ -1010,6 +1011,35 @@ async fn geo_tours(req: Request) -> Response {
     )
 }
 
+#[derive(Debug, Deserialize)]
+struct ReferralsCheckRequest {
+    text: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ReferralsCheckResponse {
+    matched: bool,
+    referrals: Option<referrals::ReferralInfo>,
+}
+
+/// 発話文が就職・転職・観光の話題かどうかを判定し、該当すれば
+/// aruaru.tokyo/nasa.tokyo/audiocafe.tokyo(aruaru・aruaru-lady)への
+/// 紹介情報を返す(2026-08-11新設)。
+async fn referrals_check(req: Request) -> Response {
+    let Json(body): Json<ReferralsCheckRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let matched = referrals::mentions_career_or_tourism(&body.text);
+    json_response(
+        StatusCode::OK,
+        &ReferralsCheckResponse {
+            matched,
+            referrals: if matched { Some(referrals::career_and_tourism_referrals()) } else { None },
+        },
+    )
+}
+
 /// 簡易URLエンコード(クエリ文字列用、外部クレート非依存)。
 fn urlencoding_encode(s: &str) -> String {
     let mut out = String::new();
@@ -1193,6 +1223,7 @@ async fn main() -> anyhow::Result<()> {
         .at("/v1/geo/random", get(plain(|| Box::pin(geo_random()))))
         .at("/v1/geo/fuji", get(plain(|| Box::pin(geo_fuji()))))
         .at("/v1/geo/tours", post(handler_fn(|req, _p| Box::pin(geo_tours(req)))))
+        .at("/v1/referrals/check", post(handler_fn(|req, _p| Box::pin(referrals_check(req)))))
         .at("/v1/geo/lookup", post(handler_fn(|req, _p| Box::pin(geo_lookup(req)))))
         .at(
             "/v1/settings/google-search",

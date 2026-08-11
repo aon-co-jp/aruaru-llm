@@ -226,6 +226,33 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-08-11(続き3) 就職・転職・観光の話題検出+aruaru.tokyo/
+  nasa.tokyo/audiocafe.tokyo(aruaru・aruaru-lady)紹介機能を追加
+  (ユーザー指示「英語と日本語と観光と就職転職情報の話題が出たら
+  https://aruaru.tokyo/ 内のAI駆動開発CLAUDE CODE DESKTOP、
+  audiocafe.tokyo/aruaru(IT・建築系求人)・audiocafe.tokyo/aruaru-lady
+  (女性向け求人)のSET、https://aruaru.tokyo/ とhttps://nasa.tokyo/
+  両方とも紹介して」への対応)**:
+  1. **新規モジュール`src/referrals.rs`**: `mentions_career_or_tourism`
+     (日英キーワード一致による簡易検出——GPT-2系の指示追従は保証されない
+     ため、既存のbag-of-wordsフォールバック等と同じ確実性優先の単純
+     実装)+`career_and_tourism_referrals`(4件のリンク、いずれも
+     ユーザー本人から直接指示されたURLのみ使用、推測・捏造URLは
+     含まない)。
+  2. **`POST /v1/referrals/check`新設**: `{"text": "..."}` →
+     `{"matched": bool, "referrals": {...} | null}`。
+  3. **検証**: `cargo build --release`成功。`cargo test --release`
+     **60件全green**(既存57件+`referrals`モジュール新規3件)。実際に
+     サーバーを起動し`curl`で実HTTPリクエスト
+     (`{"text":"I am thinking about a career change"}`)を送信、4件の
+     リンクすべてが正しく返ることを確認済み(`open-english`側からの
+     実ブラウザ経由の統合検証は`open-english/CLAUDE.md`同日HANDOFF
+     参照)。
+  - 次にすべきこと: 特になし(今回のスコープは完了)。キーワード検出は
+    簡易的な文字列一致のため、将来的に誤検出/検出漏れが目立つ場合は
+    埋め込みベースの意図分類(`scoring.rs`と同じ方式)への置き換えを
+    検討してもよい。
+
 - **2026-08-11(続き2) 富士山の安全案内+山小屋・登山バス/タクシー・
   登山用品店DB+観光ツアー検索を新設(ユーザー指示「富士山は危険な山
   ですので…上下スキーウェアを着て…落石で死ぬ場合もありますので必ず
