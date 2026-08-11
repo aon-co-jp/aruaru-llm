@@ -226,6 +226,33 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-08-11(続き5) 高VRAM帯NVIDIA GPU情報を日英Web検索で裏取りし
+  `hardware.rs`へ反映(ユーザーが言及した「RTX5950X」という製品名が
+  実在しないことの確認+実在する高級GPU情報の正確な記載)**:
+  1. **誤りの確認**: ユーザー言及の「RTX5950X」はNVIDIA製品として実在
+     しない——「5950X」はAMD Ryzenの型番であり、NVIDIA RTXシリーズの
+     命名規則とは異なる。ユーザーへの確認質問で「今は具体的な実装依頼
+     ではない」と回答を得た上で、実在する製品の情報を正確に反映する
+     形で対応した。
+  2. **日英Web検索で確認した実在の高VRAM帯製品**: RTX 5090
+     (Blackwellアーキテクチャ、32GB GDDR7)・RTX 6000 Ada(48GB)・
+     RTX PRO 6000 Blackwell(96GB、ECC対応ワークステーション向け)。
+  3. **`hardware.rs`への反映**: `recommend_id_for_vram`のdocコメントに
+     上記の実在確認結果を出典付きで追記。**正直な開示**: 現在のモデル
+     カタログ最大が`gpt2-xl`(1.5B、約6.43GB)に留まるため、これらの
+     高VRAM帯GPUを検出してもカタログ最大を推奨するだけで、それ以上
+     大きなモデルを実在しないかのように新規推奨することはない——
+     名前だけ挙げて実在しない性能向上を示唆しないよう明記した。
+  4. **検証**: 新規テスト`recommend_for_real_high_end_gpus_caps_at_
+     catalog_max_without_overclaiming`で、RTX 5090/RTX 6000 Ada/
+     RTX PRO 6000 Blackwellそれぞれの実VRAM容量を渡し、いずれも
+     `gpt2-xl`に収束することを確認。`cargo test --release hardware`
+     **4件全green**(既存3件+新規1件)。
+  - 次にすべきこと: モデルカタログに`gpt2-xl`より大きい実在モデル
+    (別アーキテクチャ含む)を追加する場合、この高VRAM帯GPU情報が
+    実際の推奨先として活きる——現状はカタログの上限が先に律速して
+    いるため、優先度はカタログ拡張側にある。
+
 - **2026-08-11(続き4) RS-SmartTCPの「AI侵入検知」プラグイン向けに
   `POST /v1/security/classify-traffic`を新設(ユーザー指示「TLS復号・
   AI侵入検知の本実装して」→調査の上、実際の機械学習モデル推論として

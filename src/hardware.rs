@@ -61,6 +61,26 @@ pub struct HardwareSummary {
 /// VRAM容量に応じた推奨モデルサイズの簡易ヒューリスティック。
 /// **正直な開示**: モデルサイズ(パラメータ数)とVRAM容量の単純な比較に
 /// 基づく目安であり、精密な性能予測ではない(モジュールdoc参照)。
+///
+/// ## 2026-08-11追記: 高級GPUの実在確認(日英Web検索で裏取り)
+///
+/// ユーザーから「RTX5950X」という製品名の言及があったが、これは実在
+/// しない(「5950X」はAMD Ryzenの型番であり、NVIDIA RTXシリーズの
+/// 命名規則とは異なる——ユーザーへ確認済みの誤り)。実在する2026年
+/// 時点の高VRAM帯NVIDIA製品を日英Web検索で確認した:
+/// **RTX 5090**(Blackwellアーキテクチャ、32GB GDDR7、
+/// [Jarvis Labs](https://jarvislabs.ai/ai-faqs/nvidia-rtx-5090-specs))・
+/// **RTX 6000 Ada**(48GB、
+/// [getdeploying.com](https://getdeploying.com/gpus/nvidia-rtx-5090-vs-nvidia-rtx-6000-ada))・
+/// **RTX PRO 6000 Blackwell**(96GB、ECC対応のワークステーション向け、
+/// [tech.sportskeeda.com](https://tech.sportskeeda.com/gaming-news/nvidia-rtx-pro-6000-vs-rtx-5090))。
+/// **正直な開示**: 現在のモデルカタログ(`model_catalog.rs`)最大が
+/// `gpt2-xl`(1.5B、約6.43GB)に留まるため、これらの高VRAM帯GPUを
+/// 実際に検出しても、本ヒューリスティックはカタログ最大の`gpt2-xl`を
+/// 推奨するだけで、それ以上大きなモデルを新たに推奨することはない
+/// (VRAMが余っても実際に活用できるより大きなモデルがカタログに
+/// 存在しないため)——名前だけ挙げて実在しない性能向上を示唆しない
+/// ようにする。
 fn recommend_id_for_vram(vram_bytes: Option<u64>) -> &'static str {
     const GB: u64 = 1024 * 1024 * 1024;
     match vram_bytes {
@@ -68,7 +88,7 @@ fn recommend_id_for_vram(vram_bytes: Option<u64>) -> &'static str {
         Some(v) if v < 2 * GB => "gpt2",        // VRAM 2GB未満 → 124M
         Some(v) if v < 4 * GB => "gpt2-medium",  // 2-4GB → 355M
         Some(v) if v < 8 * GB => "gpt2-large",   // 4-8GB → 774M
-        Some(_) => "gpt2-xl",                    // 8GB以上 → 1.5B
+        Some(_) => "gpt2-xl",                    // 8GB以上(RTX 5090の32GB・RTX 6000 Adaの48GB・RTX PRO 6000 Blackwellの96GB等も含む) → カタログ最大の1.5B
     }
 }
 
@@ -180,6 +200,20 @@ mod tests {
         assert_eq!(recommend_id_for_vram(Some(3 * 1024 * 1024 * 1024)), "gpt2-medium"); // 3GB
         assert_eq!(recommend_id_for_vram(Some(6 * 1024 * 1024 * 1024)), "gpt2-large"); // 6GB
         assert_eq!(recommend_id_for_vram(Some(12 * 1024 * 1024 * 1024)), "gpt2-xl"); // 12GB
+    }
+
+    #[test]
+    fn recommend_for_real_high_end_gpus_caps_at_catalog_max_without_overclaiming() {
+        // 2026-08-11: 実在する高VRAM帯NVIDIA製品(日英Web検索で裏取り済み、
+        // モジュールdoc参照)を実際のVRAM容量で検証する。いずれもカタログ
+        // 最大のgpt2-xl(1.5B)止まりであり、それ以上大きなモデルを
+        // 実在しないかのように推奨しないことを確認する。
+        let rtx_5090_vram = 32 * 1024 * 1024 * 1024u64; // RTX 5090: 32GB GDDR7
+        let rtx_6000_ada_vram = 48 * 1024 * 1024 * 1024u64; // RTX 6000 Ada: 48GB
+        let rtx_pro_6000_blackwell_vram = 96 * 1024 * 1024 * 1024u64; // RTX PRO 6000 Blackwell: 96GB
+        assert_eq!(recommend_id_for_vram(Some(rtx_5090_vram)), "gpt2-xl");
+        assert_eq!(recommend_id_for_vram(Some(rtx_6000_ada_vram)), "gpt2-xl");
+        assert_eq!(recommend_id_for_vram(Some(rtx_pro_6000_blackwell_vram)), "gpt2-xl");
     }
 
     #[test]
