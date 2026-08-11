@@ -73,6 +73,33 @@ pub struct WorldCapital {
     pub souvenir_ja: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct FujiMountainHut {
+    pub name_ja: String,
+    pub name_en: String,
+    pub station_ja: String,
+    pub station_en: String,
+    pub season_ja: String,
+    pub season_en: String,
+    pub phone: String,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct FujiTransportOption {
+    pub name_ja: String,
+    pub name_en: String,
+    pub note_ja: String,
+    pub note_en: String,
+    pub url: String,
+}
+
+/// 登山用品(スキーウェア・ヘルメット・登山靴)のレンタル/購入店。
+/// `FujiTransportOption`と構造が同じだが、意味的に別カテゴリのため
+/// 別の型として定義する(呼び出し側APIレスポンスのフィールド名を
+/// `gear_shops`として明確に分ける)。
+pub type FujiGearShop = FujiTransportOption;
+
 #[derive(Debug, Deserialize)]
 struct GeoDataset {
     #[serde(rename = "_disclosure_ja")]
@@ -84,6 +111,13 @@ struct GeoDataset {
     japan_prefectures: Vec<JapanPrefecture>,
     us_states: Vec<UsState>,
     world_capitals: Vec<WorldCapital>,
+    fuji_safety_ja: String,
+    fuji_safety_en: String,
+    fuji_source_ja: String,
+    fuji_source_en: String,
+    fuji_transport_reservations: Vec<FujiTransportOption>,
+    fuji_gear_shops: Vec<FujiGearShop>,
+    fuji_mountain_huts: Vec<FujiMountainHut>,
 }
 
 fn dataset() -> &'static GeoDataset {
@@ -234,6 +268,7 @@ pub async fn seed_database_if_configured() {
         "CREATE TABLE IF NOT EXISTS geo_japan_prefectures (name_en TEXT PRIMARY KEY, name_ja TEXT, landmark_ja TEXT, landmark_en TEXT, food_ja TEXT, food_en TEXT)",
         "CREATE TABLE IF NOT EXISTS geo_us_states (name_en TEXT PRIMARY KEY, name_ja TEXT, landmark_en TEXT, landmark_ja TEXT, food_en TEXT, food_ja TEXT)",
         "CREATE TABLE IF NOT EXISTS geo_world_capitals (country_en TEXT PRIMARY KEY, country_ja TEXT, capital_en TEXT, capital_ja TEXT, landmark_en TEXT, landmark_ja TEXT, food_en TEXT, food_ja TEXT, souvenir_en TEXT, souvenir_ja TEXT)",
+        "CREATE TABLE IF NOT EXISTS geo_fuji_mountain_huts (name_en TEXT PRIMARY KEY, name_ja TEXT, station_ja TEXT, station_en TEXT, season_ja TEXT, season_en TEXT, phone TEXT, url TEXT)",
     ];
     for stmt in ddl {
         if let Err(e) = client.execute(stmt, &[]).await {
@@ -340,6 +375,41 @@ pub async fn lookup_country(query: &str) -> GeoLookupResponse {
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct FujiInfoResponse {
+    pub safety_ja: String,
+    pub safety_en: String,
+    pub source_ja: String,
+    pub source_en: String,
+    pub transport_reservations: Vec<FujiTransportOption>,
+    pub gear_shops: Vec<FujiGearShop>,
+    pub mountain_huts: Vec<FujiMountainHut>,
+}
+
+/// 富士山の話題が出た際に案内する安全上の注意+山小屋(吉田口ルート)の
+/// 予約先一覧(2026-08-11新設、ユーザー指示「富士山は危険な山ですので、
+/// 1年中冬の様に寒いので上下スキーウェアを着て登山して、途中の山小屋を
+/// 必ず安全な登山の為に予約して一泊されてから登山して下さいませ」+
+/// 「https://mtfuji.jpn.org/availablelist.php ここのHP中身はCOPYして
+/// DB化してから富士山の話題が出たら日本語と英語で紹介して」)。
+/// **正直な開示**: 営業期間・電話番号は`mtfuji.jpn.org/availablelist.php`
+/// (2026-08-11時点)から収集した静的データであり、山小屋の営業状況は
+/// 毎年変わる——このレスポンスの`source_ja`/`source_en`フィールドで
+/// 常に出典元と「利用前に直接確認すること」を明記する(既存の
+/// 「正直な開示」方針、誇張しない)。
+pub fn fuji_info() -> FujiInfoResponse {
+    let d = dataset();
+    FujiInfoResponse {
+        safety_ja: d.fuji_safety_ja.clone(),
+        safety_en: d.fuji_safety_en.clone(),
+        source_ja: d.fuji_source_ja.clone(),
+        source_en: d.fuji_source_en.clone(),
+        transport_reservations: d.fuji_transport_reservations.clone(),
+        gear_shops: d.fuji_gear_shops.clone(),
+        mountain_huts: d.fuji_mountain_huts.clone(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -350,6 +420,15 @@ mod tests {
         assert_eq!(d.japan_prefectures.len(), 47, "must cover all 47 Japanese prefectures");
         assert_eq!(d.us_states.len(), 50, "must cover all 50 US states");
         assert!(d.world_capitals.len() >= 50, "should have a substantial set of world capitals");
+        assert!(!d.fuji_mountain_huts.is_empty(), "must have at least one Mt. Fuji mountain hut entry");
+    }
+
+    #[test]
+    fn fuji_info_includes_safety_advisory_and_huts() {
+        let info = fuji_info();
+        assert!(info.safety_ja.contains("危険"));
+        assert!(info.safety_en.to_lowercase().contains("dangerous"));
+        assert!(info.mountain_huts.iter().any(|h| h.name_en == "Sato-goya"));
     }
 
     #[tokio::test]

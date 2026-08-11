@@ -935,6 +935,95 @@ async fn geo_random() -> Response {
     json_response(StatusCode::OK, &geo_content::random_entry().await)
 }
 
+/// 富士山の安全上の注意+山小屋(吉田口ルート)予約先一覧を返す
+/// (2026-08-11新設、ユーザー指示「富士山の話題が出たら日本語と英語で
+/// 紹介して」への対応)。
+async fn geo_fuji() -> Response {
+    json_response(StatusCode::OK, &geo_content::fuji_info())
+}
+
+#[derive(Debug, Deserialize)]
+struct GeoToursRequest {
+    place: String,
+}
+
+#[derive(Debug, Serialize)]
+struct GeoToursResponse {
+    configured: bool,
+    web_results: Vec<web_search::SearchResult>,
+    youtube_search_url: String,
+    disclosure_ja: String,
+    disclosure_en: String,
+}
+
+/// 「日本も世界も観光で訪れるなら、観光ツアーの紹介とオンライン予約を
+/// その都度検索して」への対応(2026-08-11新設)。既存のGoogle Custom
+/// Search連携(`web_search.rs`、`/v1/generate-with-search`と共通の
+/// APIキー設定)をそのまま再利用し、`"<place> 観光ツアー オンライン予約"`
+/// で検索する。**正直な開示**: ユーザー自身のGoogle Search APIキー設定
+/// (`POST /v1/settings/google-search`)が必要——未設定の場合は
+/// `configured: false`+空の結果を正直に返す(黙って無関係な結果を
+/// 返さない)。YouTube検索は同様のAPI契約が別途必要なため、実際の検索
+/// 結果ではなくYouTube検索結果ページへの直リンク(URLエンコード済み)を
+/// 返す設計とした(Google Custom Search同様の実装は今回のスコープ外、
+/// 誇張しない)。
+async fn geo_tours(req: Request) -> Response {
+    let Json(body): Json<GeoToursRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let place = body.place.trim();
+    if place.is_empty() {
+        return json_response(StatusCode::BAD_REQUEST, &serde_json::json!({"error": "place must not be empty"}));
+    }
+
+    let youtube_query = format!("{place} 観光ツアー tour");
+    let youtube_search_url = format!(
+        "https://www.youtube.com/results?search_query={}",
+        urlencoding_encode(&youtube_query)
+    );
+
+    if !web_search::is_configured() {
+        return json_response(
+            StatusCode::OK,
+            &GeoToursResponse {
+                configured: false,
+                web_results: vec![],
+                youtube_search_url,
+                disclosure_ja: "Google検索(観光ツアー・オンライン予約)は未設定です。設定パネルからAPIキーとcxを保存してください。".to_string(),
+                disclosure_en: "Google Search for tourism tours/online booking is not configured yet. Save your API key and cx in the settings panel.".to_string(),
+            },
+        );
+    }
+
+    let query = format!("{place} 観光ツアー オンライン予約 tour booking");
+    let web_results = web_search::search(&query, 5).await.unwrap_or_default();
+    json_response(
+        StatusCode::OK,
+        &GeoToursResponse {
+            configured: true,
+            web_results,
+            youtube_search_url,
+            disclosure_ja: "検索結果は外部サイト(Google)由来です。実際の予約はリンク先の各事業者サイトで行ってください。".to_string(),
+            disclosure_en: "Results are sourced from an external site (Google). Complete any actual booking on the linked provider's own site.".to_string(),
+        },
+    )
+}
+
+/// 簡易URLエンコード(クエリ文字列用、外部クレート非依存)。
+fn urlencoding_encode(s: &str) -> String {
+    let mut out = String::new();
+    for byte in s.as_bytes() {
+        match *byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*byte as char);
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
 #[derive(Debug, Deserialize)]
 struct GeoLookupRequest {
     country: String,
@@ -1102,6 +1191,8 @@ async fn main() -> anyhow::Result<()> {
         )
         .at("/v1/models/catalog", get(plain(|| Box::pin(list_model_catalog()))))
         .at("/v1/geo/random", get(plain(|| Box::pin(geo_random()))))
+        .at("/v1/geo/fuji", get(plain(|| Box::pin(geo_fuji()))))
+        .at("/v1/geo/tours", post(handler_fn(|req, _p| Box::pin(geo_tours(req)))))
         .at("/v1/geo/lookup", post(handler_fn(|req, _p| Box::pin(geo_lookup(req)))))
         .at(
             "/v1/settings/google-search",

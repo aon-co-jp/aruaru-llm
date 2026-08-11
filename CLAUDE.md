@@ -226,6 +226,57 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-08-11(続き2) 富士山の安全案内+山小屋・登山バス/タクシー・
+  登山用品店DB+観光ツアー検索を新設(ユーザー指示「富士山は危険な山
+  ですので…上下スキーウェアを着て…落石で死ぬ場合もありますので必ず
+  ヘルメットもして…山小屋を必ず予約して一泊されてから登山して」+
+  「https://mtfuji.jpn.org/availablelist.php ここのHP中身はCOPYして
+  DB化してから富士山の話題が出たら日本語と英語で紹介して」+「登山バス
+  タクシーの予約」「スキーウェアとヘルメットと登山靴などを安く販売
+  しているお店」+「日本も世界も観光で訪れるなら観光ツアーの紹介と
+  オンライン予約をその都度検索して」への対応)**:
+  1. **富士山データ収集**(`data/geo_content.json`拡張): WebFetchで
+     `https://mtfuji.jpn.org/availablelist.php`(吉田口ルート山小屋の
+     営業期間一覧)を実際に取得し、山小屋18件(五合目〜八合目)を
+     `fuji_mountain_huts`として収録。WebSearchで登山バス
+     (`bus.fujikyu.co.jp`)・吉田ルート通行予約システム
+     (`fujisan-climb.jp`)・タクシー会社一覧(`fujisanpo.com`)・
+     登山用品レンタル4店(やまどうぐレンタル屋・そらのした・VIPツアー・
+     山岳同盟)を実際に検索して`fuji_transport_reservations`/
+     `fuji_gear_shops`として収録。安全上の注意文(スキーウェア+ヘルメット
+     着用、山小屋の事前予約・一泊を強く推奨)を`fuji_safety_ja`/
+     `fuji_safety_en`に明記。
+  2. **`GET /v1/geo/fuji`新設**: 安全案内・出典・山小屋一覧・バス/
+     タクシー予約先・登山用品店を一括で返す。**正直な開示**: 営業期間・
+     電話番号は2026-08-11時点の収集値であり毎年変わるため、レスポンス
+     の`source_ja`/`source_en`で常に出典と「利用前に直接確認すること」を
+     明記する。
+  3. **`POST /v1/geo/tours`新設**(観光ツアー紹介+オンライン予約検索):
+     既存の`web_search.rs`(Google Custom Search連携、
+     `/v1/generate-with-search`と同じAPIキー設定を共有)を再利用し、
+     `"<place> 観光ツアー オンライン予約 tour booking"`で検索する。
+     APIキー未設定時は`configured: false`+空結果を正直に返す(黙って
+     結果を偽装しない)。YouTube検索については専用のAPI連携までは
+     実装せず、URLエンコード済みのYouTube検索結果ページへの直リンクを
+     返す設計に留めた(誇張しない、実装スコープを正直に開示)。
+  4. **検証**: `cargo build --release`成功。`cargo test --release`
+     **57件全green**(既存55件+`fuji_info_includes_safety_advisory_
+     and_huts`等の新規テスト)。実際にサーバーを起動し、
+     `open-english`側から研修モードで"I love Japan and Mount Fuji."を
+     送信→`/v1/geo/lookup`(Japan一致)→富士山関連ランドマークを検知して
+     `/v1/geo/fuji`を追加取得→安全案内・山小屋例・バス予約先・登山用品
+     店が実際に日英併記で表示されることをブラウザ上で確認済み(型
+     チェックのみで完了と報告しない方針の実践)。`/v1/geo/tours`は
+     このセッションではGoogle Search APIキー未設定のため
+     `configured: false`の正直なフォールバック応答となることも実際に
+     確認した(実際の検索結果表示はAPIキー設定後に別途検証が必要)。
+  - 次にすべきこと: (1) 実際にGoogle Search APIキーを設定した状態での
+    `/v1/geo/tours`のE2E検証(検索結果が実際に返ることの確認、
+    `web_search.rs`側の既存の未検証事項と同じ)、(2) YouTube Data APIの
+    ような専用連携があれば、直リンクではなく実際の検索結果(動画タイトル・
+    サムネイル等)を返せるようになる可能性の検討、(3) 富士山以外の
+    山(立山・穂高等)への同様のDB拡張は今回のスコープ外。
+
 - **2026-08-11(続き) 実機テストで発覚した`lookup_country`の実バグを修正
   (ユーザー指示「実際のopen-englishでTESTしたい」を受け、
   `aruaru-llm`+`open-english-server`を実際に起動してブラウザで実際に
