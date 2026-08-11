@@ -181,6 +181,14 @@ static MODEL: OnceLock<EmbeddingModel> = OnceLock::new();
 static INTENT_EMBEDDINGS: OnceLock<Vec<Vec<f32>>> = OnceLock::new();
 
 fn model_dir() -> PathBuf {
+    // `ARUARU_LLM_EMBED_MODEL_DIR`環境変数で上書き可能(2026-08-11追加、
+    // Android単体版向け——コンパイル時固定パス〈`CARGO_MANIFEST_DIR`〉は
+    // Android実機上には存在しないため、実行時にアプリの内部ストレージへ
+    // 展開したモデルディレクトリを指定できるようにする、`open-english/
+    // server`の`OPEN_ENGLISH_SERVER_ROOT`と同じパターン)。
+    if let Ok(dir) = std::env::var("ARUARU_LLM_EMBED_MODEL_DIR") {
+        return PathBuf::from(dir);
+    }
     // aruaru-llm/models/multilingual-e5-small(CLAUDE.md記載のダウンロード済みモデル)。
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models/multilingual-e5-small")
 }
