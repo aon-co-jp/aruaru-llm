@@ -24,6 +24,7 @@
 
 mod bow_fallback;
 mod cache_optimizer;
+mod geo_content;
 mod web_search;
 mod generation;
 mod hardware;
@@ -928,6 +929,27 @@ async fn healthz() -> Response {
     text_response(StatusCode::OK, "ok")
 }
 
+/// 日本の都道府県1件・米国の州1件・世界の首都1件をランダムに返す
+/// (open-englishの自己紹介トレーニング用、2026-08-11新設)。
+async fn geo_random() -> Response {
+    json_response(StatusCode::OK, &geo_content::random_entry().await)
+}
+
+#[derive(Debug, Deserialize)]
+struct GeoLookupRequest {
+    country: String,
+}
+
+/// 「今度オーストラリアに旅行/出張の予定がある」のような発話向けの
+/// 国名検索(`{"country": "Australia"}`または`{"country": "日本"}`)。
+async fn geo_lookup(req: Request) -> Response {
+    let Json(body): Json<GeoLookupRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    json_response(StatusCode::OK, &geo_content::lookup_country(&body.country).await)
+}
+
 /// 引数を取らないハンドラを`handler_fn`のシグネチャへ橋渡しする。
 fn plain(f: impl Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = Response> + Send>> + Send + Sync + 'static) -> Handler {
     handler_fn(move |_req, _params| f())
@@ -1004,6 +1026,11 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // 地理・観光DB(2026-08-11追加): aruaru-dbへベストエフォートでseedを
+    // 投入する(接続できない/未設定ならログのみで正常起動を継続、
+    // geo_content.rsのモジュールdoc参照)。
+    geo_content::seed_database_if_configured().await;
+
     // 2026-07-27追記(使いやすさ改善): GPU検出feature(hw-detect-vulkan/
     // hw-detect-directx)はいずれも既定offのため、何も知らずにビルドした
     // ユーザーは常にCPU-onlyフォールバック(最小モデル固定推奨)に静かに
@@ -1074,6 +1101,8 @@ async fn main() -> anyhow::Result<()> {
             })),
         )
         .at("/v1/models/catalog", get(plain(|| Box::pin(list_model_catalog()))))
+        .at("/v1/geo/random", get(plain(|| Box::pin(geo_random()))))
+        .at("/v1/geo/lookup", post(handler_fn(|req, _p| Box::pin(geo_lookup(req)))))
         .at(
             "/v1/settings/google-search",
             post(handler_fn(|req, _p| Box::pin(set_google_search_settings(req))))

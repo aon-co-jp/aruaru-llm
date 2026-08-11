@@ -63,6 +63,22 @@ rust-bert = { version = "0.23", optional = true }
 # 採用する(2026-08-04、ユーザー指示「libtorchは、WEB上ではなく、PCに
 # インストール形で使用可能でしたらその様にしたい」)。
 tch = { version = "0.17", optional = true }
+# 地理・観光データベース(2026-08-11追加、ユーザー指示「日本全国・都道府県
+# 別、アメリカは州別、世界中の首都名や観光名所・名物料理・お土産の
+# DATABASEを作成して」)。aruaru-db(pgwireプロトコル、実質Postgres互換)へ
+# 接続するための素のPostgresクライアント。aruaru-dbは`DUAL_DATABASE_URL`
+# 経由で本物のPostgreSQLへ既にミラーする「DUAL DB」冗長化機能を持つため、
+# クライアント側は単一のPostgres接続を張るだけでよい(aruaru-db側で
+# 冗長化が完結する設計、詳細はPORTING.md参照)。
+tokio-postgres = "0.7"
+rand = "0.8"
+# 埋め込み地理データ(data/geo_content.json)のパースにはRust-JSON
+# (`../Rust-JSON`、旧称RJSON/RustJSON)を使う(ユーザー指示「JSONより
+# RS-JSONを使って」)。内部的には`serde_json::Value`をそのまま使う設計
+# (このクレート自身のdocコメント参照)なので、`serde_json::from_value`は
+# 引き続き必要——置き換えたのは生の文字列パース呼び出し(`parse_strict`)
+# のみで、型付きDeserialize自体はserdeに委ねる。
+rust-json = { path = "../RS-JSON" }
 
 [features]
 default = []

@@ -226,6 +226,61 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-08-11 地理・観光・名物データベースを新設(`geo_content.rs`+
+  `POST /v1/geo/random`・`POST /v1/geo/lookup`)、ユーザー指示
+  「open-englishの自己紹介トレーニングが『I'm from Australia. I love
+  kangaroo & koala』程度しか対応できなかったのを、日本全国・都道府県別、
+  アメリカは州別、世界中の首都名・観光名所・名物料理・お土産の
+  DATABASEを作成して」+「今度どこどこの国に旅行/仕事で行く予定がある、
+  のようなフレーズにもDBで対応して」への対応**:
+  1. **データ範囲(正直な開示)**: 日本47都道府県+米国50州は全件収録、
+     世界の首都は主要60ヶ国分のみ(国連加盟196ヶ国全てではない、今後
+     拡張予定)。各エントリにランドマーク1件+名物料理1件(+首都は
+     お土産1件)を日英で収録した`data/geo_content.json`を新設。
+  2. **DUAL DB方針の確認(実装不要と判明)**: `aruaru-db`自身が
+     `DUAL_DATABASE_URL`経由で本物のPostgreSQLへミラーする冗長化機能
+     (`aruaru-dist::dual_database::DualDatabaseMirror`)を既に持って
+     いるため、本クレート側でDUAL DB化を再実装する必要はなく、単一の
+     Postgres接続(`ARUARU_LLM_GEO_DATABASE_URL`)を張るだけで済む設計
+     にした。
+  3. **フォールバック設計**: `ARUARU_LLM_GEO_DATABASE_URL`未設定・
+     接続失敗時は埋め込みJSON(`include_str!`)からそのまま応答する
+     (既存のbag-of-wordsフォールバックと同じ「サービスを止めない」
+     思想)。起動時に`seed_database_if_configured()`をベストエフォートで
+     呼び、接続できた場合のみ`CREATE TABLE IF NOT EXISTS`+
+     `ON CONFLICT DO NOTHING`で冪等にseed投入する。
+  4. **JSONパースはRust-JSON(`../RS-JSON`)を使用**(ユーザー指示
+     「JSONよりRS-JSONを使って」): 埋め込みJSONの生文字列パースを
+     `serde_json::from_str`から`rust_json::parse_strict`+
+     `serde_json::from_value`へ変更。Rust-JSON自身が値モデルとして
+     `serde_json::Value`を使う設計のため、型付きDeserialize自体は
+     引き続きserdeに委ねる(Rust-JSON自身のモジュールdocに明記された
+     設計方針通り)。HTTPリクエストボディの`Json<T>`抽出(RPoem側)は
+     対象外(該当箇所なし、静的データファイルのパースのみ対応)。
+  5. **検証**: `cargo build --release`成功(既存2件のpre-existing
+     dead_code警告のみ)。`cargo test --release`**55件全green**
+     (既存51件+geo_content新規4件: 埋め込みデータセットの件数確認・
+     DB未接続時のランダム取得フォールバック・国名検索の日英一致・
+     未知の国名での`found:false`)。
+  6. **正直な開示・未検証事項**: 実際に稼働中の`aruaru-db`インスタンス
+     への接続検証はこのセッションでは未実施(環境にaruaru-dbの実行中
+     プロセスが無いため)——埋め込みJSONフォールバック経路のみを実際に
+     検証済み。次回、実際に`aruaru-db`を起動した状態での
+     `ARUARU_LLM_GEO_DATABASE_URL`設定+seed投入+`/v1/geo/random`の
+     実HTTP検証が必要。
+  - 次にすべきこと: (1) 実際に稼働中のaruaru-dbへの接続・seed投入の
+    実機検証、(2) 世界の首都データを国連加盟196ヶ国全てへ拡張、
+    (3) ユーザーからさらに要望のあった「現在のハードウェア環境からの
+    推薦LLM・少し小さい/大きいLLMの特徴・メリデメを日英表示」機能や、
+    「起動時メンテナンス中に最新LLM情報・最新NVIDIA/AMD/Intel GPU情報を
+    収集してDB化する」機能、GPU/ゲーム推奨(4K/5K/120FPS対応・基本無料
+    オンラインゲームの流行調査)・Amazon購入リンク表示は、いずれも
+    広範な最新情報の継続調査(このセッション内のGoogle検索では網羅
+    できない規模)を要するため今回は着手していない——次回、専用の
+    調査セッションとしてスコープを切って着手することを推奨する
+    (Amazon購入リンクについては、実際の購入操作はユーザー自身が行う
+    必要がある旨も併せて検討すること)。
+
 - **2026-08-10(続き5) 東芝SBM(シミュレーテッド分岐)を実際に組み込む
   新規モジュール`cache_optimizer.rs`+`POST /v1/models/optimize-cache`を
   実装(ユーザー指示「架空の最適化問題を作ってSBMを実際のaruaru-llmに
