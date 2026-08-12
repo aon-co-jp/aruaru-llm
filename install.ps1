@@ -1,4 +1,4 @@
-# aruaru-llm インストールスクリプト(Windows / Windows Server 共通)。
+﻿# aruaru-llm インストールスクリプト(Windows / Windows Server 共通)。
 #
 # 正直な開示: このバイナリは起動時に
 # `models/multilingual-e5-small/`(470MB超、Hugging Face配布、MIT)を
