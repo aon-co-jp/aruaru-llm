@@ -24,6 +24,7 @@
 
 mod bow_fallback;
 mod cache_optimizer;
+mod device_pool;
 mod geo_content;
 mod referrals;
 mod web_search;
@@ -1150,22 +1151,43 @@ async fn main() -> anyhow::Result<()> {
     // 構築(実GPU列挙・論理デバイス作成)に失敗した場合は、サービスを
     // 落とさずCPUへ安全側フォールバックする(既存の「サービスを壊さない」
     // 設計方針を踏襲、hardware.rsのGPU検出失敗時フォールバックと同じ考え方)。
+    // CPU+GPU同時並列稼働(2026-08-15、ユーザー指示「CPU+システムメモリ+
+    // GPUを同時に並列並行で動作させて」への対応、device_pool.rs参照)。
+    // 従来は「VulkanDevice構築成功ならGPU、失敗ならCPU」という排他選択
+    // だったが、CPU(rayon並列)は常にプールへ加え、GPU構築に成功した
+    // 場合はCPUを置き換えるのではなく**追加**する。DevicePoolがリクエスト
+    // ごとにラウンドロビンで両方へ振り分けるため、同時に複数リクエストが
+    // 来た場合CPU担当分とGPU担当分が実際に並行して稼働する。
+    let cpu_device: Arc<dyn GpuDevice> = CpuDevice::new(0);
+    let mut pool_devices: Vec<Arc<dyn GpuDevice>> = vec![Arc::clone(&cpu_device)];
     #[cfg(feature = "real-vulkan")]
-    let device: Arc<dyn GpuDevice> = match opencuda_vulkan::real::VulkanDevice::new(0) {
-        Ok(vulkan_device) => {
-            tracing::info!("real-vulkan feature enabled: using VulkanDevice for inference dispatch");
-            vulkan_device
+    {
+        match opencuda_vulkan::real::VulkanDevice::new(0) {
+            Ok(vulkan_device) => {
+                tracing::info!(
+                    "real-vulkan feature enabled: adding VulkanDevice ({}) to the device pool alongside CpuDevice",
+                    vulkan_device.info().name
+                );
+                pool_devices.push(vulkan_device);
+            }
+            Err(err) => {
+                tracing::warn!(
+                    "real-vulkan feature enabled but VulkanDevice::new failed ({err}); running CPU-only"
+                );
+            }
         }
-        Err(err) => {
-            tracing::warn!(
-                "real-vulkan feature enabled but VulkanDevice::new failed ({err}); falling back to CpuDevice"
-            );
-            CpuDevice::new(0)
-        }
-    };
-    #[cfg(not(feature = "real-vulkan"))]
-    let device: Arc<dyn GpuDevice> = CpuDevice::new(0);
-    tracing::info!("aruaru-llm using open-cuda device: {}", device.info().name);
+    }
+    let device_pool = device_pool::DevicePool::new(pool_devices);
+    tracing::info!(
+        "aruaru-llm device pool: {} device(s) — {}",
+        device_pool.device_count(),
+        device_pool.device_names().join(", ")
+    );
+    // warmup(モデルロード・埋め込みキャッシュ)は単一デバイス
+    // (CpuDevice)で行う——起動時1回きりの処理であり、CPU/GPU双方で
+    // 二重にロードする意味は無いため。実際のリクエスト処理は
+    // `device_pool.next_device()`でラウンドロビン分散する。
+    let device = cpu_device;
 
     // 翻訳プラグイン(nllb.rs、M2M100/rust-bert、2026-08-04追加)の状態を
     // 起動時に明示ログ出力する。このプラグインはCargo feature
@@ -1238,28 +1260,33 @@ async fn main() -> anyhow::Result<()> {
 
     let registry = Arc::new(TenantRegistry::new());
 
-    let chat_device = Arc::clone(&device);
+    // 2026-08-15(CPU+GPU同時並列稼働): 従来はハンドラ登録時に1回だけ
+    // `Arc::clone(&device)`していたため全リクエストが同一デバイスを
+    // 共有していた。`device_pool`をキャプチャし、**リクエストごとに**
+    // `next_device()`を呼ぶよう変更——複数の同時リクエストがCPU/GPU
+    // 双方へラウンドロビンで分散し、両方が実際に並行稼働する。
+    let chat_pool = Arc::clone(&device_pool);
     let chat_registry = Arc::clone(&registry);
-    let classify_device = Arc::clone(&device);
+    let classify_pool = Arc::clone(&device_pool);
     let classify_registry = Arc::clone(&registry);
-    let classify_traffic_device = Arc::clone(&device);
+    let classify_traffic_pool = Arc::clone(&device_pool);
     let classify_traffic_registry = Arc::clone(&registry);
-    let generate_device = Arc::clone(&device);
+    let generate_pool = Arc::clone(&device_pool);
     let generate_registry = Arc::clone(&registry);
-    let generate_search_device = Arc::clone(&device);
+    let generate_search_pool = Arc::clone(&device_pool);
     let generate_search_registry = Arc::clone(&registry);
-    let translate_device = Arc::clone(&device);
+    let translate_pool = Arc::clone(&device_pool);
     let translate_registry = Arc::clone(&registry);
     let admin_register_registry = Arc::clone(&registry);
     let admin_list_registry = Arc::clone(&registry);
     let admin_remove_registry = Arc::clone(&registry);
 
     let app = Route::new()
-        .at("/v1/chat", post(handler_fn(move |req, _p| { let device = Arc::clone(&chat_device); let registry = Arc::clone(&chat_registry); async move { chat(req, device, registry).await } })))
+        .at("/v1/chat", post(handler_fn(move |req, _p| { let device = chat_pool.next_device(); let registry = Arc::clone(&chat_registry); async move { chat(req, device, registry).await } })))
         .at(
             "/v1/classify-security",
             post(handler_fn(move |req, _p| {
-                let device = Arc::clone(&classify_device);
+                let device = classify_pool.next_device();
                 let registry = Arc::clone(&classify_registry);
                 async move { classify_security(req, device, registry).await }
             })),
@@ -1267,7 +1294,7 @@ async fn main() -> anyhow::Result<()> {
         .at(
             "/v1/security/classify-traffic",
             post(handler_fn(move |req, _p| {
-                let device = Arc::clone(&classify_traffic_device);
+                let device = classify_traffic_pool.next_device();
                 let registry = Arc::clone(&classify_traffic_registry);
                 async move { classify_traffic(req, device, registry).await }
             })),
@@ -1275,7 +1302,7 @@ async fn main() -> anyhow::Result<()> {
         .at(
             "/v1/generate",
             post(handler_fn(move |req, _p| {
-                let device = Arc::clone(&generate_device);
+                let device = generate_pool.next_device();
                 let registry = Arc::clone(&generate_registry);
                 async move { generate(req, device, registry).await }
             })),
@@ -1283,7 +1310,7 @@ async fn main() -> anyhow::Result<()> {
         .at(
             "/v1/generate-with-search",
             post(handler_fn(move |req, _p| {
-                let device = Arc::clone(&generate_search_device);
+                let device = generate_search_pool.next_device();
                 let registry = Arc::clone(&generate_search_registry);
                 async move { generate_with_search(req, device, registry).await }
             })),
@@ -1291,7 +1318,7 @@ async fn main() -> anyhow::Result<()> {
         .at(
             "/v1/translate",
             post(handler_fn(move |req, _p| {
-                let device = Arc::clone(&translate_device);
+                let device = translate_pool.next_device();
                 let registry = Arc::clone(&translate_registry);
                 async move { translate(req, device, registry).await }
             })),
