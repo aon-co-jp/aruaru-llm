@@ -226,6 +226,38 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-08-15(続き2) `real-vulkan`ビルドで実バグ発見: 同時並行リクエスト
+  下でGPU担当分が`no spirv bytes were provided`で失敗することがある
+  (sftp-git側のanalyzeDiff E2E確認セッションで発覚)**:
+  1. **再現**: `--features real-vulkan`でビルドしたサーバーへ、
+     `curl`で`/v1/generate`を2件同時送信したところ、片方が
+     `{"error":"GptModel::generate_with_repetition_penalty failed:
+     sgemm: GemmPath::VulkanGeneric selected (device.supports_spirv()
+     ==true...) but no spirv bytes were provided..."}`で失敗した。
+  2. **原因の見立て(未確定)**: `wire_matmul_spirv`は`load_from_dir`内で
+     モデルロード時に一度だけ呼ばれ、成功すれば`GptModel`の全`Linear`に
+     `matmul.spv`が配線される設計。DevicePool導入によりリクエストごとに
+     CPU/GPUへラウンドロビン分散するようになったため、**wiring自体が
+     何らかの理由で失敗していた場合(このセッションでは再現待ちの
+     プロセスで失敗した形跡)、GPU担当に回った全リクエストが
+     一律で失敗するようになった**——CPU専用ビルド(featureフラグ無し)
+     で同じシナリオを再実行したところ問題無く成功したため、
+     `real-vulkan`固有の問題と判断。根本原因(`wire_matmul_spirv`が
+     具体的にどの条件で失敗するか)の特定は今回行っていない。
+  3. **今回の対応**: 深追いせず、sftp-git側の検証には
+     **CPU専用ビルド(既定、`real-vulkan`無し)を使う**という回避策で
+     対応した(既定ビルドはこの問題の影響を受けない——`real-vulkan`は
+     既定offのopt-in featureのため、通常利用者への実害は無い)。
+  - 次にすべきこと: (1) `wire_matmul_spirv`の失敗条件を特定する
+    (`GptModel::set_matmul_spirv`の戻り値・ログを詳しく調査、
+    モデル切り替え〈distilgpt2⇄gpt2-medium等〉との組み合わせで再現するか
+    確認)。(2) 配線失敗時に`real-vulkan`ビルドでも安全にCPUへ
+    フォールバックする設計(現状は失敗を隠さず正直にエラーを返す
+    という既存方針通りだが、DevicePool導入後はこれが「GPU番が回って
+    きたリクエストは道連れで落ちる」という新しい失敗モードになって
+    いる——DevicePoolがGPU未配線を検知したらCPUのみのプールへ自動的に
+    縮退する等の対策を検討)。
+
 - **2026-08-15 CPU+GPU同時並列稼働を実装(ユーザー指示「CPU+システム
   メモリ+GPUを非同期ででも、同時に並列並行で動作させて」、`sftp-git`
   開発セッションからの横断作業)**:
