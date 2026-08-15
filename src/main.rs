@@ -405,7 +405,45 @@ async fn generate(req: Request, device: Arc<dyn GpuDevice>, registry: Arc<Tenant
         );
     }
     let max_new_tokens = req.max_new_tokens.clamp(1, MAX_NEW_TOKENS_LIMIT);
-    match generation::generate(&device, &req.prompt, max_new_tokens) {
+    // 2026-08-15(CPU+GPU非同期並列化、ユーザー指示): `generation::generate`は
+    // 同期的な重い計算(CPU rayon並列、またはGPU Vulkanディスパッチ+
+    // フェンス待機)を行う。これをasyncハンドラ内で直接呼ぶとtokioの
+    // ワーカースレッドを長時間ブロックし、他の非同期タスク(他リクエストの
+    // 待受・ヘルスチェック等)の処理を妨げる——`spawn_blocking`(自動拡張する
+    // 専用ブロッキングスレッドプール)へ逃がすことで、CPU担当リクエストと
+    // GPU担当リクエストが実際に別スレッドで並行実行され、tokioのマルチコア
+    // ワーカーを塞がない設計にする。開始/終了ログにデバイス名・
+    // OSスレッドIDを含めることで、複数リクエストを同時に送った際に
+    // 実際にどのスレッドでどのデバイスが並行稼働したかを事後計測できる
+    // ようにする。
+    let device_name = device.info().name.clone();
+    let request_started = std::time::Instant::now();
+    tracing::info!(
+        "generate: dispatch start device={device_name} thread={:?}",
+        std::thread::current().id()
+    );
+    let prompt = req.prompt.clone();
+    let device_for_task = Arc::clone(&device);
+    let generate_result = tokio::task::spawn_blocking(move || {
+        let thread_id = std::thread::current().id();
+        let result = generation::generate(&device_for_task, &prompt, max_new_tokens);
+        (result, thread_id)
+    })
+    .await;
+    let (generate_result, exec_thread_id) = match generate_result {
+        Ok((result, thread_id)) => (result, Some(thread_id)),
+        Err(join_err) => (
+            Err(anyhow::anyhow!("generate task panicked: {join_err}")),
+            None,
+        ),
+    };
+    tracing::info!(
+        "generate: dispatch end device={device_name} exec_thread={exec_thread_id:?} \
+         elapsed_ms={} (caller_thread={:?})",
+        request_started.elapsed().as_millis(),
+        std::thread::current().id()
+    );
+    match generate_result {
         Ok(completion) => json_response(
             StatusCode::OK,
             &GenerateResponse {

@@ -285,6 +285,58 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
     今回の変更もこのfeatureを有効化してビルドした場合のみ効果を持つ
     (既定ビルドはCPUのみのまま、既存の安全側デフォルトを変更していない)。
 
+- **2026-08-15(続き) `spawn_blocking`化+タイムスタンプ計測でCPU/GPU
+  同時稼働を実測で裏付け(ユーザー指示「実際の同時並行ではなく非同期
+  でのリクエスト下で非同期のマルチコア、マルチスレッドを活かす方に
+  変更…タイムライン計測して調査」)**:
+  1. **見つけた設計上の問題**: `generate`(他のハンドラも同様)は
+     `generation::generate`(同期・重い計算)を`async fn`内で
+     直接呼んでおり、`tokio::task::spawn_blocking`を使っていな
+     かった。tokioのマルチスレッドランタイムは限られた数のワーカー
+     スレッド(通常CPUコア数)で全ての非同期タスクを捌く設計のため、
+     これでは長時間の同期計算がワーカースレッドを占有し、他の
+     非同期タスク(他リクエストの受付処理等)を妨げる可能性がある。
+  2. **修正**: `generate`ハンドラを`tokio::task::spawn_blocking`で
+     包み、専用のブロッキングスレッドプール(需要に応じて自動拡張)
+     上で実行するよう変更。開始/終了ログに**デバイス名・実行スレッド
+     ID・呼び出し元スレッドID・経過ミリ秒**を出力し、複数リクエストを
+     同時に送った際に実際にどのスレッドでどのデバイスが並行稼働
+     したかを事後計測できるようにした。
+  3. **実測(3並行`/v1/generate`リクエスト、RUST_LOG=info)**:
+     ```
+     05:26:34.670 dispatch start device=CPU        thread=ThreadId(2)
+     05:26:34.786 dispatch start device=Vulkan(GPU) thread=ThreadId(2)
+     05:26:34.899 dispatch start device=CPU        thread=ThreadId(2)
+     05:26:36.753 dispatch end   device=CPU    exec_thread=ThreadId(66) elapsed_ms=2082
+     05:26:37.003 dispatch end   device=CPU    exec_thread=ThreadId(68) elapsed_ms=2104
+     05:26:52.249 dispatch end   device=Vulkan exec_thread=ThreadId(67) elapsed_ms=17463
+     ```
+     3リクエストがほぼ同時(230ms以内)に開始され、**別々のOSスレッド
+     (66/67/68)で実際に並行実行**された。CPU担当2件(約2.1秒、
+     ほぼ同時に完了)が実行されている間、GPU担当1件(ThreadId 67)も
+     並行して稼働し続けていた(34.786開始、CPU完了後の36.7〜37.0秒台も
+     引き続き稼働、52.249まで)——これはラウンドロビンのロジックが
+     正しいだけでなく、**実際のOSスレッドレベルでCPU計算とGPU
+     ディスパッチが同時に走っている**ことを実測で裏付ける。
+  4. **既知の性能特性の再確認(誇張しない)**: GPU担当リクエストは
+     約17.5秒、CPU担当リクエストは約2.1秒——**約8倍GPU側が遅い**
+     (GT730のディスパッチオーバーヘッドが支配的、過去のHANDOFF記録
+     と整合)。同時並行化によって個々のリクエストが速くなるわけでは
+     なく、複数リクエストが来た際に**待ち行列にならず両方のハード
+     ウェアが同時に仕事を進められる**という利点に限定される。
+  5. **検証結果**: `cargo build --release --features real-vulkan`
+     成功(既存3件の警告のみ、pre-existing)。実サーバー起動+実HTTP
+     並行リクエストで上記4番の通り確認。`chat`等の他エンドポイントは
+     今回`spawn_blocking`化していない(`generate`が最も計算コストが
+     重く実測に適しているため優先、他は次回の増分)。
+  - 次にすべきこと: (1) `chat`/`classify-security`/
+    `classify-traffic`/`generate-with-search`/`translate`の残り
+    5ハンドラも同じ`spawn_blocking`パターンへ統一する(現状は
+    `generate`のみ)。(2) ブロッキングスレッドプールのサイズ上限
+    (tokio既定は512、通常は問題にならないが大量同時リクエスト時の
+    挙動は未検証)。(3) ラウンドロビンではなく実際の負荷(busy/idle)
+    に基づく振り分けへの発展は引き続き未着手。
+
 - **2026-08-11(続き5) 高VRAM帯NVIDIA GPU情報を日英Web検索で裏取りし
   `hardware.rs`へ反映(ユーザーが言及した「RTX5950X」という製品名が
   実在しないことの確認+実在する高級GPU情報の正確な記載)**:
