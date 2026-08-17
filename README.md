@@ -1,5 +1,12 @@
 # aruaru-llm
 
+*日本語*: これは原文です ·
+*English*: [README-English.md](README-English.md) ·
+*Other languages*: [Deutsch](README-German.md) · [Italiano](README-Italian.md) ·
+[Français](README-French.md) · [Русский](README-Russian.md) ·
+[Українська](README-Ukrainian.md) · [עברית](README-Hebrew.md) ·
+[فارسی](README-Persian.md) · [العربية](README-Arabic.md)
+
 > 📌 **最近の更新(2026-08-10)**: `open-cuda`側`GptModel::
 > generate_with_repetition_penalty`(CTRL方式の繰り返しペナルティ)を
 > `/v1/generate`へ配線し、**既定で有効化**した(`ARUARU_LLM_REPETITION_
