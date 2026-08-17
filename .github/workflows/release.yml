@@ -28,8 +28,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Checkout open-cuda (sibling path dependency)
-        run: git clone --depth=1 https://github.com/aon-co-jp/open-cuda.git ../open-cuda
+      - name: Checkout sibling path dependencies (open-cuda, RPoem, RS-JSON)
+        run: |
+          git clone --depth=1 https://github.com/aon-co-jp/open-cuda.git ../open-cuda
+          git clone --depth=1 https://github.com/aon-co-jp/RPoem.git ../RPoem
+          git clone --depth=1 https://github.com/aon-co-jp/RS-JSON.git ../RS-JSON
       - name: Build
         run: cargo build --release --bin aruaru-llm
       - name: Package
@@ -48,8 +51,11 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Checkout open-cuda (sibling path dependency)
-        run: git clone --depth=1 https://github.com/aon-co-jp/open-cuda.git ../open-cuda
+      - name: Checkout sibling path dependencies (open-cuda, RPoem, RS-JSON)
+        run: |
+          git clone --depth=1 https://github.com/aon-co-jp/open-cuda.git ../open-cuda
+          git clone --depth=1 https://github.com/aon-co-jp/RPoem.git ../RPoem
+          git clone --depth=1 https://github.com/aon-co-jp/RS-JSON.git ../RS-JSON
       - name: Build
         run: cargo build --release --bin aruaru-llm
       - name: Package
