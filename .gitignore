@@ -1,4 +1,6 @@
 /target
+# news_geo.rsが生成するローカルニュースDB(実行時の取得結果、Gitに含めない)。
+/data/news_db.json
 # multilingual-e5-small(Hugging Face、470MB超)。Gitに含めず、README/
 # CLAUDE.mdに記載のダウンロード手順で各自取得する運用とする。
 /models

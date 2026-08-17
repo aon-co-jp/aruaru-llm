@@ -5396,7 +5396,6 @@ version = "0.0.1"
 dependencies = [
  "thiserror 1.0.69",
  "tracing",
- "windows",
 ]
 
 [[package]]

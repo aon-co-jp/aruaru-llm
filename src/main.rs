@@ -32,6 +32,7 @@ mod generation;
 mod hardware;
 mod intrusion_detection;
 mod model_catalog;
+mod news_geo;
 mod nllb;
 mod scoring;
 mod security;
@@ -1125,6 +1126,20 @@ struct ReferralsCheckResponse {
 /// 発話文が就職・転職・観光の話題かどうかを判定し、該当すれば
 /// aruaru.tokyo/nasa.tokyo/audiocafe.tokyo(aruaru・aruaru-lady)への
 /// 紹介情報を返す(2026-08-11新設)。
+/// サーバー接続先国のニュースを検出・取得しローカルDBへ保存する
+/// (`POST /v1/news/refresh`、`news_geo.rs`参照)。open-englishの
+/// メンテナンスバナー表示中に叩かれる想定。
+async fn news_refresh() -> Response {
+    let db = crate::news_geo::refresh().await;
+    json_response(StatusCode::OK, &db)
+}
+
+/// 直近保存済みのニュースDBスナップショットを返す(`GET /v1/news/latest`)。
+async fn news_latest() -> Response {
+    let db = crate::news_geo::get_latest();
+    json_response(StatusCode::OK, &db)
+}
+
 async fn referrals_check(req: Request) -> Response {
     let Json(body): Json<ReferralsCheckRequest> = match Json::from_body(req).await {
         Ok(v) => v,
@@ -1366,6 +1381,8 @@ async fn main() -> anyhow::Result<()> {
         .at("/v1/geo/fuji", get(plain(|| Box::pin(geo_fuji()))))
         .at("/v1/geo/tours", post(handler_fn(|req, _p| Box::pin(geo_tours(req)))))
         .at("/v1/referrals/check", post(handler_fn(|req, _p| Box::pin(referrals_check(req)))))
+        .at("/v1/news/refresh", post(plain(|| Box::pin(news_refresh()))))
+        .at("/v1/news/latest", get(plain(|| Box::pin(news_latest()))))
         .at("/v1/geo/lookup", post(handler_fn(|req, _p| Box::pin(geo_lookup(req)))))
         .at(
             "/v1/settings/google-search",
