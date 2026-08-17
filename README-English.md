@@ -1,5 +1,12 @@
 # aruaru-llm
 
+*日本語*: [README.md](README.md) ·
+*English*: this is the original ·
+*Other languages*: [Deutsch](README-German.md) · [Italiano](README-Italian.md) ·
+[Français](README-French.md) · [Русский](README-Russian.md) ·
+[Українська](README-Ukrainian.md) · [עברית](README-Hebrew.md) ·
+[فارسی](README-Persian.md) · [العربية](README-Arabic.md)
+
 > 📌 **Recent update (2026-08-10)**: Wired `open-cuda`'s new `GptModel::
 > generate_with_repetition_penalty` (CTRL-style repetition penalty) into
 > `/v1/generate`, **enabled by default** (`ARUARU_LLM_REPETITION_PENALTY`
