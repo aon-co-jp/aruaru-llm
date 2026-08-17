@@ -462,6 +462,108 @@ async fn generate(req: Request, device: Arc<dyn GpuDevice>, registry: Arc<Tenant
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct GenerateSpeculativeRequest {
+    prompt: String,
+    /// `model_catalog::CATALOG`のいずれか(例: `"distilgpt2"`)。ダウンロード
+    /// 済みでない場合は`400`(`POST /v1/models/install`が必要)。
+    draft_id: String,
+    #[serde(default = "default_max_new_tokens")]
+    max_new_tokens: usize,
+    /// ドラフトモデルが1ラウンドで提案するトークン数(既定4)。
+    #[serde(default = "default_draft_k")]
+    draft_k: usize,
+    #[serde(default)]
+    tenant: Option<String>,
+}
+
+fn default_draft_k() -> usize {
+    4
+}
+
+#[derive(Debug, Serialize)]
+struct GenerateSpeculativeResponse {
+    completion: String,
+    engine: String,
+    draft_id: String,
+    /// 検証対象になったドラフト提案トークンの総数。
+    proposed: usize,
+    /// そのうち実際に採用された数。
+    accepted: usize,
+    acceptance_rate: f32,
+    disclosure: &'static str,
+}
+
+/// `POST /v1/generate-speculative` — DeepSeekの「DSpark」(ロスレス投機的
+/// デコード)方式を`open-cuda-llm::GptModel::generate_speculative`経由で
+/// 呼ぶ、2026-08-17新設のオプトインエンドポイント(ユーザー承認、週次
+/// リサーチルーティンでのDSpark/llama.cpp Multi-Token Prediction調査への
+/// YES回答を受けて実装)。
+///
+/// **正直な開示(最重要)**: `open-cuda-llm`側で実機計測したところ
+/// (CPU実行、ターゲット`gpt2`+ドラフト`distilgpt2`、`draft_k=4`)、
+/// 採用率80%と高かったにもかかわらず**素の`/v1/generate`より実際には
+/// 遅かった**(plain=4.63秒 vs speculative=7.65秒、`open-cuda-llm`側
+/// テスト`real_gpt2_speculative_decoding_matches_plain_greedy_and_reports_
+/// acceptance`の実測)。CPU素朴GEMM実装ではディスパッチ固定オーバー
+/// ヘッドという「削減すべきコスト」自体がほぼ存在しないため、ドラフト
+/// モデルの追加計算コストが純増分になってしまう——`real-vulkan`環境
+/// (Vulkanディスパッチオーバーヘッドが支配的、本来の狙い)での速度検証は
+/// 未実施のまま。この理由により`/v1/generate`の内部実装は置き換えず、
+/// 明示的にオプトインする本エンドポイントとして提供する。出力の正しさ
+/// (`/v1/generate`とビット完全一致するロスレス性)は実重み・実合成
+/// フィクスチャ双方で検証済み。
+async fn generate_speculative(req: Request, device: Arc<dyn GpuDevice>, registry: Arc<TenantRegistry>) -> Response {
+    let Json(req): Json<GenerateSpeculativeRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    log_tenant_usage("generate-speculative", &req.tenant, &registry);
+    if req.prompt.trim().is_empty() {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            &GenerateErrorResponse { error: "prompt must not be empty".to_string(), engine: generation::engine_label(&device) },
+        );
+    }
+    if req.draft_k == 0 {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            &GenerateErrorResponse { error: "draft_k must be >= 1".to_string(), engine: generation::engine_label(&device) },
+        );
+    }
+    let max_new_tokens = req.max_new_tokens.clamp(1, MAX_NEW_TOKENS_LIMIT);
+    let draft_id = req.draft_id.clone();
+    let prompt = req.prompt.clone();
+    let draft_k = req.draft_k;
+    let device_for_task = Arc::clone(&device);
+    let result = tokio::task::spawn_blocking(move || generation::generate_speculative(&device_for_task, &draft_id, &prompt, max_new_tokens, draft_k)).await;
+    let result = match result {
+        Ok(r) => r,
+        Err(join_err) => Err(anyhow::anyhow!("generate-speculative task panicked: {join_err}")),
+    };
+    match result {
+        Ok((completion, stats)) => json_response(
+            StatusCode::OK,
+            &GenerateSpeculativeResponse {
+                completion,
+                engine: generation::engine_label(&device),
+                draft_id: req.draft_id,
+                proposed: stats.proposed,
+                accepted: stats.accepted,
+                acceptance_rate: stats.acceptance_rate(),
+                disclosure: "Lossless speculative decoding (DeepSeek DSpark / Leviathan et al. style): output is byte-identical to plain \
+                    greedy /v1/generate for the same prompt. Honest disclosure: measured SLOWER than plain /v1/generate on CPU-only \
+                    hardware despite high acceptance rates, because CPU naive GEMM has little dispatch overhead to amortize. The intended \
+                    benefit (reducing target-model dispatch count) is unverified on --features real-vulkan hardware so far.",
+            },
+        ),
+        Err(err) => {
+            tracing::warn!("generate-speculative failed: {err:#}");
+            json_response(StatusCode::SERVICE_UNAVAILABLE, &GenerateErrorResponse { error: format!("{err:#}"), engine: generation::engine_label(&device) })
+        }
+    }
+}
+
 /// `POST /v1/generate-with-search` — ユーザー指示「open-englishは、人が
 /// しゃべったり文字を入力したら、その都度Google検索するような仕様に
 /// して」への対応(ブリッジ式: 入力文をそのままGoogle Custom Search
@@ -1326,6 +1428,8 @@ async fn main() -> anyhow::Result<()> {
     let classify_traffic_registry = Arc::clone(&registry);
     let generate_pool = Arc::clone(&device_pool);
     let generate_registry = Arc::clone(&registry);
+    let generate_speculative_pool = Arc::clone(&device_pool);
+    let generate_speculative_registry = Arc::clone(&registry);
     let generate_search_pool = Arc::clone(&device_pool);
     let generate_search_registry = Arc::clone(&registry);
     let translate_pool = Arc::clone(&device_pool);
@@ -1358,6 +1462,14 @@ async fn main() -> anyhow::Result<()> {
                 let device = generate_pool.next_device();
                 let registry = Arc::clone(&generate_registry);
                 async move { generate(req, device, registry).await }
+            })),
+        )
+        .at(
+            "/v1/generate-speculative",
+            post(handler_fn(move |req, _p| {
+                let device = generate_speculative_pool.next_device();
+                let registry = Arc::clone(&generate_speculative_registry);
+                async move { generate_speculative(req, device, registry).await }
             })),
         )
         .at(

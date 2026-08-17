@@ -587,6 +587,52 @@ pub fn generate(device: &Arc<dyn GpuDevice>, prompt: &str, max_new_tokens: usize
     loaded.tokenizer.decode(&generated_ids).context("open-cuda-llm tokenizer decode failed")
 }
 
+/// `open_cuda_llm::GptModel::generate_speculative`(DSpark/Leviathan et al.
+/// 方式のロスレス投機的デコード、2026-08-17新設)を、現在アクティブな
+/// モデルをターゲットとして呼ぶ薄いラッパー。`draft_id`は
+/// `model_catalog::CATALOG`のいずれか(例: `"distilgpt2"`)——ダウンロード
+/// 済みでない場合はエラーを返す(黙って別モデルへフォールバックしない、
+/// 他のエンドポイントと同じ「サービスを止めないが偽装もしない」方針)。
+///
+/// **正直な開示・既定の`/v1/generate`とは別エンドポイントにした理由**:
+/// `open-cuda-llm`側で実機計測したところ(CPU実行、ターゲット`gpt2`+
+/// ドラフト`distilgpt2`、`draft_k=4`)、採用率80%と高かったにもかかわらず
+/// **素の`generate()`より実際には遅かった**(`open-cuda-llm/src/lib.rs`の
+/// `generate_speculative`のdocコメント参照)。CPU素朴GEMM実装では
+/// ディスパッチ固定オーバーヘッドという「削減すべきコスト」自体がほぼ
+/// 存在しないため、ドラフトモデルの追加計算コストが純増分になって
+/// しまう。このため既定の`/v1/generate`の内部実装を置き換えるのではなく、
+/// 明示的にオプトインする別エンドポイント(`POST /v1/generate-speculative`)
+/// として提供する——`real-vulkan`環境(Vulkanディスパッチオーバーヘッドが
+/// 支配的、本来の狙い)での速度検証は未実施のまま、次の増分として残す。
+/// **繰り返しペナルティ・MLA圧縮モデルは未対応**(`GptModel::
+/// generate_speculative`のドキュメント通り、MLA圧縮モデルは`ensure!`で
+/// 拒否される)。
+pub fn generate_speculative(
+    device: &Arc<dyn GpuDevice>,
+    draft_id: &str,
+    prompt: &str,
+    max_new_tokens: usize,
+    draft_k: usize,
+) -> Result<(String, open_cuda_llm::SpeculativeStats)> {
+    let target = active_or_load_default().map_err(|e| anyhow::anyhow!(e))?;
+
+    let entry = crate::model_catalog::find(draft_id).ok_or_else(|| anyhow::anyhow!("unknown draft model id: {draft_id}"))?;
+    let draft_dir = crate::model_catalog::models_root().join(entry.id);
+    anyhow::ensure!(draft_dir.join("model.safetensors").exists(), "draft model '{draft_id}' is not installed yet (POST /v1/models/install first)");
+    let draft_model = GptModel::load(&draft_dir).map_err(|e| anyhow::anyhow!("failed to load draft model '{draft_id}' from {draft_dir:?}: {e:#}"))?;
+
+    let prompt_ids = target.tokenizer.encode(prompt).context("open-cuda-llm tokenizer encode failed")?;
+    anyhow::ensure!(!prompt_ids.is_empty(), "prompt encoded to zero tokens");
+
+    let (generated_ids, stats) = target
+        .model
+        .generate_speculative(device, &draft_model, &prompt_ids, max_new_tokens, draft_k)
+        .context("GptModel::generate_speculative failed")?;
+    let text = target.tokenizer.decode(&generated_ids).context("open-cuda-llm tokenizer decode failed")?;
+    Ok((text, stats))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
