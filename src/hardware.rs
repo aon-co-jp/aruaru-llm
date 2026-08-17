@@ -132,6 +132,20 @@ fn detect_via_directx() -> Option<(String, u64)> {
     None
 }
 
+/// **将来構想・未実装(2026-08-17追記、ユーザー指示「将来NPU搭載機種で
+/// あった場合のハードウェアアクセラレーターも考慮しておいて」への
+/// 対応)**: 現状このモジュールが検出できるのはGPU(Vulkan/DirectX)と
+/// CPUのみで、NPU(Android端末のNNAPI/Qualcomm QNN/Google Tensor
+/// Edge TPU、Windows端末のDirectML NPU等)の検出・ディスパッチ経路は
+/// `open-cuda`側にも一切実装されていない。実装するには、(a)
+/// プラットフォームごとに異なるNPU APIへの個別バインディング
+/// (Android: NNAPI経由が最も汎用的、iOS: Core ML、Windows: DirectML)、
+/// (b) `opencuda-core::GpuDevice`トレイトをNPU実行に拡張する設計変更
+/// (現状はGPU/CPU二値のディスパッチ前提)が必要な、規模の大きい増分と
+/// なる。今回は「将来NPU搭載機種が増えた場合に見落とさないための
+/// 記録」として本コメントを残すに留め、実装は行っていない——
+/// 誇張せず、NPU対応は現状皆無であることを明記する。
+///
 /// ハードウェアを検出する。Vulkan経路を優先し、DirectX経路が(feature有効
 /// なら)取れた場合はクロスチェックとしてログ比較する(モジュールdoc
 /// 「GPU検出の経路」参照)。
