@@ -28,11 +28,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Checkout sibling path dependencies (open-cuda, RPoem, RS-JSON)
+      - name: Checkout sibling path dependencies (open-cuda, RPoem, RS-JSON, open-web-server, RS-SmartTCP, open-raid-z)
+        # RPoem(open-runo-poem-compat)はopen-runo-router経由でopen-web-server-wire/core/ledgerへ
+        # path依存し、open-web-server-wireはさらにRS-SmartTCPへ、RS-SmartTCPは
+        # open-raid-zへpath依存する(2026-08-17、実際にCIで踏んだ多段の
+        # sibling path依存チェーン)。
         run: |
           git clone --depth=1 https://github.com/aon-co-jp/open-cuda.git ../open-cuda
           git clone --depth=1 https://github.com/aon-co-jp/RPoem.git ../RPoem
           git clone --depth=1 https://github.com/aon-co-jp/RS-JSON.git ../RS-JSON
+          git clone --depth=1 https://github.com/aon-co-jp/open-web-server.git ../open-web-server
+          git clone --depth=1 https://github.com/aon-co-jp/RS-SmartTCP.git ../RS-SmartTCP
+          git clone --depth=1 https://github.com/aon-co-jp/open-raid-z.git ../open-raid-z
       - name: Build
         run: cargo build --release --bin aruaru-llm
       - name: Package
@@ -51,11 +58,18 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Checkout sibling path dependencies (open-cuda, RPoem, RS-JSON)
+      - name: Checkout sibling path dependencies (open-cuda, RPoem, RS-JSON, open-web-server, RS-SmartTCP, open-raid-z)
+        # RPoem(open-runo-poem-compat)はopen-runo-router経由でopen-web-server-wire/core/ledgerへ
+        # path依存し、open-web-server-wireはさらにRS-SmartTCPへ、RS-SmartTCPは
+        # open-raid-zへpath依存する(2026-08-17、実際にCIで踏んだ多段の
+        # sibling path依存チェーン)。
         run: |
           git clone --depth=1 https://github.com/aon-co-jp/open-cuda.git ../open-cuda
           git clone --depth=1 https://github.com/aon-co-jp/RPoem.git ../RPoem
           git clone --depth=1 https://github.com/aon-co-jp/RS-JSON.git ../RS-JSON
+          git clone --depth=1 https://github.com/aon-co-jp/open-web-server.git ../open-web-server
+          git clone --depth=1 https://github.com/aon-co-jp/RS-SmartTCP.git ../RS-SmartTCP
+          git clone --depth=1 https://github.com/aon-co-jp/open-raid-z.git ../open-raid-z
       - name: Build
         run: cargo build --release --bin aruaru-llm
       - name: Package
