@@ -226,6 +226,23 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-08-18 次回再開メモ(open-englishからの依存待ち・未着手)**:
+  `open-english`側でユーザーから「この仕様変更は、aruaru-llmの
+  バージョンアップとして、既存の古い物からDATABASEシステムに移動も
+  簡単にする機能を搭載して」という指示を受けたが、`aruaru-llm`と
+  `open-english`は別リポジトリであり、aruaru-llm側の何をバージョン
+  アップし、何を「既存の古い物」(open-englishのブラウザlocalStorage
+  起点の会話履歴、と推測されるが未確認)としてどこへ移行するのかが
+  指示文だけでは確定できないため、**このリポジトリ側はまだ未着手**。
+  次回このリポジトリで作業を再開する際は、まず(1) open-englishの
+  `CLAUDE.md`2026-08-18 HANDOFF(会話履歴・設定のSQLite+aruaru-db/
+  PostgreSQL DUAL DBミラーリング実装)を読んで前提を把握し、(2)
+  ユーザーへ「aruaru-llm側で具体的に何をバージョンアップし、どの
+  データをどこへ移行する機能か」を確認してから着手すること。
+  RS-JSON化については、open-english側で確立済みの既存方針(RS-JSONは
+  埋め込み/静的JSONファイルのパース向けのみ、HTTPボディのJSON処理は
+  対象外)をこのリポジトリでも踏襲する想定(要ユーザー最終確認)。
+
 - **2026-08-15(続き2) `real-vulkan`ビルドで実バグ発見: 同時並行リクエスト
   下でGPU担当分が`no spirv bytes were provided`で失敗することがある
   (sftp-git側のanalyzeDiff E2E確認セッションで発覚)**:
