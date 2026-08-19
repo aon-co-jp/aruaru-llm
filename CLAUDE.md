@@ -36,6 +36,62 @@
 >   多重探索〉と噛み合わないため)。この保留タスクは調査完了として
 >   クローズする。
 
+> **📌 2026-08-19追記: open-cuda/open-directxの「間接的な自動アップデート」経路の再調査**
+> (ユーザー指摘「open-englishでaruaru-llmが使われるのですから、
+> open-cuda・open-directxが一緒に自動アップデートの対象で深い関連リポジトリ
+> の対象です。もしシステムがプログラムがそうなっていないなら、システムの
+> 開発の全て修正の対象です」を受けた再調査)。
+> - **依存形態の実態**: `Cargo.toml`は`opencuda-core`/`opencuda-cpu`/
+>   `opencuda-blas`/`open-cuda-bert`/`open-cuda-llm`をすべて
+>   `path = "../open-cuda/crates/..."`のローカルpath依存で参照しており、
+>   crates.io公開もgit依存でのcommit固定(rev/tag pin)もしていない。
+>   `open-directx`(dream-os/open-directx、別リポジトリ)への依存は
+>   `Cargo.toml`に一切無いことを確認済み(2026-07-26のHANDOFF記載どおり
+>   現状も変わらず——GPU検出のDirectX経路は`open-cuda`内の
+>   `opencuda-directx`クレートであり、別リポジトリ`open-directx`とは
+>   無関係)。
+> - **CI(`.github/workflows/release.yml`)の実態確認**: タグpush時の
+>   リリースビルドは、ビルド直前に`git clone --depth=1
+>   https://github.com/aon-co-jp/open-cuda.git ../open-cuda`を実行して
+>   おり、これはブランチ/タグ/commitを指定しない**デフォルトブランチの
+>   最新HEAD**を毎回新規checkoutする形になっている(2026-08-17時点で
+>   既に実装済み、RPoem/RS-JSON等の他sibling path依存も同様の方式)。
+>   つまり——ユーザー指摘の「aruaru-llmが新しいリリースをビルドする際、
+>   常に最新のopen-cudaを取り込んでビルドする」という間接的自動更新の
+>   経路は、**タグpushによるCIリリースビルドに関しては既に実装済み**
+>   であることが判明した(前回セッションでの「自己アップデート機構は
+>   適用できないため見送り」という判断は、self_update.rs型のバイナリ
+>   自己更新の文脈に限った判断であり、CI経由の間接更新は別軸で既に
+>   機能していたことを見落としていた)。
+> - **手元(ローカル)ビルド運用のみ抜けていた点**: 一方、開発者が
+>   ローカルで`cargo build --release`する場合は、隣接ディレクトリ
+>   `../open-cuda`の**その時点でのworking treeの状態**をそのまま使う
+>   ため、ローカルの`open-cuda`をpullし忘れると古い状態でビルドされる
+>   リスクが残る(CIのような強制checkoutが無い)。ここは運用ルールとして
+>   明記が抜けていたため、今回**運用ルールとして追記**する:
+>   **リリースタグをpushする前に、必ず`git -C ../open-cuda pull`(および
+>   `git -C ../RPoem pull`等、他のsibling path依存リポジトリ)で最新化
+>   してから`cargo update -p opencuda-core -p opencuda-cpu -p
+>   opencuda-blas -p open-cuda-bert -p open-cuda-llm`を実行し、
+>   `Cargo.lock`を最新のsibling内容に追従させること。**
+> - **検証結果(正直な開示)**: ローカル(`F:\runo\aruaru-llm`)で
+>   `cargo update -p opencuda-core -p opencuda-cpu -p opencuda-blas
+>   -p open-cuda-bert -p open-cuda-llm`を実行し正常終了(0 packages
+>   changed = 既にsibling内容と一致)したことを確認。続けて`cargo build
+>   --release --bin aruaru-llm`を実行したが、ビルドは時間がかかり
+>   バックグラウンドタスクとして進行中で、本追記の時点ではビルド完走
+>   (成功/失敗)の確認は取れていない——**CI環境上での実際の動作(GitHub
+>   Actions上でのgit clone→build成功)までは検証できていない**ことを
+>   明記する。
+> - **結論・次にすべきこと**: (1) `open-directx`は現時点でaruaru-llmから
+>   一切依存されていないため、間接自動更新の対象外(依存が発生した時点で
+>   同様のsibling checkout方式をCIへ追加する)。(2) `open-cuda`について
+>   CI側の間接自動更新は既に機能しているため追加実装は不要、ただし
+>   ローカルリリース手順の運用ルール(上記pull徹底)を本HANDOFFに明記した。
+>   (3) ローカルでの`cargo build --release`完走確認(成功/失敗)は
+>   バックグラウンドで進行中のため、完了次第結果をこのHANDOFFへ追記する
+>   必要がある。
+
 
 作業ドライブは`F:\open-runo`。この節は[`open-raid-z`](https://github.com/aon-co-jp/open-raid-z)の
 `CLAUDE.md`を正本とし、各プロジェクトへコピーして同期する方針に準じる。
