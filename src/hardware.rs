@@ -181,6 +181,138 @@ pub fn detect() -> HardwareSummary {
     HardwareSummary { gpu_detected: false, detection_path: "cpu-only-fallback", gpu_name: None, vram_bytes: None, cross_check_agreement: None }
 }
 
+/// **NPU(Neural Processing Unit)自動検出(2026-08-19新規実装、ユーザー指示
+/// 「NPUがPC側にあれば、それも自動検出して計算に使用する」への対応)**。
+///
+/// ## 正直な開示(最重要、誇張しない)
+/// ここで実装したのは**検出のみ**である。Windows上で`Get-CimInstance
+/// Win32_PnPEntity`(デバイスマネージャ相当の情報源)を呼び、デバイス名に
+/// "NPU"・"Neural"・"AI Boost"(Intel NPUのデバイス名に含まれることが多い)・
+/// "Hexagon"(Qualcomm NPU)のいずれかを含むデバイスが見つかれば「NPU検出」と
+/// する簡易ヒューリスティック。**実際にこの開発機(2026-08-19時点)で
+/// 実行したところ、該当デバイスは1件も見つからなかった
+/// (`Get-CimInstance Win32_PnPEntity | Where-Object { $_.Name -match
+/// 'NPU|Neural' }`が空を返した)——このマシンにNPUは搭載されていない。**
+/// NPU上で実際に計算を実行する処理(DirectML NPU推論等)は、対応SDKが
+/// この環境に存在しないため実装していない。検出できた場合でも、
+/// `idle_background_fold`のステップ処理自体は引き続きCPU
+/// (`opencuda_cpu::CpuDevice`)上でのみ実行される——NPUが見つかった旨を
+/// `AcceleratorInfo`へ記録するだけで、実際にNPUへディスパッチする経路は
+/// 無い(このモジュールの他のGPU検出と同じ「検出はできるが本物の実行
+/// パイプラインへは未配線」という設計上の限界を正直に明記する)。
+#[cfg(target_os = "windows")]
+pub fn detect_npu() -> Option<String> {
+    use std::process::Command;
+    let output = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Get-CimInstance Win32_PnPEntity | Where-Object { $_.Name -match 'NPU|Neural|AI Boost|Hexagon' } | Select-Object -First 1 -ExpandProperty Name",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn detect_npu() -> Option<String> {
+    // 正直な開示: Windows以外(Linux VPS等)向けのNPU検出経路は未実装
+    // (Android端末のNNAPI経由NPUは別経路、`CLAUDE.md`のHANDOFF参照)。
+    None
+}
+
+/// USB接続されたAndroid端末の一覧を`adb devices`で検出する
+/// (2026-08-19新規実装、ユーザー指示「使わなくなった複数のスマホを
+/// USBで接続して...統合した計算リソースとして利用できるようにする」への
+/// 対応の最小の一歩)。
+///
+/// ## 正直な開示(最重要)
+/// これは「N台のスマホが接続されている」ことを検出してログ表示する
+/// だけであり、検出したスマホへ実際に計算タスクを送る・NNAPI経由で
+/// NPUを稼働させる、といった処理は一切実装していない
+/// (`CLAUDE.md`のHANDOFF「USB接続スマホ活用」節参照)。`adb`コマンド
+/// 自体がこの開発環境のPATH上に存在しない場合は、その旨を`Err`として
+/// 正直に返す(黙って0台と偽装しない)。
+pub fn detect_usb_android_devices() -> Result<Vec<String>, String> {
+    use std::process::Command;
+    let output = Command::new("adb")
+        .arg("devices")
+        .output()
+        .map_err(|e| format!("adb command not available on this machine (adb devices failed to launch: {e})"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "adb devices exited with non-zero status: {:?}",
+            output.status.code()
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // 1行目は "List of devices attached" ヘッダー、以降 "<serial>\tdevice" の形式。
+    let devices: Vec<String> = stdout
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() {
+                return None;
+            }
+            let serial = line.split_whitespace().next()?;
+            if line.ends_with("device") {
+                Some(serial.to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
+    Ok(devices)
+}
+
+/// 利用可能なアクセラレータ(CPU/GPU/NPU、PC/スマホ別)の一覧
+/// (2026-08-19新設、`idle_background_fold`のスケジューラ・
+/// `GET /v1/background-fold/status`から参照される)。
+#[derive(Debug, Clone, Serialize)]
+pub struct AcceleratorInventory {
+    /// CPUは常に利用可能とみなす(このプロセス自体が動作している時点で
+    /// 自明なため検出処理は行わない)。
+    pub cpu_available: bool,
+    pub gpu: HardwareSummary,
+    /// NPUデバイス名(検出できた場合)。実行パイプラインへの配線は
+    /// 無い旨、`disclosure`で明記する。
+    pub npu_name: Option<String>,
+    /// `adb devices`で検出したUSB接続Android端末のシリアル番号一覧。
+    /// `adb`自体が使えない環境では`None`(検出不能、0台という意味では
+    /// ない——この区別を保つため`Option`にしている)。
+    pub usb_android_devices: Option<Vec<String>>,
+    pub disclosure: &'static str,
+}
+
+pub fn detect_accelerators() -> AcceleratorInventory {
+    let gpu = detect();
+    let npu_name = detect_npu();
+    let usb_android_devices = detect_usb_android_devices().ok();
+    AcceleratorInventory {
+        cpu_available: true,
+        gpu,
+        npu_name,
+        usb_android_devices,
+        disclosure: "これは利用可能なアクセラレータの『検出』結果に過ぎません。\
+            NPU・USB接続スマホのCPU/GPU/NPUを実際の計算(Model Folding等)へ \
+            ディスパッチする実行パイプラインは未実装です。実際の計算は引き続き \
+            PC側のCPU(opencuda_cpu::CpuDevice)上でのみ実行されます。 / This only \
+            reports what accelerators were detected. There is no execution pipeline \
+            yet that dispatches actual computation to the NPU or to any USB-connected \
+            phone's CPU/GPU/NPU. All real computation still runs on the PC's CPU only.",
+    }
+}
+
 /// 推奨結果(API/UI向け)。
 #[derive(Debug, Clone, Serialize)]
 pub struct Recommendation {

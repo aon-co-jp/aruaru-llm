@@ -106,6 +106,9 @@ pub struct FoldProgress {
     /// 「本物のModel Foldingが実行中」と誤解しないよう、常にこの文字列を
     /// 一緒に返す。
     pub disclosure: &'static str,
+    /// 利用可能なアクセラレータ一覧(CPU/GPU/NPU、PC/スマホ別、
+    /// 2026-08-19追加、`crate::hardware::detect_accelerators`参照)。
+    pub accelerators: crate::hardware::AcceleratorInventory,
 }
 
 struct ProgressState {
@@ -140,6 +143,7 @@ pub fn current_progress() -> FoldProgress {
             埋め込みベクトル同士のコサイン類似度計算を1ステップとして反 \
             復しているだけで、モデルの重みは一切変更されません。詳細は \
             aruaru-llm/CLAUDE.mdのHANDOFF(2026-08-19)を参照してください。",
+        accelerators: crate::hardware::detect_accelerators(),
     }
 }
 

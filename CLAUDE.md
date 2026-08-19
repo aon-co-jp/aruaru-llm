@@ -229,6 +229,62 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-08-19(続き2) PC側NPU自動検出+USB接続Android台数検出を実装
+  (ユーザー指示「使わなくなったスマホもフル動員」「NPUがPC側にあれば
+  自動検出して計算に使用」「複数スマホをUSB接続してCPU+GPU+NPUを統合
+  リソースとして利用」への対応、直前2026-08-19エントリのアイドル検知
+  スケジューラの上に構築)**:
+  1. **PC側NPU検出(`src/hardware.rs::detect_npu`)**: Windows上で
+     `Get-CimInstance Win32_PnPEntity`を呼び、デバイス名に"NPU"・
+     "Neural"・"AI Boost"(Intel NPU)・"Hexagon"(Qualcomm NPU)を含む
+     デバイスを探す簡易検出。**実機確認結果(正直な開示)**: この開発機
+     (2026-08-19時点)には該当デバイスが1件も無く、`detect_npu()`は
+     常に`None`を返した——このマシンにNPUは搭載されていない。検出でき
+     た場合でも実際にNPU上で計算する経路(DirectML NPU推論等)は対応
+     SDKが無いため未実装、`AcceleratorInventory`へ記録するだけに留めた
+     (既存のGPU検出〈Vulkan/DirectX〉と同じ「検出はできるが実行
+     パイプライン未配線」という設計上の限界)。Windows以外
+     (Linux VPS等)向けの検出経路は未実装。
+  2. **USB接続Android台数検出(`src/hardware.rs::detect_usb_android_
+     devices`)**: `adb devices`を子プロセスとして呼び、`device`状態の
+     シリアル番号一覧を返す。**実機確認結果**: この開発環境には`adb`
+     コマンド自体がPATH上に存在せず(`adb: command not found`)、
+     `Err`を正直に返す(黙って0台と偽装しない設計)。実機Android端末の
+     USB接続検証はこの開発環境ではできなかった。
+  3. **`AcceleratorInventory`+`GET /v1/background-fold/status`拡張**:
+     `hardware::detect_accelerators()`(CPU常時available+既存GPU検出+
+     上記1・2を統合)を`idle_background_fold::FoldProgress`
+     (`accelerators`フィールド)へ追加。実際にサーバーを起動し実HTTP
+     リクエストで`{"accelerators":{"cpu_available":true,"gpu":{...
+     "detection_path":"cpu-only-fallback"...},"npu_name":null,
+     "usb_android_devices":null,"disclosure":"..."}}`という正しい応答
+     (このマシンの実際の検出結果と一致)を確認済み。
+  4. **USB接続スマホ活用の設計(実装は行っていない、正直な開示)**:
+     `F:\runo\open-english\android\`側のプロトコル設計(ADB経由の
+     `adb forward`によるPC⇔スマホHTTP通信確立案、NNAPI/TensorFlow
+     Lite NNAPI Delegate経由でのスマホ側NPU活用案)は、既存の
+     `aruaru-llm/CLAUDE.md` 2026-08-19エントリ5番の記載
+     (`GET /v1/background-fold/task`・`POST /v1/background-fold/result`
+     というポーリング方式の設計)がそのまま該当し、今回追加で具体化する
+     新規設計事項は無かった——重複を避けるため、本エントリでは同記載を
+     参照するに留める。実機のAndroidスマホがこの開発環境に無いため、
+     この設計自体の実装(上記エンドポイント新設)は今回も行っていない。
+  5. **検証**: `cargo build --release`成功(既存4件のpre-existing警告
+     のみ、今回の変更に起因する新規警告なし)。`cargo test --release`
+     **70件全green**(既存70件、回帰なし——今回の変更は検出処理のみで
+     専用の新規単体テストは追加していない、実機での起動+実HTTP確認を
+     主体とした)。実際にサーバーを起動し`GET /v1/background-fold/
+     status`への実HTTPリクエストで上記3番の通り確認済み。
+  6. **UI側**(`open-english`側で対応、詳細は`open-english/CLAUDE.md`
+     参照): 日英併記の「使わなくなったスマホもフル動員」バナーを
+     `index.html`へ追加。
+  - 次にすべきこと: (1) 実際にNPU搭載機・Android実機(adb接続可能な
+    環境)が用意でき次第、上記1・2の検出ロジックを実機で再検証、
+    (2) `GET /v1/background-fold/task`・`POST /v1/background-fold/
+    result`(スマホ側プロトコル)の実装は、実機Android端末が用意でき
+    次第着手する、(3) Linux VPS向けのNPU検出経路(`/proc`や`lspci`
+    経由等)は今回未実装のまま。
+
 - **2026-08-19 「1週間かけてスマホもフル活用しつつPCバックグラウンドで
   再学習」要望への対応: 実現可能性評価+アイドル検知スケジューラの実装
   (ユーザー指示「再学習が、もし、一週間で、既存のリソースのスマホや
