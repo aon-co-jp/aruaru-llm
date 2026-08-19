@@ -38,6 +38,7 @@ mod nllb;
 mod phone_task;
 mod scoring;
 mod security;
+mod self_update;
 mod signatures;
 mod tenants;
 
@@ -1573,6 +1574,12 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|s| s.parse().ok())
         .unwrap_or_else(|| "0.0.0.0:4600".parse().expect("static bind address is always valid"));
     tracing::info!("aruaru-llm listening on {bind_addr} (shared multi-tenant instance)");
+
+    // 自動アップデート機能(2026-08-19新設、self_update.rs参照)。既定は
+    // 無効(ARUARU_LLM_ENABLE_SELF_UPDATE未設定)——サーバー起動をブロック
+    // しないよう非同期タスクとして起動する。
+    tokio::spawn(self_update::check_and_apply_update(bind_addr));
+
     let (_addr, handle) = Server::new(TcpListener::bind(bind_addr)).run(app).await?;
     handle.await.map_err(|e| anyhow::anyhow!("server task panicked: {e}"))
 }
