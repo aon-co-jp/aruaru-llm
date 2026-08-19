@@ -35,6 +35,7 @@ mod intrusion_detection;
 mod model_catalog;
 mod news_geo;
 mod nllb;
+mod phone_task;
 mod scoring;
 mod security;
 mod signatures;
@@ -1144,6 +1145,25 @@ async fn background_fold_status() -> Response {
     json_response(StatusCode::OK, &idle_background_fold::current_progress())
 }
 
+/// USB接続スマホ向けタスク配布(2026-08-19新設、`phone_task.rs`参照)。
+/// 常に1件のタスクを返す(キューの空/満杯という概念は持たない簡易実装、
+/// 呼び出すたびに新しい題材を生成する)。
+async fn background_fold_task() -> Response {
+    json_response(StatusCode::OK, &phone_task::next_task())
+}
+
+/// スマホ側が計算した結果を受け取る(2026-08-19新設)。受け取って記録する
+/// のみで、実際のモデル推論・Model Foldingへは反映しない(`phone_task.rs`
+/// モジュールdoc参照)。
+async fn background_fold_task_result(req: Request) -> Response {
+    let Json(body): Json<phone_task::TaskResultRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let record = phone_task::record_result(body);
+    json_response(StatusCode::OK, &record)
+}
+
 /// 日本の都道府県1件・米国の州1件・世界の首都1件をランダムに返す
 /// (open-englishの自己紹介トレーニング用、2026-08-11新設)。
 async fn geo_random() -> Response {
@@ -1541,6 +1561,8 @@ async fn main() -> anyhow::Result<()> {
         )
         .at("/healthz", get(plain(|| Box::pin(healthz()))))
         .at("/v1/background-fold/status", get(plain(|| Box::pin(background_fold_status()))))
+        .at("/v1/background-fold/task", get(plain(|| Box::pin(background_fold_task()))))
+        .at("/v1/background-fold/task-result", post(handler_fn(|req, _p| Box::pin(background_fold_task_result(req)))))
         .with_cors();
 
     // `ARUARU_LLM_BIND`環境変数で上書き可能(2026-08-11追加、Android
