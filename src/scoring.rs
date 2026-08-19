@@ -423,6 +423,20 @@ pub fn debug_intent_embedding_pairwise_similarities() -> Vec<(&'static str, &'st
     out
 }
 
+/// `phone_task`モジュール向けのアクセサ(2026-08-19新設)。既に
+/// ウォームアップ済みのインテント代表ベクトルから先頭2本を取り出し、
+/// スマホ側へ配布する「コサイン類似度計算タスク」の題材として使う。
+/// `debug_intent_embedding_pairwise_similarities`と同じく新規のモデル
+/// 呼び出しは行わない(未ウォームアップなら`None`、呼び出し側が
+/// フォールバックのデモベクトルへ切り替える)。
+pub fn sample_embedding_pair_for_phone_task() -> Option<(Vec<f32>, Vec<f32>)> {
+    let embeddings = INTENT_EMBEDDINGS.get()?;
+    if embeddings.len() < 2 {
+        return None;
+    }
+    Some((embeddings[0].clone(), embeddings[1].clone()))
+}
+
 /// ユーザー発話ともっとも類似度の高いインテントを、open-cudaのCPU
 /// バックエンド上で実行する実際のBERT系エンコーダ(`open-cuda-bert`、
 /// GEMM/Attentionは`opencuda-blas`の実カーネル)で計算する。すべての

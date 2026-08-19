@@ -229,6 +229,37 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-08-19(続き3) スマホ計算タスク配布API(`GET /v1/background-fold/
+  task`・`POST /v1/background-fold/task-result`)を新設(ユーザー指示
+  「実際のスマホ側計算処理を実装してほしい」への対応、`open-english`側
+  Androidワーカーと対をなす、詳細は`open-english/CLAUDE.md`同日HANDOFF
+  参照)**:
+  1. **新規`src/phone_task.rs`**: `GET /v1/background-fold/task`が
+     コサイン類似度計算タスク(2本のベクトル)を1件返す。ベクトルは
+     `scoring.rs`が既にウォームアップ済みのインテント埋め込み
+     (`sample_embedding_pair_for_phone_task`を新設)から取り、未ウォーム
+     アップ時は8次元のデモベクトルへフォールバックする。
+     `POST /v1/background-fold/task-result`は結果を受け取り記録する
+     のみ(実際のモデル推論・Model Foldingへは反映しない、モジュールdoc
+     に明記)。認証・レート制限は無い最小実装(同一LAN/USB内の信頼された
+     端末を想定)。
+  2. **`main.rs`へのルート登録**: 既存の`/v1/background-fold/status`
+     (`idle_background_fold.rs`)と並べて2ルートを追加。
+  3. **検証**: `cargo build --release`成功、`cargo test --release
+     phone_task`2件全green。実際にサーバーを起動し、
+     `GET /v1/background-fold/task`が実際の384次元embedding(実
+     multilingual-e5-small由来)を含むJSONを返すこと、
+     `POST /v1/background-fold/task-result`が受け取った結果を
+     `received_epoch_secs`付きで正しくエコーすることを実HTTPで確認した。
+  4. **正直な開示**: スマホ側(`open-english/android`)の実装・ビルド
+     成功は確認済みだが、実機Android端末・USB接続環境がこの開発機に
+     無いため、PC↔スマホ間の実際のE2E(実機でタスクが往復すること)は
+     未検証のまま。
+  - 次にすべきこと: (1) 実機での往復検証、(2) 将来的にタスクの種類を
+    増やす場合(現状は`cosine_similarity`固定)の設計拡張、(3) 認証・
+    レート制限が必要かどうかの要否確認(公開インターネットへの露出を
+    想定するなら必須)。
+
 - **2026-08-19(続き2) PC側NPU自動検出+USB接続Android台数検出を実装
   (ユーザー指示「使わなくなったスマホもフル動員」「NPUがPC側にあれば
   自動検出して計算に使用」「複数スマホをUSB接続してCPU+GPU+NPUを統合
