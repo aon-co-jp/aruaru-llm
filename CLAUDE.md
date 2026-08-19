@@ -1,37 +1,40 @@
 # 設計思想＆開発方針＆開発環境ルール(aruaru-llm)
 
-> **📌 保留タスク(2026-08-06、次回セッションで着手予定)/ Pending task (added 2026-08-06, to be started next session)**:
-> ユーザー指示により、**東芝の疑似量子コンピューター技術(Simulated
-> Bifurcation Machine)**と**DeepSeekの技術**(インターネットニュースだけ
-> でなく、論文〈DeepSeek-V3/R1テクニカルレポート等〉・実装ノウハウの
-> ブログまで日英両言語でGoogle/GitHub調査)を、`dream-os`/`open-directx`/
-> `open-cuda`/`aruaru-llm`/`open-web-server`/`RPoem`/`open-raid-z`/
-> `aruaru-db`の8リポジトリへ組み込む構想がある。東芝SBMは`dream-os`
-> (`sbm_ising`カーネル、64スピンPoC)に実装済み——他リポジトリへの適用は
-> 各リポジトリで「何を最適化するか」を先に特定してから着手すること
-> (このリポジトリ固有の候補は未検討、次回調査対象)。DeepSeekは前回調査で
-> 「数千枚のGPUを1枚に圧縮する技術」という主張は確認できなかった(誤解・
-> 誇張と判断済み)——今回は論文・実装ブログまで調査範囲を広げ、実在する
-> 技術(MLA・DeepSeekMoE・FP8混合精度学習等)を特定してから適用箇所を
-> 検討すること。詳細は`dream-os/CLAUDE.md`の同日HANDOFF参照。
->
-> By user instruction, there is a plan to incorporate **Toshiba's
-> pseudo-quantum-computer technology (Simulated Bifurcation Machine)**
-> and **DeepSeek's technology** (researched via Google/GitHub in both
-> Japanese and English, going beyond news articles to actual papers
-> like the DeepSeek-V3/R1 technical reports and implementation-notes
-> blogs) into 8 repositories: `dream-os`, `open-directx`, `open-cuda`,
-> `aruaru-llm`, `open-web-server`, `RPoem`, `open-raid-z`, and
-> `aruaru-db`. Toshiba SBM is already implemented in `dream-os` (the
-> `sbm_ising` kernel, a 64-spin PoC) — applying it elsewhere requires
-> first identifying a concrete optimization problem in each repo (not
-> yet investigated for this repo). The previous DeepSeek research found
-> no evidence for a "compress thousands of GPUs into one" technology
-> (judged to be a misunderstanding/exaggeration) — this time, broaden
-> the research to papers and implementation blogs, identify real
-> techniques (MLA, DeepSeekMoE, FP8 mixed-precision training, etc.),
-> then decide where they apply. See the same-day HANDOFF entry in
-> `dream-os/CLAUDE.md` for details.
+> **📌 2026-08-19追記: 東芝SBM/DeepSeek調査タスクは完了・現状維持と判断
+> (`open-english/PORTING.md`のHANDOFFに残っていた「項目4未着手」を受けて
+> 日英中(簡体)中(繁体)4言語でWebSearch調査を実施)**:
+> - **東芝SBM**: 2026年の新展開として、(1) 2026年4月発表の第3世代SB
+>   アルゴリズム("カオスの縁"利用、Physical Review Applied掲載、旧世代比
+>   約10〜100倍高速化)、(2) 2026年2月、SBMを自律移動ロボットへ搭載し
+>   リアルタイム制御に応用(Nature Communications等掲載、東芝・MIRISE)、
+>   (3) 2026年6月、最適化制御AI+Isingモデル圧縮を組み合わせた新フレーム
+>   ワークを確認した。ただしこのリポジトリでは既に`cache_optimizer.rs`
+>   (`POST /v1/models/optimize-cache`)でSBMをナップサック問題(モデル
+>   キャッシュ選択)として実装済み(2026-08-10 HANDOFF参照)であり、今回
+>   発見した第3世代アルゴリズムの改善(カオスの縁による成功確率向上)は
+>   理論上参考になり得るが、現行実装は8シード多重探索で75%以上の近似
+>   精度という別方式で既に運用中のため、既存実装を置き換えるほどの
+>   緊急性・具体的な適用差分は無いと判断し、コード変更は行わなかった
+>   (正直な開示)。
+> - **DeepSeek**: MLA(Multi-head Latent Attention、KV量93.3%削減)・
+>   DeepSeekMoE(スパース比率の継続的な圧縮、V3の5.4%→V4-Proの3.1%)・
+>   R1からのreasoning蒸留(検証・振り返りパターンをV3へ蒸留)を実在の
+>   技術として確認。加えてSlimMoE(arXiv:2506.18349、MoEのexpert
+>   slimming+多段蒸留、Phi 3.5-MoEを41.9B→7.6B/3.8Bへ圧縮)を新規に発見
+>   した。ただしこのリポジトリの推論エンジンはGPT-2 124M(密なdecoder-only、
+>   MoEではない)であり、MLA/DeepSeekMoE/SlimMoEはいずれも
+>   **MoEアーキテクチャまたはマルチヘッド潜在アテンション前提の再学習を
+>   要する技術**で、既存の事前学習済みGPT-2重みへ後付けで適用することは
+>   できない(アーキテクチャ変更には再学習が必須、正直な開示)。既存の
+>   INT4/INT8量子化(`opencuda-blas`、2026-07-21時点で実装済み)は
+>   DeepSeekの量子化アプローチと方向性が一致しており、追加で取り込む
+>   べき新規手法は見つからなかった。
+> - **結論**: 今回の調査で、東芝SBM・DeepSeekのいずれについても、
+>   このリポジトリへ**新規にコード実装すべき具体的な差分は無い**と
+>   判断した(過去のHANDOFFで既に両技術とも実装済み、かつ今回発見した
+>   最新動向は現行実装のアーキテクチャ前提〈非MoE・単一シードでなく
+>   多重探索〉と噛み合わないため)。この保留タスクは調査完了として
+>   クローズする。
 
 
 作業ドライブは`F:\open-runo`。この節は[`open-raid-z`](https://github.com/aon-co-jp/open-raid-z)の
@@ -225,6 +228,85 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 
 ## HANDOFF
+
+- **2026-08-19 「1週間かけてスマホもフル活用しつつPCバックグラウンドで
+  再学習」要望への対応: 実現可能性評価+アイドル検知スケジューラの実装
+  (ユーザー指示「再学習が、もし、一週間で、既存のリソースのスマホや
+  使わなくなったスマホなどもフル利用して今のPCのバックグラウンドで
+  再学習も可能な範囲で、裏で実行する様な仕様にしましょう」への対応)**:
+  1. **スマホ活用の現実的な評価(誇張しない)**: GPT-2 124Mクラスの
+     本格的な逆伝播学習をAndroidスマホ単体で行うのは、メモリ・熱・
+     電池の制約から通常非現実的と判断した。現実的な役割分担案として、
+     スマホ側は「軽量な補助計算(例: 層間類似度計算のような順伝播
+     のみのタスク)」に限定し、勾配計算・オプティマイザ更新はPC側に
+     集約するのが妥当という結論に至った。ただし**この開発環境には
+     実際に検証できるAndroid実機(余ったスマホ)が存在しない**ため、
+     スマホ側の実装は行わず、プロトコル設計のみに留めた(下記5番)。
+  2. **採用した設計**: 「四六時中GPUフル稼働の学習」ではなく、
+     「PCがアイドル(HTTPリクエストが一定時間無い)を検知した時だけ、
+     低優先度のバックグラウンドスレッドで軽量な処理を1ステップ進め、
+     すぐ休止する」という間欠実行方式を採用した。既存の
+     `android/`(`tokyo.runo.aruarullm`)の`PowerProfile`
+     (省電力/通常/常時電源接続の3モード、`WakeLock`制御)という
+     エコシステム標準の電源方針と設計思想を合わせている。
+  3. **実装した範囲**: 新規`src/idle_background_fold.rs`
+     (`touch_activity()`でHTTPハンドラ側からアクティビティを記録、
+     アイドル閾値120秒・ポーリング5秒・ステップ間隔30秒の低頻度
+     `std::thread`ループ)。`src/main.rs`の`chat`/`generate`ハンドラで
+     `touch_activity()`を呼ぶよう配線し、起動時に`idle_background_fold::
+     spawn()`を実行。進捗は`GET /v1/background-fold/status`で確認できる
+     (`FoldProgress`、`disclosure`フィールドで常に限界を自己申告)。
+     **正直な開示(最重要)**: 本物のModel Folding(ICLR 2025、
+     arXiv:2502.10216、重みのクラスタリング・統合)は実装していない
+     ——`open-cuda-llm::GptModel`の各層の重み(`layers: Vec<DecoderLayer>`)
+     は`private`フィールドで公開アクセサが無く、実装するには
+     `open-cuda-llm`クレート側への新規public API追加が前提となるため、
+     このセッションのスコープには含めなかった。代わりに実装したのは
+     「アイドル検知→低頻度実行→進捗可視化」という**スケジューリング
+     基盤**であり、各ステップの中身は`scoring.rs`が既に保持する実
+     インテント埋め込みベクトル(open-cuda-bert、multilingual-e5-small)
+     同士のコサイン類似度計算という読み取り専用のプレースホルダに
+     留めた(モデルの重みは一切変更されない)。`run_one_step()`を
+     独立関数にし、将来`open-cuda-llm`に重み読み取りAPIが追加されれば
+     この中身だけを本物のModel Folding計算へ差し替えられる設計にした。
+  4. **実機検証(型チェックのみで完了と報告しない方針を徹底)**:
+     `cargo build --release`成功(既存4件のpre-existing警告のみ、
+     今回の変更に起因する新規警告なし)。`cargo test --release`
+     **70件全green**(既存回帰なし)。実際にサーバーを起動し、
+     `GET /v1/background-fold/status`を即座に呼んだところ
+     `steps_completed:0`(起動直後、まだステップ未実行)、約70秒後に
+     再度呼んだところ`steps_completed:2`・
+     `last_similarity_summary:"gov~trade=0.928, gov~credit=0.937, ..."`
+     という実際の計算結果を確認した(アイドル状態で実際にバックグラウンド
+     処理が進行することを実証)。続けて`POST /v1/chat`を実際に送信した
+     直後に`GET /v1/background-fold/status`を呼び、
+     `currently_idle`が`true`から`false`へ(`idle_seconds`が0へ)正しく
+     切り替わることを確認した(実際のHTTPトラフィックに基づくアイドル
+     判定が機能していることの実証)。
+  5. **スマホ側プロトコル設計(実装は行っていない、正直な開示)**:
+     既存の`android/`クライアント(`tokyo.runo.aruarullm`)が既に
+     HTTP経由で`POST /v1/chat`を叩く仕組みを持っているため、将来
+     スマホ側の軽量補助計算タスクを実装する場合は、同じHTTPクライアント
+     基盤の上に「Wi-Fi接続時のみ、PCから小さなタスク(例: 特定層の
+     類似度スコア計算に必要な小さなテンソル)を`GET`で取得し、計算結果を
+     `POST`で返す」というポーリング方式のエンドポイント
+     (`GET /v1/background-fold/task`・`POST /v1/background-fold/result`
+     のような形)を新設する設計が現実的と考えられる。`PowerProfile`の
+     既存3モードのうち「省電力」モード相当の設計(`WakeLock`を取得しない、
+     充電中かつWi-Fi接続時のみ動作する等)を踏襲すればスマホを壊さない
+     設計にできる。**このエンドポイント自体は今回実装していない**
+     ——実機が無い状態でプロトコルだけを実装しても実証できず、動かない
+     ものを「実装した」と報告しないという既存の運用ルールに従った。
+  - 次にすべきこと: (1) `open-cuda-llm::GptModel`に層の重みへの
+    読み取り専用アクセサ(例: `pub fn layer_weight_summaries(&self) ->
+    Vec<LayerWeightSummary>`のような、生の`Vec<f32>`全体を晒さない
+    集約済み統計量を返すAPI)を追加し、`run_one_step()`の中身を本物の
+    Model Folding(層間類似度→クラスタリング候補の探索)へ差し替える、
+    (2) 実際に余ったAndroidスマホが用意できた場合、上記5番のプロトコル
+    設計に基づき`GET /v1/background-fold/task`等を実装し実機で検証する、
+    (3) `IDLE_THRESHOLD_SECS`(120秒)・`STEP_COOLDOWN`(30秒)は経験的な
+    初期値であり、実際に1週間程度運用してみてCPU負荷・進捗速度の
+    バランスを見ながら調整する余地がある。
 
 - **2026-08-18(続き) 調査完了・バージョンを0.2.2→0.2.3へ更新
   (「aruaru-llmのバージョンアップとして、既存の古い物からDATABASE

@@ -129,7 +129,7 @@ dependencies = [
 
 [[package]]
 name = "aruaru-llm"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "bytes",

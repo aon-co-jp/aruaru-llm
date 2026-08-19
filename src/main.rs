@@ -30,6 +30,7 @@ mod referrals;
 mod web_search;
 mod generation;
 mod hardware;
+mod idle_background_fold;
 mod intrusion_detection;
 mod model_catalog;
 mod news_geo;
@@ -119,6 +120,9 @@ struct ChatResponse {
 }
 
 async fn chat(req: Request, device: Arc<dyn GpuDevice>, registry: Arc<TenantRegistry>) -> Response {
+    // アイドル時バックグラウンドModel Folding準備スケジューラ(idle_background_fold.rs、
+    // 2026-08-19新設)へ「今アクティブなリクエストがあった」ことを伝える。
+    idle_background_fold::touch_activity();
     let Json(req): Json<ChatRequest> = match Json::from_body(req).await {
         Ok(v) => v,
         Err(resp) => return resp,
@@ -385,6 +389,7 @@ struct GenerateErrorResponse {
 /// `/v1/chat`(意図分類、軽量・高速)とは別目的の別エンドポイント——
 /// 意図分類と生成は無理に統合しない設計方針(CLAUDE.md参照)。
 async fn generate(req: Request, device: Arc<dyn GpuDevice>, registry: Arc<TenantRegistry>) -> Response {
+    idle_background_fold::touch_activity();
     let Json(req): Json<GenerateRequest> = match Json::from_body(req).await {
         Ok(v) => v,
         Err(resp) => return resp,
@@ -1133,6 +1138,12 @@ async fn healthz() -> Response {
     text_response(StatusCode::OK, "ok")
 }
 
+/// アイドル時バックグラウンドModel Folding準備スケジューラの進捗確認用
+/// (2026-08-19新設、`idle_background_fold.rs`参照)。
+async fn background_fold_status() -> Response {
+    json_response(StatusCode::OK, &idle_background_fold::current_progress())
+}
+
 /// 日本の都道府県1件・米国の州1件・世界の首都1件をランダムに返す
 /// (open-englishの自己紹介トレーニング用、2026-08-11新設)。
 async fn geo_random() -> Response {
@@ -1389,6 +1400,12 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // アイドル時バックグラウンドModel Folding準備スケジューラを起動
+    // (2026-08-19新設)。専用の低優先度std::threadで動作し、HTTP処理を
+    // 一切妨げない。詳細・正直な開示はidle_background_fold.rsのモジュール
+    // docおよびCLAUDE.mdのHANDOFF(2026-08-19)参照。
+    idle_background_fold::spawn();
+
     // 地理・観光DB(2026-08-11追加): aruaru-dbへベストエフォートでseedを
     // 投入する(接続できない/未設定ならログのみで正常起動を継続、
     // geo_content.rsのモジュールdoc参照)。
@@ -1523,6 +1540,7 @@ async fn main() -> anyhow::Result<()> {
             delete(handler_fn(move |req, params| { let registry = Arc::clone(&admin_remove_registry); async move { admin_remove_tenant(req, params, registry).await } })),
         )
         .at("/healthz", get(plain(|| Box::pin(healthz()))))
+        .at("/v1/background-fold/status", get(plain(|| Box::pin(background_fold_status()))))
         .with_cors();
 
     // `ARUARU_LLM_BIND`環境変数で上書き可能(2026-08-11追加、Android
