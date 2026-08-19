@@ -189,7 +189,33 @@ fn model_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("ARUARU_LLM_EMBED_MODEL_DIR") {
         return PathBuf::from(dir);
     }
-    // aruaru-llm/models/multilingual-e5-small(CLAUDE.md記載のダウンロード済みモデル)。
+    // カレントディレクトリ相対の`models/multilingual-e5-small`が存在すれば
+    // それを優先する(2026-08-12追加。install.sh/install.ps1が案内する
+    // 配置——systemdの`WorkingDirectory=/etc/aruaru-llm`やWindowsの
+    // `C:\Program Files\aruaru-llm`——はバイナリの実行ディレクトリを
+    // 前提としており、次の`CARGO_MANIFEST_DIR`フォールバックが指す
+    // 開発機/CIランナー上のビルド時パスはGitHub Release配布バイナリを
+    // 実際にインストールしたユーザー環境には存在しない。
+    // `open-english/server::repo_root`で実機テストの上発見・修正した
+    // 同種のバグと同じ修正パターン)。
+    let cwd_candidate = PathBuf::from("models/multilingual-e5-small");
+    if cwd_candidate.is_dir() {
+        return cwd_candidate;
+    }
+    // 実行ファイルと同じディレクトリに`models/multilingual-e5-small`が
+    // あればそちらも試す(手元でzipを展開してそのディレクトリのまま
+    // 実行するケースの保険。上のカレントディレクトリと一致することが多いが、
+    // 呼び出し元のCWDが別の場所になるケースへの追加フォールバック)。
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            let candidate = exe_dir.join("models/multilingual-e5-small");
+            if candidate.is_dir() {
+                return candidate;
+            }
+        }
+    }
+    // aruaru-llm/models/multilingual-e5-small(CLAUDE.md記載のダウンロード済みモデル、
+    // ビルド時のパスなので開発機/CIランナー上でのみ有効)。
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models/multilingual-e5-small")
 }
 
@@ -373,6 +399,28 @@ fn get_intent_embeddings(device: &Arc<dyn GpuDevice>) -> Result<&'static Vec<Vec
 
     let _ = INTENT_EMBEDDINGS.set(embeddings);
     Ok(INTENT_EMBEDDINGS.get().expect("INTENT_EMBEDDINGS was just set"))
+}
+
+/// `idle_background_fold`モジュール向けのデバッグ用アクセサ(2026-08-19
+/// 新設)。既にウォームアップ済み(`INTENT_EMBEDDINGS`が計算済み)の
+/// インテント代表ベクトル同士のコサイン類似度を、隣接するペアについて
+/// 総当たりで計算して返す。**新規にモデル呼び出しは行わない**
+/// (`OnceLock`未初期化ならデバイスを持たないため空配列を返す、
+/// アイドル時バックグラウンド処理を予期しないタイミングで重いモデル
+/// ロードへ導かないための安全策)。読み取り専用、モデル・重みは一切
+/// 変更しない。
+pub fn debug_intent_embedding_pairwise_similarities() -> Vec<(&'static str, &'static str, f32)> {
+    let Some(embeddings) = INTENT_EMBEDDINGS.get() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for i in 0..INTENTS.len() {
+        for j in (i + 1)..INTENTS.len() {
+            let sim = cosine_similarity(&embeddings[i], &embeddings[j]);
+            out.push((INTENTS[i].name, INTENTS[j].name, sim));
+        }
+    }
+    out
 }
 
 /// ユーザー発話ともっとも類似度の高いインテントを、open-cudaのCPU
