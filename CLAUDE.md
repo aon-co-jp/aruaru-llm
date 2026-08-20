@@ -2723,3 +2723,40 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
      (3) dream-os・open-directx側との具体的な連携強化(API呼び出し
      経路の実装等)は、今回は本リポジトリ内で完結する改善に留めた
      ため未着手のまま。
+
+- **2026-08-20 「2つのopen-directx」混同の解消(調査のみ、実装無し)**:
+  ユーザーより「aruaru-llmがopen-cuda経由でopen-directxを使うなら
+  open-english配布物に(間接的に)同梱すべきでは」との指摘があり調査。
+  実態は以下で、**同名だが無関係な別物が2つ存在**していたことが
+  混同の原因と判明した。
+  1. `opencuda-directx`クレート — `open-cuda`リポジトリ**内蔵**の
+     ワークスペースメンバー(`open-cuda/crates/opencuda-directx`)。
+     `Cargo.toml`で`opencuda-directx = { path = "crates/opencuda-directx" }`
+     として定義されている。
+  2. `open-directx`リポジトリ — GitHub上`aon-co-jp/open-directx`の
+     **完全に独立したプロジェクト**(`F:\runo\open-directx`)。
+     ワークスペースメンバーは`directx-shader-translate`/
+     `directx-graphics-vulkan`/`directx-graphics-window`で、
+     `opencuda-directx`とはクレート名もパスも一切重複していない。
+     path依存・git submodule・その他いかなる技術的連携も無い
+     (`grep`で相互参照ゼロ件を確認)。名前が似ているだけの別物。
+  - `aruaru-llm`側の依存: `Cargo.toml`で
+     `opencuda-directx = { path = "../open-cuda/crates/opencuda-directx", optional = true }`
+     と定義され、`hw-detect-directx` feature経由でのみ有効化される
+     (`default = []`のため既定では無効)。つまり(1)の内蔵クレートを
+     指しており、(2)の独立リポジトリとは無関係。
+  - `.github/workflows/release.yml`の実際のビルドコマンドは
+     `cargo build --release --bin aruaru-llm`で`--features`指定が無く、
+     `hw-detect-directx`も有効化されていない。したがって現状の
+     open-english配布バイナリには`opencuda-directx`クレートすら
+     リンクされていない。
+  - **結論**: 独立リポジトリ`open-directx`(2)をopen-english配布物に
+     同梱すべき技術的根拠は無い。aruaru-llmは(2)を一切使っておらず、
+     使っている(1)も現行リリースビルドでは無効化されたfeatureの
+     裏にあるため配布バイナリには含まれていない。ユーザーの指摘は
+     名前の類似による誤解と判断し、コード変更は行わずこの記録のみ
+     残す(正直な開示を優先)。
+  - 次にすべきこと: もし将来DirectX互換バックエンドを実際に
+     配布バイナリへ含める判断をする場合は、(1)`hw-detect-directx`
+     featureをrelease.ymlで明示的に有効化する対応で足り、(2)の
+     独立リポジトリを持ち込む必要は無い(そもそも別物のため)。
