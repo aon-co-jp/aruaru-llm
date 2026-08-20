@@ -2760,3 +2760,40 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
      配布バイナリへ含める判断をする場合は、(1)`hw-detect-directx`
      featureをrelease.ymlで明示的に有効化する対応で足り、(2)の
      独立リポジトリを持ち込む必要は無い(そもそも別物のため)。
+
+- **2026-08-20 多言語(7言語)調査を実施、圧縮技術の実装は今回未着手**:
+  ユーザー指示によりWebSearchで日英中(簡体)中(繁体)独露ヘブライ語の
+  7言語で調査。
+  1. 東芝SBM: 2026年に実際の進展あり。2026-02-24
+     東芝・ミライズテクノロジーズが自律移動ロボットへ世界初搭載
+     (組込みFPGAでマルチオブジェクトトラッキング23fps、追跡精度
+     +4%/遮蔽時+23%)。2026-04 「edge of chaos」を活用した第3世代
+     アルゴリズムで従来比約100倍高速化(Physical Review Applied掲載)。
+     2026-05 チップ8連結によるスケールアウト技術(速度5倍・規模16倍)。
+     出典: https://www.global.toshiba/ww/technology/corporate/rdc/rd/topics/26/2602-02.html
+     https://news.toshiba.com/press-releases/press-release-details/2026/Toshibas-Breakthrough-Algorithm-Harnesses-Edge-of-Chaos-to-Dramatically-Boost-Performance-of-its-QuantumInspired-Computer/default.aspx
+     いずれも量子インスパイアード最適化(組合せ最適化問題)分野の
+     成果であり、当リポジトリ(GPT-2密モデルLLM推論)への直接応用先は
+     見当たらない(ロボット制御・金融最適化向けが主用途)。
+     中国語(簡体)・繁体字・ヘブライ語検索では上記東芝公式発表の
+     現地報道が見つからず(該当情報無し、正直に報告)。
+  2. DeepSeek系/圧縮技術: 「Model Folding」「FoldGPT」という名称
+     そのものを裏付ける新規情報源は今回の検索でも見つからず(既知の
+     arXiv:2502.10216以外に新展開なし)。関連として
+     PuzzleMoE(arXiv:2511.04805、疎な専門家マージ+ビットパッキング
+     によるMoE圧縮、Mixtral-8x7Bを2分で圧縮)を新規発見。DeepSeek V4
+     (2026-04公開との情報、1.6T総パラメータ/49B活性化)はアーキ
+     テクチャ変更が前提で既存判断(不採用)を継続。
+     出典: https://arxiv.org/pdf/2511.04805 https://www.morphllm.com/deepseek-v4
+  3. CPU/GPU/NPU効率全般: 独語検索でFlexQ(arXiv:2508.04405、
+     INT6量子化+アルゴリズム/システム協調設計によるLLM推論高速化)を
+     新規発見。GptModelへの適用可否は未検証。
+  - **タスク2(実装)は今回見送り**: Model Foldingの層間コサイン
+     類似度計算(最小実証)を試みる時間を確保できず、`GptModel`の
+     重みフィールドがprivateなため新規API追加が前提という既知の
+     障壁も未解消のまま。正直に「調査したが実装には至らなかった」と
+     報告する。
+  - 次にすべきこと: (1) PuzzleMoE/FlexQのアルゴリズムを本リポジトリの
+     密モデル(MoEでない)にどう適用できるか具体検討。(2) Model Folding
+     実装に着手する場合は`GptModel`へ重み読み出し用の公開APIを追加
+     するところから始める。
