@@ -285,6 +285,56 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-08-20 PuzzleMoE(arXiv:2511.04805)・FlexQ(arXiv:2508.04405)の
+  実装可否を調査、FlexQ(INT6量子化)のみ実装(ユーザー指示、直前セッション
+  のDeepSeek系新技術調査で発見した2件への対応)**:
+  1. **PuzzleMoE: 実装見送り(論文本文をWebFetchで確認した上での判定)**。
+     論文は"a training-free MoE compression method"と明記しており、
+     訓練済みMoEモデルへの後処理(推論のみ、追加学習不要)という点では
+     当初の懸念より軽量だった。しかし前提条件として**既にMixture-of-
+     Experts(MoE)アーキテクチャであること**が必須であり、密モデルへの
+     適用は論文で一切言及されていない。このリポジトリの推論エンジン
+     (`open-cuda-llm::GptModel`、GPT-2 124M)は単一の密なFFN
+     (`intermediate`→`output`)のみで複数エキスパート・ルーターを持たず、
+     `open-cuda`側の2026-08-08 HANDOFFで既に「DeepSeekMoE統合はMoE
+     チェックポイントが存在しないため見送り」と判定済みの状況と同じ壁に
+     当たる。PuzzleMoE適用には(a)GPT-2のFFN層を複数エキスパート+
+     ルーターへアーキテクチャ変更、(b)変換後モデルの再学習(最低でも
+     ファインチューニング)が必要——(b)の学習コストはこのマシンの
+     GPU(GT730、VRAM 2GB、Kepler世代、Tensor Core無し)では、`open-cuda`
+     側の既存実測(GEMM/AttentionがCPUより約8倍遅い、2026-08-06以前の
+     HANDOFF群)から非現実的と判断し、実装しなかった。「訓練不要の
+     圧縮手法」という論文の売り文句だけを見て早合点せず、前提条件
+     (MoEアーキテクチャ)を実際に確認した上での見送りである点を明記する。
+  2. **FlexQ: INT6量子化を実装(`open-cuda`側)**。論文(WebFetchで抄録
+     確認)は全レイヤー一律6bit重み量子化+レイヤー感度に応じた
+     W6A6/W6A8活性化混在、専用GPUカーネル(Binary Tensor Core等価物)を
+     提案。このリポジトリ自体への直接のコード変更は無く(GPT-2重み自体は
+     Hugging Faceの`safetensors`を都度ロードする設計で、量子化APIは
+     `open-cuda`側の`opencuda-blas`に一元化されている)、実装は
+     `F:\runo\open-cuda\crates\opencuda-blas\src\lib.rs`の
+     `quantize_int6`/`dequantize_int6`/`QuantizedInt6Tensor`として行った
+     (詳細は`open-cuda/CLAUDE.md`の同日HANDOFF参照)。既存の
+     `quantize_int4`/`quantize_int8`と同じグループ単位対称量子化の
+     枠組みを再利用し、6bitという8の倍数でないビット幅を4値/3バイト
+     (24bit)単位でパックする方式で対応した。活性化側のビット幅切り替え・
+     レイヤー感度分析・専用GPUカーネルは未実装(重み量子化APIの提供まで、
+     既存のINT4/INT8と同じスコープ、正直な開示)。
+  3. **検証結果(`open-cuda`側)**: `cargo test -p opencuda-blas --release`
+     31件全green(既存27件+新規4件: 往復誤差がスケール半値以内・
+     INT4<INT6<INT8の精度順序・全ゼログループ・4の倍数でない要素数の
+     境界ケース)。`cargo clippy -p opencuda-blas --all-targets --release
+     -- -D warnings`警告0件。`cargo build --workspace --release`
+     リグレッション無し。
+  - 次にすべきこと: (1) FlexQの活性化側W6A6/W6A8混在・レイヤー感度分析は
+    未実装のまま(重み量子化のみ)、必要になれば`open-cuda`側で追加検討。
+    (2) `quantize_int6`をこのリポジトリの実推論経路(`GptModel`の重み)へ
+    実際に配線する統合はまだ行っていない(`open-cuda`側の量子化APIとして
+    存在するのみ、既存の`quantize_int4`/`quantize_int8`も同様に未配線)。
+    (3) PuzzleMoEは、将来MoE構成の学習済みチェックポイントが入手できる
+    か、GPT-2のFFN層をMoE化してでも再学習できるだけの計算資源(GT730より
+    高性能なGPU)が調達できた場合にのみ再検討する。
+
 - **2026-08-19(続き3) スマホ計算タスク配布API(`GET /v1/background-fold/
   task`・`POST /v1/background-fold/task-result`)を新設(ユーザー指示
   「実際のスマホ側計算処理を実装してほしい」への対応、`open-english`側
