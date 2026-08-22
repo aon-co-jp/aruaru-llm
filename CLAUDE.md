@@ -285,6 +285,39 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-08-22(続き) CPU推論がAVX2+FMA3で実測3.34倍高速化(`open-cuda`側の
+  SIMD化を自動的に継承、このリポジトリのコード変更は無し)**:
+  ユーザー指示「AVX2/AVX-512とFMA3等でAI推論を高速化」への対応は、
+  依存先の`open-cuda`(`crates/opencuda-blas/src/simd.rs`を新設)側で実装した
+  ——このリポジトリは`opencuda-blas`をpath依存しているため、**再ビルド
+  するだけで自動的に恩恵を受ける**(こちら側の配線変更は不要だった)。
+  1. **実装内容(詳細は`open-cuda/CLAUDE.md`の2026-08-22エントリ)**:
+     実行時CPU機能検出(AVX-512F → AVX2+FMA3 → スカラー)による
+     `dot_f32`/`axpy`/`sgemm_cpu`、および将来のCPU向けの`dot_i8`
+     (AVX-512 VNNI / AVX-VNNI、実機未検証)。GEMMのCPU経路が要素ごとの
+     カーネルディスパッチから、k方向axpy蓄積のSIMD実装へ切り替わった。
+  2. **実測(AMD Ryzen 9 3950X、検出機能`avx2+fma3+sse2`)**: 実GPT-2 124M
+     重みでの20トークン生成が**6.78秒 → 2.03秒(3.34倍)**
+     (`open-cuda`側で同一セッション内に環境変数
+     `OPENCUDA_DISABLE_CPU_SIMD_GEMM=1`で新旧経路を切り替えたA/B計測)。
+     この効果は`POST /v1/generate`のレスポンス時間へそのまま効くはず
+     だが、**このリポジトリでの実HTTPレスポンス時間の前後比較計測は
+     未実施**(誇張しないための明記)。
+  3. **TEST**: `cargo test --release`(aruaru-llm)**75件全green・
+     regression無し**。浮動小数点の加算順序とFMA3の中間丸めの違いにより
+     結果はビット単位では旧経路と一致しないが、既存の全テスト
+     (`open-cuda`側の実GPT-2生成トークン列一致テストを含む)は通っている。
+  4. **正直な開示**: AVX-512経路・VNNI経路はこの開発機(Zen 2)が非搭載の
+     ためコンパイル確認のみ・実機未検証。将来AVX-512/VNNI搭載機へ
+     載せ替えた際は、**コードの書き足し無しに**機能検出だけで高速経路が
+     有効になる設計にしてある。CPU機能検出ロジックは将来、共有クレート
+     `open-cpu`(`aon-co-jp/open-cpu`、別セッションで作成中)へ集約予定。
+  - 次にすべきこと: (1) `POST /v1/generate`の実HTTPレスポンス時間を
+    新旧経路で実測比較する(サーバー起動+`curl`、`OPENCUDA_DISABLE_CPU_
+    SIMD_GEMM`で切り替え可能)。(2) `open-cuda`側の`dot_i8`(VNNI)を
+    `quantize_int8`へ配線したint8量子化推論経路が出来たら、こちらの
+    生成エンジンでも使えるか検討する。
+
 - **2026-08-22 `GET /v1/runtime`を新設(open-english側からの依頼、
   「今どこで計算しているのか」を正直に可視化するため)**:
   デバイスプール(`device_pool::DevicePool`)が実際に保持している
