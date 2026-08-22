@@ -1140,6 +1140,120 @@ async fn healthz() -> Response {
     text_response(StatusCode::OK, "ok")
 }
 
+/// `GET /v1/runtime` — 現在の実行基盤(open-cudaデバイスプール・
+/// ビルド時feature・アクティブモデル)を**正直に**返す(2026-08-22新設、
+/// open-english側の「今どこで計算しているのか」表示用)。
+///
+/// **正直な開示**:
+/// - このエンドポイントは「何が使われているか」を報告するだけで、
+///   高速化そのものは一切行わない。
+/// - `devices`は`device_pool::DevicePool`が実際に保持している
+///   `opencuda_core::GpuDevice`の`info()`をそのまま出す。既定ビルドでは
+///   `opencuda_cpu::CpuDevice`1台のみ(=GPUは使っていない)。
+///   `--features real-vulkan`でビルドし、かつ`VulkanDevice::new`が実際に
+///   成功した場合のみGPUが1台追加される。
+/// - `open-directx`について: ここで参照し得るのは`open-cuda`内蔵の
+///   `opencuda-directx`クレート(`hw-detect-directx` feature、既定オフ、
+///   GPU**検出**のみで演算には使わない)であり、独立リポジトリ
+///   `aon-co-jp/open-directx`とは無関係(CLAUDE.md 2026-08-20参照)。
+#[derive(Debug, Serialize)]
+struct RuntimeDeviceInfo {
+    id: usize,
+    name: String,
+    vendor: String,
+    total_memory_bytes: u64,
+    compute_units: u32,
+    supports_spirv: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct RuntimeInfoResponse {
+    devices: Vec<RuntimeDeviceInfo>,
+    device_count: usize,
+    /// プール内に SPIR-V ディスパッチ可能な(=実GPU)デバイスが1台でもあるか。
+    gpu_in_use: bool,
+    /// ビルド時に有効化されているGPU関連feature名の一覧(空=CPUのみ)。
+    enabled_gpu_features: Vec<&'static str>,
+    /// `/v1/generate`が返すのと同じエンジン識別子(実行経路サフィックス付き)。
+    engine: String,
+    active_model_dir: Option<String>,
+    /// 誇張しない一言サマリ(英日併記、open-englishがそのまま表示できる)。
+    summary_en: String,
+    summary_ja: String,
+    disclosure: &'static str,
+}
+
+async fn runtime_info(pool: Arc<device_pool::DevicePool>) -> Response {
+    let devices: Vec<RuntimeDeviceInfo> = pool
+        .devices()
+        .iter()
+        .map(|d| {
+            let info = d.info();
+            RuntimeDeviceInfo {
+                id: info.id,
+                name: info.name.clone(),
+                vendor: format!("{:?}", info.vendor),
+                total_memory_bytes: info.total_memory,
+                compute_units: info.compute_units,
+                supports_spirv: d.supports_spirv(),
+            }
+        })
+        .collect();
+    let gpu_in_use = devices.iter().any(|d| d.supports_spirv);
+
+    let mut enabled_gpu_features: Vec<&'static str> = Vec::new();
+    if cfg!(feature = "real-vulkan") {
+        enabled_gpu_features.push("real-vulkan");
+    }
+    if cfg!(feature = "hw-detect-vulkan") {
+        enabled_gpu_features.push("hw-detect-vulkan");
+    }
+    if cfg!(feature = "hw-detect-directx") {
+        enabled_gpu_features.push("hw-detect-directx");
+    }
+
+    // engine_labelはデバイスごとに実行経路が変わるため、プール先頭
+    // (常にCpuDevice)ではなくGPUがあればGPU側を代表として使う。
+    let representative = pool
+        .devices()
+        .iter()
+        .find(|d| d.supports_spirv())
+        .cloned()
+        .unwrap_or_else(|| pool.next_device());
+    let engine = generation::engine_label(&representative);
+    let active_model_dir = generation::active_model_dir().map(|p| p.to_string_lossy().to_string());
+
+    let names = devices.iter().map(|d| d.name.clone()).collect::<Vec<_>>().join(", ");
+    let (summary_en, summary_ja) = if gpu_in_use {
+        (
+            format!("GPU acceleration active via open-cuda ({names})."),
+            format!("open-cuda経由でGPUを使用中({names})。"),
+        )
+    } else {
+        (
+            format!("CPU only via open-cuda CpuDevice ({names}); no GPU backend is compiled in or available."),
+            format!("open-cudaのCpuDeviceによるCPU実行のみ({names})。GPUバックエンドはこのビルドに含まれていないか利用できません。"),
+        )
+    };
+
+    json_response(
+        StatusCode::OK,
+        &RuntimeInfoResponse {
+            device_count: devices.len(),
+            devices,
+            gpu_in_use,
+            enabled_gpu_features,
+            engine,
+            active_model_dir,
+            summary_en,
+            summary_ja,
+            disclosure: "This endpoint only reports which open-cuda device backend is actually in use; \
+                         it does not itself accelerate anything. The default build is CPU-only. \
+                         The standalone aon-co-jp/open-directx repository is not involved.",
+        },
+    )
+}
+
 /// アイドル時バックグラウンドModel Folding準備スケジューラの進捗確認用
 /// (2026-08-19新設、`idle_background_fold.rs`参照)。
 async fn background_fold_status() -> Response {
@@ -1458,6 +1572,7 @@ async fn main() -> anyhow::Result<()> {
     // 共有していた。`device_pool`をキャプチャし、**リクエストごとに**
     // `next_device()`を呼ぶよう変更——複数の同時リクエストがCPU/GPU
     // 双方へラウンドロビンで分散し、両方が実際に並行稼働する。
+    let runtime_info_pool = Arc::clone(&device_pool);
     let chat_pool = Arc::clone(&device_pool);
     let chat_registry = Arc::clone(&registry);
     let classify_pool = Arc::clone(&device_pool);
@@ -1561,6 +1676,13 @@ async fn main() -> anyhow::Result<()> {
             delete(handler_fn(move |req, params| { let registry = Arc::clone(&admin_remove_registry); async move { admin_remove_tenant(req, params, registry).await } })),
         )
         .at("/healthz", get(plain(|| Box::pin(healthz()))))
+        .at(
+            "/v1/runtime",
+            get(handler_fn(move |_req, _p| {
+                let pool = Arc::clone(&runtime_info_pool);
+                async move { runtime_info(pool).await }
+            })),
+        )
         .at("/v1/background-fold/status", get(plain(|| Box::pin(background_fold_status()))))
         .at("/v1/background-fold/task", get(plain(|| Box::pin(background_fold_task()))))
         .at("/v1/background-fold/task-result", post(handler_fn(|req, _p| Box::pin(background_fold_task_result(req)))))

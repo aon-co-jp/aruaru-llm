@@ -285,6 +285,33 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-08-22 `GET /v1/runtime`を新設(open-english側からの依頼、
+  「今どこで計算しているのか」を正直に可視化するため)**:
+  デバイスプール(`device_pool::DevicePool`)が実際に保持している
+  `opencuda_core::GpuDevice`の`info()`(id・名前・ベンダ・メモリ・
+  compute units・`supports_spirv()`)、ビルド時に有効なGPU関連feature
+  (`real-vulkan`/`hw-detect-vulkan`/`hw-detect-directx`)、`/v1/generate`と
+  同じ`engine`識別子、アクティブモデルのディレクトリ、英日併記のサマリを
+  返す。あわせて`DevicePool::devices()`アクセサを追加した。
+  **正直な開示**: (a) このエンドポイントは報告するだけで高速化は一切
+  しない。(b) 既定ビルドは`opencuda_cpu::CpuDevice`1台のみ=GPUは
+  使っていない(実測で`gpu_in_use:false`)。(c) `open-directx`について、
+  ここで関係し得るのは`open-cuda`内蔵の`opencuda-directx`クレート
+  (既定オフ、GPU検出専用)のみで、独立リポジトリ`aon-co-jp/open-directx`
+  とは無関係(2026-08-20エントリの結論のまま)。
+  **検証**: `cargo build --release`成功。実際にサーバーを起動して
+  `curl http://127.0.0.1:4600/v1/runtime`が
+  `{"devices":[{"name":"OpenCUDA CPU Device (rayon, 32 threads)",...}],
+  "gpu_in_use":false,"enabled_gpu_features":[],
+  "engine":"distilgpt2-greedy-decode-v0-open-cuda-llm-cpu",...}`を
+  実際に返すことを確認した。**未検証**: `--features real-vulkan`で
+  ビルドした場合に実GPUがプールへ入り`gpu_in_use:true`になること
+  (この環境ではVulkan有効ビルドを用意していない)。
+  - 次にすべきこと: open-english側から要望のあったトークン単位の
+    ストリーミング(SSE等)を`/v1/generate`へ追加するかの検討——現状は
+    生成完了後に一括でJSONを返す設計のため、呼び出し側で逐次表示が
+    実装できない。
+
 - **2026-08-20 PuzzleMoE(arXiv:2511.04805)・FlexQ(arXiv:2508.04405)の
   実装可否を調査、FlexQ(INT6量子化)のみ実装(ユーザー指示、直前セッション
   のDeepSeek系新技術調査で発見した2件への対応)**:

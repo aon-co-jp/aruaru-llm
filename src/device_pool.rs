@@ -45,6 +45,13 @@ impl DevicePool {
         self.devices.iter().map(|d| d.info().name.clone()).collect()
     }
 
+    /// プールが保持している全デバイスへの参照(`GET /v1/runtime`が
+    /// `info()`を読み出して「実際にどのバックエンドで動いているか」を
+    /// 正直に報告するために使う、2026-08-22追加)。
+    pub fn devices(&self) -> &[Arc<dyn GpuDevice>] {
+        &self.devices
+    }
+
     pub fn device_count(&self) -> usize {
         self.devices.len()
     }
