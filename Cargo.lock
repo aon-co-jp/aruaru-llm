@@ -2255,6 +2255,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
+name = "open-cpu"
+version = "0.1.0"
+
+[[package]]
 name = "open-cuda-bert"
 version = "0.4.1"
 dependencies = [
@@ -2435,6 +2439,7 @@ dependencies = [
  "open-runo-security",
  "open-web-server-wire",
  "poem",
+ "reqwest 0.12.28",
  "schemars",
  "serde",
  "serde_json",
@@ -5394,6 +5399,7 @@ dependencies = [
 name = "zfs_accel_hlsl"
 version = "0.0.1"
 dependencies = [
+ "open-cpu",
  "thiserror 1.0.69",
  "tracing",
 ]
