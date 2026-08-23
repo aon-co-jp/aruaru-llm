@@ -285,6 +285,40 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-08-23 `GET /v1/runtime` に CPU SIMD 経路の可視化を追加**:
+  CPU 推論の GEMM は `opencuda-blas` 経由で SIMD ディスパッチされているが、
+  「実際にどの命令セットの組み合わせが選ばれているのか」を外から確認する
+  手段が無かった。`/v1/runtime` のレスポンスへ `cpu_simd` オブジェクトを
+  追加した(`features` / `isa_profile` / `avx2_fma_path` / `vnni_path` /
+  `avx512_opt_in` / `note_ja`)。検出は共通基盤
+  [`open-cpu`](https://github.com/aon-co-jp/open-cpu) が担当し、
+  単独フラグではなく **複数命令セットの組み合わせ**(AVX2+FMA3、
+  AVX-512F+BW+VNNI 等)で経路が決まることを明示する。
+
+  **実機検証**: `cargo build --release` 後に実際にサーバーを起動し
+  `curl http://127.0.0.1:4600/v1/runtime` で確認済み。開発機
+  (Ryzen 9 3950X / Zen 2)での実際の応答:
+  ```json
+  "cpu_simd": {
+    "features": "avx2+fma3+sse2",
+    "isa_profile": "avx2+fma3",
+    "avx2_fma_path": true,
+    "vnni_path": false,
+    "avx512_opt_in": false
+  }
+  ```
+
+  **正直な開示**: このエンドポイントは報告のみで、高速化そのものは
+  行わない。実際の高速化は前回セッションの CPU 推論 SIMD 化
+  (AVX2+FMA3、実測 3.34 倍)によるもので、今回はその経路の選択条件を
+  `open-cpu` 側の組み合わせ判定へ揃え、可視化しただけである。
+  **int8 VNNI 経路は開発機が非搭載のため実機未検証**のまま。
+  - 次にすべきこと: llama.cpp が採用している online repack(読み込み時に
+    重みを host 最適レイアウトへ再配置する手法)は、量子化推論を本格化
+    する段階になったら検討する。調査結果は `open-cpu/CLAUDE.md` の
+    2026-08-23 HANDOFF を参照。
+
+
 - **2026-08-22(続き) CPU推論がAVX2+FMA3で実測3.34倍高速化(`open-cuda`側の
   SIMD化を自動的に継承、このリポジトリのコード変更は無し)**:
   ユーザー指示「AVX2/AVX-512とFMA3等でAI推論を高速化」への対応は、

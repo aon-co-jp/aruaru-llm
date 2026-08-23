@@ -28,6 +28,8 @@ anyhow = "1"
 opencuda-core = { path = "../open-cuda/crates/opencuda-core" }
 opencuda-cpu = { path = "../open-cuda/crates/opencuda-cpu" }
 opencuda-blas = { path = "../open-cuda/crates/opencuda-blas" }
+# CPU 命令セット検出・組み合わせディスパッチの共通基盤(2026-08-23 追加)
+open-cpu = { path = "../open-cpu" }
 # multilingual-e5-small(MIT)による実際の文埋め込み+コサイン類似度で意図分類する
 # (旧: 固定語彙bag-of-words、2026-07-21移行、CLAUDE.md参照)。
 open-cuda-bert = { path = "../open-cuda/crates/open-cuda-bert" }
