@@ -252,3 +252,36 @@ sudo ./install.sh
 - [open-cuda](https://github.com/aon-co-jp/open-cuda) — GPU runtime (the SET pairing)
 - [e-gov.info](https://github.com/aon-co-jp/e-gov) — first intended caller
 - [open-raid-z](https://github.com/aon-co-jp/open-raid-z) — canonical dev-policy source
+
+
+---
+
+## Update 2026-08-23 — `GET /v1/runtime` now reports the CPU SIMD path
+
+CPU inference GEMM is SIMD-dispatched through `opencuda-blas`, but there
+was no way to see *which combination of instruction sets* was actually
+selected. The `/v1/runtime` response now includes a `cpu_simd` object,
+with detection provided by the shared
+[`open-cpu`](https://github.com/aon-co-jp/open-cpu) crate. Paths are
+chosen by **combinations** of instruction sets (AVX2+FMA3,
+AVX-512F+BW+VNNI, …), not by single flags.
+
+Verified by actually starting the server and running
+`curl http://127.0.0.1:4600/v1/runtime` on the development machine
+(Ryzen 9 3950X, Zen 2):
+
+```json
+"cpu_simd": {
+  "features": "avx2+fma3+sse2",
+  "isa_profile": "avx2+fma3",
+  "avx2_fma_path": true,
+  "vnni_path": false,
+  "avx512_opt_in": false
+}
+```
+
+**Honest disclosure**: this endpoint only reports; it accelerates nothing.
+The actual speedup is the earlier CPU inference SIMD work (AVX2+FMA3,
+measured 3.34x). This change aligned that path's selection criteria with
+`open-cpu`'s combination checks and made them visible. **The int8 VNNI
+path is still unverified on real hardware** — this CPU does not have VNNI.

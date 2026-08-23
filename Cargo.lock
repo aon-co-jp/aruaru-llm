@@ -135,6 +135,7 @@ dependencies = [
  "bytes",
  "hyper 1.10.1",
  "mockito",
+ "open-cpu",
  "open-cuda-bert",
  "open-cuda-llm",
  "open-runo-poem-compat",
@@ -2552,6 +2553,7 @@ version = "0.4.1"
 dependencies = [
  "anyhow",
  "half",
+ "open-cpu",
  "opencuda-core",
  "rayon",
  "tracing",

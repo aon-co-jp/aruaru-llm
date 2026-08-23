@@ -1180,7 +1180,40 @@ struct RuntimeInfoResponse {
     /// 誇張しない一言サマリ(英日併記、open-englishがそのまま表示できる)。
     summary_en: String,
     summary_ja: String,
+    /// CPU 推論経路で実際に選ばれている SIMD 実装(open-cpu の検出結果)。
+    ///
+    /// 2026-08-23 追加。単一命令の有無ではなく **組み合わせ**
+    /// (AVX2+FMA3 等)で決まるプロファイルを返す。
+    cpu_simd: CpuSimdInfo,
     disclosure: &'static str,
+}
+
+/// CPU 側 SIMD ディスパッチの状況(`open-cpu` + `opencuda-blas` の実測値)。
+#[derive(Debug, Serialize)]
+struct CpuSimdInfo {
+    /// 検出された命令セットの組み合わせ(例 `"avx2+fma3+sse2"`)。
+    features: String,
+    /// `open-cpu` が判定した組み合わせプロファイル(例 `"avx2+fma3"`)。
+    isa_profile: String,
+    /// f32 GEMM/内積で AVX2+FMA3 経路が使われているか。
+    avx2_fma_path: bool,
+    /// int8 VNNI 経路が使えるか(このマシンでは false、実機未検証)。
+    vnni_path: bool,
+    /// AVX-512 経路が有効化されているか(`OPEN_CPU_ENABLE_AVX512=1` が必要)。
+    avx512_opt_in: bool,
+    note_ja: &'static str,
+}
+
+fn cpu_simd_info() -> CpuSimdInfo {
+    let f = opencuda_blas::simd::cpu_features();
+    CpuSimdInfo {
+        features: f.describe(),
+        isa_profile: f.isa_profile().to_string(),
+        avx2_fma_path: f.has_avx2_fma(),
+        vnni_path: f.has_vnni_path(),
+        avx512_opt_in: open_cpu::avx512_opt_in(),
+        note_ja: "CPU推論のGEMM/内積は open-cpu の検出結果に基づき実行時ディスパッチされる。                  AVX-512 経路は開発機に非搭載で実機未検証のため、既定では選択されない。",
+    }
 }
 
 async fn runtime_info(pool: Arc<device_pool::DevicePool>) -> Response {
@@ -1247,6 +1280,7 @@ async fn runtime_info(pool: Arc<device_pool::DevicePool>) -> Response {
             active_model_dir,
             summary_en,
             summary_ja,
+            cpu_simd: cpu_simd_info(),
             disclosure: "This endpoint only reports which open-cuda device backend is actually in use; \
                          it does not itself accelerate anything. The default build is CPU-only. \
                          The standalone aon-co-jp/open-directx repository is not involved.",
