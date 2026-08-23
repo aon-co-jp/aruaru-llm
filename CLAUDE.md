@@ -285,6 +285,89 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-08-23 (続き) 階層的アクセラレーション(CUDA → Vulkan → DirectX 12
+  → CPU SIMD)を実装。DirectX段は動くが、この開発機ではCPUより遅い**:
+
+  ユーザーの目的「NVIDIA GPU非搭載の安価なPCでもAIをなるべく速く」への対応。
+
+  1. **調査結果(推測ではなく実コードで裏取り)**:
+     - **独立リポジトリ`aon-co-jp/open-directx`は今回も使っていない**。
+       ワークスペースは`directx-shader-translate` /
+       `directx-graphics-vulkan` / `directx-graphics-window`の3クレートで、
+       DXBC/DXILシェーダーをSPIR-Vへ翻訳してVulkanで実行する互換層。
+       コンピュートシェーダーの翻訳自体は実装されている(`gemm2x2.hlsl`等)
+       が、扱えるのは固定パターンの小さなシェーダーで、汎用GEMM
+       バックエンドとしては使えない。2026-08-20の「名前が似ているだけの
+       別物」という結論は今回も変わらない。
+     - **実際にGPU計算に使えるのは`open-cuda`内蔵の`opencuda-directx`
+       クレート**(`real-dx12` feature)。調査したところ過去HANDOFFの
+       「Phase 2は未実装」という記述はすでに古く、D3D12のルート
+       シグネチャ/PSO/ディスパッチが実装済みで、`matmul`を含む4カーネルを
+       実際に実行できる(`cargo test -p opencuda-directx --features
+       real-dx12`が実機9件全green)。
+     - **CUDAのネイティブ経路は存在しない**。`opencuda-blas`の
+       `GemmPath::CuBlas`はスタブのままで、NVIDIA GPUもVulkan経由で
+       使われる。`/v1/runtime`でもこの事実を正直に報告している。
+     - **open-cpu経由のCPU SIMDは「検出だけ」ではなく実際に使われている**。
+       `opencuda-blas::simd`が`open_cpu::detect()`を唯一の情報源とし、
+       `launch_naive_gemm`がCPUデバイス時に`simd::sgemm_cpu`へ分岐する
+       (2026-08-22/23の配線済み)。今回追加の配線は不要だった。
+
+  2. **実装**: `real-dx12` feature(既定オフ)を新設。有効化すると
+     `generation.rs`の`wire_matmul_dxil_offload`が
+     `DirectXDevice::new(0)`を試み、成功すれば`open-cuda-llm`の新API
+     `GptModel::set_matmul_dxil_offload`で密GEMM(QKV融合/attn_out/
+     intermediate/output/lm_head)をD3D12へオフロードする。
+     `matmul.dxil`は`include_bytes!`で埋め込む(`.spv`と違いリポジトリに
+     コミット済みのため事前コンパイル不要)。**Vulkan配線が成立した場合は
+     DirectXを配線しない**(Vulkanの方が対象範囲が広いため)。失敗時は
+     サービスを落とさずCPUのままにする。`engine`ラベルは
+     `-directx-gemm`となり、GEMMだけであることをラベル自体で示す。
+
+  3. **`GET /v1/runtime`に`acceleration`フィールドを新設**: 各段の
+     `compiled_in` / `active` / `detail`と、実際に有効な最上位の段
+     (`tier`)を返す。open-english側のバッジがこれを表示する。
+
+  4. **実測(この開発機: NVIDIA GeForce GT 730 + Ryzen 9 3950X、
+     distilgpt2、`POST /v1/generate` max_new_tokens=16、release build)**:
+
+     | 構成 | 所要時間(3回の実測) |
+     |---|---|
+     | CPU only(既定ビルド) | 0.88 / 0.88 / 0.89 秒 |
+     | `--features real-dx12`(重み常駐前) | 24.4 / 24.3 / 24.5 秒 |
+     | `--features real-dx12`(重み常駐後) | 4.32 / 4.28 / 4.30 秒 |
+
+     **正直な結論: この開発機では DirectX 経路を有効にすると約4.8倍
+     遅くなる。** 「安いPCで速くなった」とは書けない——実測が逆の結果を
+     示している。重み常駐化(VRAMへ重みを置いて毎回のH2D転送をやめる)で
+     5.7倍改善したが、CPUのAVX2 GEMMには届かなかった。原因の内訳と
+     GEMM単体の実測値は`open-cuda/CLAUDE.md`の同日エントリを参照。
+     この結果を踏まえ、**`real-dx12`は既定オフのオプトインのまま**とし、
+     リリースビルドでも有効化していない。
+
+  5. **検証**: `cargo test --release` 75件全green、
+     `cargo test --release --features real-dx12` 75件全green。
+     実サーバーを起動して`GET /v1/runtime`が
+     `tier: "directx-gemm"` / `directx.active: true`を返すこと、
+     `POST /v1/generate`が実際に文章を生成すること
+     ("es are a common sight in the wild, and they can be found on many")
+     を実HTTPで確認。出力の正しさは`open-cuda-llm`側の新規テスト
+     (DXILオフロード時の生成トークン列がCPU実行と完全一致)で担保。
+
+  6. **未検証・できなかったこと**: (a) **CUDAパスは存在しないため
+     コンパイル確認すらしていない**(スタブのみ、依頼の「コンパイル確認
+     のみ」に相当する対象が無い)。(b) Vulkanパス(`real-vulkan`)は
+     今回のビルド・検証対象に含めていない(既存機能、変更なし)。
+     (c) Intel/AMD統合GPU搭載機での実測は未実施——この機のGT 730は
+     「安いPCの統合GPU」の代表として適切ではなく、そこでDirectX経路が
+     有利になるかは**分からない**。
+
+  - 次にすべきこと: (1) Intel/AMD統合GPU機での再実測。有利なら
+    `real-dx12`を既定オンにすることを検討する(現状の実測では
+    既定オンにする根拠が無い)。(2) `matmul.hlsl`のタイル化・
+    `m=1`専用GEMVカーネル(`open-cuda`側の課題)。(3) Attention/
+    LayerNorm/GELUのDXIL化によるモデル全体のGPU常駐。
+
 - **2026-08-23 `GET /v1/runtime` に CPU SIMD 経路の可視化を追加**:
   CPU 推論の GEMM は `opencuda-blas` 経由で SIMD ディスパッチされているが、
   「実際にどの命令セットの組み合わせが選ばれているのか」を外から確認する

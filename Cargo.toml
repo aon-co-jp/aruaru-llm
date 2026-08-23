@@ -95,6 +95,16 @@ hw-detect-directx = ["dep:opencuda-directx", "opencuda-directx/real-dx12"]
 # 無効(CPUのみの環境やAndroid等クロスコンパイル環境にVulkanローダー
 # 依存を強制しないため、既存の`hw-detect-vulkan`と同じ設計方針)。
 real-vulkan = ["dep:opencuda-vulkan", "opencuda-vulkan/real-vulkan"]
+# 実推論の**密GEMMのみ**をD3D12 Compute(DXIL)へオフロードするオプトイン
+# feature(2026-08-23追加、CLAUDE.md 2026-08-23 HANDOFF参照)。上記の
+# `hw-detect-directx`(GPU検出専用)とは別軸。NVIDIA GPU非搭載の安価な
+# PCでもIntel/AMD統合GPUで計算支援を受けられるようにするための
+# 階層的アクセラレーション(CUDA/Vulkan → DirectX → CPU SIMD)の中間段。
+# **正直な開示**: オフロードされるのはQKV/attn_out/MLP/lm_headの密GEMMのみ
+# で、Attention・LayerNorm・GELUはCPU(open-cpu SIMD)のまま
+# (`DirectXDevice`はDXILカーネルしか実行できないため。
+# `open-cuda-llm::GptModel::set_matmul_dxil_offload`のdoc参照)。
+real-dx12 = ["dep:opencuda-directx", "opencuda-directx/real-dx12"]
 
 [dev-dependencies]
 tempfile = "3"
