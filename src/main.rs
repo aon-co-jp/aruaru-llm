@@ -1185,7 +1185,106 @@ struct RuntimeInfoResponse {
     /// 2026-08-23 追加。単一命令の有無ではなく **組み合わせ**
     /// (AVX2+FMA3 等)で決まるプロファイルを返す。
     cpu_simd: CpuSimdInfo,
+    /// 階層的アクセラレーション(CUDA → Vulkan → DirectX → CPU SIMD)の
+    /// うち、**実際に**どの段が有効になっているか(2026-08-23追加)。
+    acceleration: AccelerationInfo,
     disclosure: &'static str,
+}
+
+/// 階層的アクセラレーション各段の状態(2026-08-23新設)。
+///
+/// **正直な開示**: `compiled_in`はビルド時featureの有無、`active`は
+/// 実行時に実際にその経路が使われているかを表す。両方trueの段だけが
+/// 「実際に効いている」——それ以外は下位段へフォールバックしている。
+#[derive(Debug, Serialize)]
+struct TierStatus {
+    compiled_in: bool,
+    active: bool,
+    detail: String,
+}
+
+#[derive(Debug, Serialize)]
+struct AccelerationInfo {
+    /// 実際に有効な最上位の段(`cuda` / `vulkan` / `directx-gemm` / `cpu-simd`)。
+    tier: &'static str,
+    /// 人間向けの短いラベル(open-englishのUIがそのまま表示できる)。
+    tier_label_en: String,
+    tier_label_ja: String,
+    cuda: TierStatus,
+    vulkan: TierStatus,
+    directx: TierStatus,
+    cpu_simd: TierStatus,
+}
+
+fn acceleration_info(pool: &device_pool::DevicePool) -> AccelerationInfo {
+    let vulkan_device_present = pool.devices().iter().any(|d| d.supports_spirv());
+    let vulkan_active = vulkan_device_present && generation::matmul_spirv_wired();
+    let directx_active = generation::matmul_dxil_offloaded();
+
+    // CUDA(NVIDIA専用ネイティブ経路)は open-cuda 側に実バックエンドが
+    // 存在しない(`GemmPath::CuBlas`はスタブのまま)。NVIDIA GPUであっても
+    // 実際にはVulkan経路で動く。ここで嘘をつかないよう常に非アクティブと
+    // 報告する。
+    let cuda = TierStatus {
+        compiled_in: false,
+        active: false,
+        detail: "open-cuda has no native CUDA/cuBLAS backend yet (GemmPath::CuBlas is still a stub); \
+                 NVIDIA GPUs are used through the Vulkan path instead."
+            .to_string(),
+    };
+    let vulkan = TierStatus {
+        compiled_in: cfg!(feature = "real-vulkan"),
+        active: vulkan_active,
+        detail: if vulkan_active {
+            "Dense GEMM + attention dispatched to a real Vulkan compute device (SPIR-V).".to_string()
+        } else if cfg!(feature = "real-vulkan") {
+            "real-vulkan compiled in, but either no Vulkan device was created or matmul.spv was not wired.".to_string()
+        } else {
+            "Not compiled in (build with --features real-vulkan).".to_string()
+        },
+    };
+    let directx = TierStatus {
+        compiled_in: cfg!(feature = "real-dx12"),
+        active: directx_active,
+        detail: if directx_active {
+            "Dense GEMM (QKV / attn_out / MLP / lm_head) offloaded to a real D3D12 compute device via matmul.dxil. \
+             Attention, LayerNorm and GELU still run on the CPU device."
+                .to_string()
+        } else if cfg!(feature = "real-dx12") {
+            "real-dx12 compiled in, but no D3D12 device could be created (or the Vulkan tier took priority).".to_string()
+        } else {
+            "Not compiled in (build with --features real-dx12).".to_string()
+        },
+    };
+    let cpu_simd = TierStatus {
+        compiled_in: true,
+        active: !vulkan_active,
+        detail: format!(
+            "open-cpu runtime dispatch: {}. Always used for everything not offloaded to a GPU tier.",
+            opencuda_blas::simd::cpu_features().describe()
+        ),
+    };
+
+    let tier = if vulkan_active {
+        "vulkan"
+    } else if directx_active {
+        "directx-gemm"
+    } else {
+        "cpu-simd"
+    };
+    let (tier_label_en, tier_label_ja) = match tier {
+        "vulkan" => ("GPU (Vulkan compute)".to_string(), "GPU(Vulkan Compute)".to_string()),
+        "directx-gemm" => (
+            "GPU (DirectX 12 compute, dense GEMM only) + CPU SIMD".to_string(),
+            "GPU(DirectX 12 Compute、密GEMMのみ)+ CPU SIMD".to_string(),
+        ),
+        _ => (
+            format!("CPU SIMD ({})", opencuda_blas::simd::cpu_features().isa_profile()),
+            format!("CPU SIMD({})", opencuda_blas::simd::cpu_features().isa_profile()),
+        ),
+    };
+
+    AccelerationInfo { tier, tier_label_en, tier_label_ja, cuda, vulkan, directx, cpu_simd }
 }
 
 /// CPU 側 SIMD ディスパッチの状況(`open-cpu` + `opencuda-blas` の実測値)。
@@ -1244,6 +1343,9 @@ async fn runtime_info(pool: Arc<device_pool::DevicePool>) -> Response {
     if cfg!(feature = "hw-detect-directx") {
         enabled_gpu_features.push("hw-detect-directx");
     }
+    if cfg!(feature = "real-dx12") {
+        enabled_gpu_features.push("real-dx12");
+    }
 
     // engine_labelはデバイスごとに実行経路が変わるため、プール先頭
     // (常にCpuDevice)ではなくGPUがあればGPU側を代表として使う。
@@ -1256,8 +1358,14 @@ async fn runtime_info(pool: Arc<device_pool::DevicePool>) -> Response {
     let engine = generation::engine_label(&representative);
     let active_model_dir = generation::active_model_dir().map(|p| p.to_string_lossy().to_string());
 
+    let acceleration = acceleration_info(&pool);
     let names = devices.iter().map(|d| d.name.clone()).collect::<Vec<_>>().join(", ");
-    let (summary_en, summary_ja) = if gpu_in_use {
+    let (summary_en, summary_ja) = if acceleration.tier == "directx-gemm" {
+        (
+            format!("Dense GEMM offloaded to DirectX 12 compute; everything else on CPU SIMD ({names})."),
+            format!("密GEMMをDirectX 12 Computeへオフロード中。その他はCPU SIMDで実行({names})。"),
+        )
+    } else if gpu_in_use {
         (
             format!("GPU acceleration active via open-cuda ({names})."),
             format!("open-cuda経由でGPUを使用中({names})。"),
@@ -1281,6 +1389,7 @@ async fn runtime_info(pool: Arc<device_pool::DevicePool>) -> Response {
             summary_en,
             summary_ja,
             cpu_simd: cpu_simd_info(),
+            acceleration,
             disclosure: "This endpoint only reports which open-cuda device backend is actually in use; \
                          it does not itself accelerate anything. The default build is CPU-only. \
                          The standalone aon-co-jp/open-directx repository is not involved.",

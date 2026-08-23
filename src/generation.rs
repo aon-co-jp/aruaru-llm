@@ -62,6 +62,11 @@ struct LoadedGpt {
     /// (CLAUDE.md 2026-08-05 HANDOFFで指摘された「`engine`が常に`-cpu`
     /// 固定文字列」の粗の修正)。`real-vulkan` feature無効時は常に`false`。
     matmul_spirv_wired: bool,
+    /// `wire_matmul_dxil_offload`が実際に成功したか(=このモデルの全
+    /// `Linear`の密GEMMが実D3D12デバイスへオフロードされているか)。
+    /// 2026-08-23追加。`real-dx12` feature無効時、または`DirectXDevice`の
+    /// 構築に失敗した場合は常に`false`(=CPU実行のまま、正直に報告する)。
+    matmul_dxil_offloaded: bool,
 }
 
 /// 現在アクティブなモデル(`None`は「まだ一度もロードを試みていない」
@@ -468,7 +473,59 @@ fn load_from_dir(dir: &std::path::Path) -> Result<LoadedGpt, String> {
     // 2026-08-08: 乱数射影版/PCA較正版のどちらを使うかは
     // `wire_mla_kv_compression_any`が`ARUARU_LLM_MLA_CALIBRATED`で判定する。
     let _mla_wired = wire_mla_kv_compression_any(&mut model, &tokenizer);
-    Ok(LoadedGpt { model, tokenizer, dir: dir.to_path_buf(), matmul_spirv_wired })
+    // 階層的アクセラレーションの第2段(2026-08-23追加): SPIR-V(Vulkan)
+    // 配線が成立しなかった場合に限り、D3D12 Compute(DXIL)への密GEMM
+    // オフロードを試みる。Vulkanが使えているならそちらの方が対象範囲が
+    // 広い(Attention/softmaxもGPU常駐にできる)ため、重複配線はしない。
+    #[allow(unused_mut)]
+    let mut matmul_dxil_offloaded = false;
+    #[cfg(feature = "real-dx12")]
+    {
+        if !matmul_spirv_wired {
+            matmul_dxil_offloaded = wire_matmul_dxil_offload(&mut model);
+        }
+    }
+    Ok(LoadedGpt { model, tokenizer, dir: dir.to_path_buf(), matmul_spirv_wired, matmul_dxil_offloaded })
+}
+
+/// コンパイル済み`matmul.dxil`(`opencuda-directx`のリポジトリへコミット
+/// 済みの成果物。`.spv`と違い事前コンパイルが不要なので`include_bytes!`で
+/// 埋め込める)を`GptModel::set_matmul_dxil_offload`経由で全`Linear`層へ
+/// 配線する(2026-08-23新設)。
+///
+/// `DirectXDevice::new`に失敗した場合(D3D12非対応環境・ドライバ無し等)は
+/// サービスを落とさず`false`を返し、CPU実行のままにする(既存の
+/// `real-vulkan`配線と同じ安全側フォールバック方針)。
+#[cfg(feature = "real-dx12")]
+const MATMUL_DXIL: &[u8] = include_bytes!("../../open-cuda/crates/opencuda-directx/shaders/matmul.dxil");
+
+#[cfg(feature = "real-dx12")]
+fn wire_matmul_dxil_offload(model: &mut GptModel) -> bool {
+    match opencuda_directx::real::DirectXDevice::new(0) {
+        Ok(device) => {
+            let name = device.info().name.clone();
+            let device: Arc<dyn GpuDevice> = device;
+            match model.set_matmul_dxil_offload(device, MATMUL_DXIL.to_vec()) {
+                Ok(()) => {
+                    tracing::info!(
+                        "real-dx12 feature enabled: dense GEMM offloaded to D3D12 device '{name}' \
+                         ({} bytes of matmul.dxil, weights resident in VRAM). \
+                         Attention/LayerNorm/GELU still run on the CPU device.",
+                        MATMUL_DXIL.len()
+                    );
+                    true
+                }
+                Err(err) => {
+                    tracing::warn!("real-dx12: failed to upload resident weights to '{name}' ({err:#}); dense GEMM stays on the CPU");
+                    false
+                }
+            }
+        }
+        Err(err) => {
+            tracing::warn!("real-dx12 feature enabled but DirectXDevice::new failed ({err}); dense GEMM stays on the CPU");
+            false
+        }
+    }
 }
 
 /// 現在アクティブなモデルを返す。まだ一度もロードしていなければ
@@ -531,6 +588,11 @@ pub const ENGINE_GPT2_GREEDY: &str = "gpt2-124m-greedy-decode-v0-open-cuda-llm-c
 fn dispatch_suffix(device: &Arc<dyn GpuDevice>, loaded: &LoadedGpt) -> &'static str {
     if device.supports_spirv() && loaded.matmul_spirv_wired {
         "-vulkan"
+    } else if loaded.matmul_dxil_offloaded {
+        // 密GEMMのみD3D12へオフロードされたハイブリッド構成
+        // (Attention/LayerNorm等はCPU)。誇張しないよう`-directx`ではなく
+        // `-directx-gemm`とし、GEMMだけであることをラベル自体で示す。
+        "-directx-gemm"
     } else {
         "-cpu"
     }
@@ -541,6 +603,18 @@ fn dispatch_suffix(device: &Arc<dyn GpuDevice>, loaded: &LoadedGpt) -> &'static 
 /// 埋め込み(例: `"gpt2-medium-greedy-decode-v0-open-cuda-llm-vulkan"`)、
 /// 未ロード(まだ一度もモデルをロードしていない)なら`device`のみを見て
 /// デフォルトの`ENGINE_GPT2_GREEDY`相当のラベルを返す。
+/// 現在アクティブなモデルで、密GEMMがD3D12(DXIL)へオフロード済みか
+/// (2026-08-23追加、`GET /v1/runtime`が「実際にどの段のアクセラレーション
+/// が効いているか」を正直に報告するために使う)。モデル未ロード時は`false`。
+pub fn matmul_dxil_offloaded() -> bool {
+    ACTIVE.read().unwrap().as_ref().map(|l| l.matmul_dxil_offloaded).unwrap_or(false)
+}
+
+/// 現在アクティブなモデルで、SPIR-V(Vulkan)matmulが配線済みか(同上)。
+pub fn matmul_spirv_wired() -> bool {
+    ACTIVE.read().unwrap().as_ref().map(|l| l.matmul_spirv_wired).unwrap_or(false)
+}
+
 pub fn engine_label(device: &Arc<dyn GpuDevice>) -> String {
     match ACTIVE.read().unwrap().clone() {
         Some(loaded) => {
