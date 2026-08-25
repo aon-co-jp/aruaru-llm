@@ -591,6 +591,19 @@ struct GenerateWithSearchRequest {
     max_new_tokens: usize,
     #[serde(default)]
     tenant: Option<String>,
+    /// ブラウザ側の利用者が自分自身で用意したGoogle Custom Search
+    /// APIキー/検索エンジンID(cx)(2026-08-25新設、ユーザー指示
+    /// 「ブラウザ版は各自Google検索のAPIキーとIDを各自で設定してもらう
+    /// 様に…開発者が設定したAPIキーとIDは、アクセス者は使わない、
+    /// 消費しない様に」への対応)。**両方とも指定された場合のみ**、
+    /// この値を使ってこのリクエスト限りの検索を行い、プロセス全体で
+    /// 共有されるグローバル設定(`/v1/settings/google-search`・環境変数)
+    /// には一切触れない・使わない——開発者が別デプロイで設定した
+    /// キーを、この経路からのリクエストが消費することは無い。
+    #[serde(default)]
+    google_search_api_key: Option<String>,
+    #[serde(default)]
+    google_search_cx: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -622,7 +635,30 @@ async fn generate_with_search(req: Request, device: Arc<dyn GpuDevice>, registry
         );
     }
 
-    let (augmented_prompt, used_search, search_results, search_error) = if web_search::is_configured() {
+    // 利用者自身が持ち込んだキー(ブラウザ側の設定パネル入力→リクエスト
+    // ボディ経由)があれば最優先で使い、グローバル共有設定
+    // (`web_search::is_configured`/`web_search::search`)には一切触れない。
+    // これにより、同じ`aruaru-llm`インスタンスを複数の訪問者が共有する
+    // デプロイ(VPS上の共有デプロイ等)でも、ある訪問者の検索が
+    // 開発者や他の訪問者のAPIキー・クォータを消費することは無い。
+    let own_credentials = match (&req.google_search_api_key, &req.google_search_cx) {
+        (Some(k), Some(c)) if !k.trim().is_empty() && !c.trim().is_empty() => Some((k.clone(), c.clone())),
+        _ => None,
+    };
+    let (augmented_prompt, used_search, search_results, search_error) = if let Some((api_key, cx)) = own_credentials {
+        match web_search::search_with_credentials(&req.prompt, 3, &api_key, &cx).await {
+            Ok(results) if !results.is_empty() => {
+                let context = web_search::format_results_as_context(&results);
+                (format!("Reference information from a web search:\n{context}\n\n{}", req.prompt), true, results, None)
+            }
+            Ok(_) => (req.prompt.clone(), false, Vec::new(), Some("Google returned zero results for this query.".to_string())),
+            Err(err) => {
+                let msg = format!("{err:#}");
+                tracing::warn!("google custom search (visitor-supplied key) failed, falling back to no-search generation: {msg}");
+                (req.prompt.clone(), false, Vec::new(), Some(msg))
+            }
+        }
+    } else if web_search::is_configured() {
         match web_search::search(&req.prompt, 3).await {
             Ok(results) if !results.is_empty() => {
                 let context = web_search::format_results_as_context(&results);

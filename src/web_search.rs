@@ -107,6 +107,28 @@ fn read_credentials() -> Option<(String, String)> {
 /// `is_configured()`で事前に分岐する設計を前提とする)。
 pub async fn search(query: &str, max_results: u8) -> Result<Vec<SearchResult>> {
     let (api_key, cx) = read_credentials().context("Google Custom Search API is not configured (set ARUARU_LLM_GOOGLE_SEARCH_API_KEY and ARUARU_LLM_GOOGLE_SEARCH_CX)")?;
+    search_with_credentials(query, max_results, &api_key, &cx).await
+}
+
+/// `search()`と同じ検索処理だが、プロセス全体で共有される
+/// `read_credentials()`(環境変数/`POST /v1/settings/google-search`で
+/// 設定されたグローバルな認証情報)を一切参照・消費しない版
+/// (2026-08-25新設、ユーザー指示「ブラウザ版は各自Google検索のAPIキーと
+/// IDを各自で設定してもらう様に…開発者が設定したAPIキーとIDは、
+/// アクセス者は使わない、消費しない様に」への対応)。
+///
+/// **設計上の理由**: 複数の利用者が同じ`aruaru-llm`インスタンス
+/// (例: VPS上の共有デプロイ)へブラウザ経由でアクセスする場合、
+/// `read_credentials()`はプロセス全体で1組しか保持できない
+/// グローバルな設定であり、ある利用者が自分のキーを
+/// `POST /v1/settings/google-search`で設定すると**他の全利用者の
+/// 検索もそのキーへ切り替わってしまう**(意図しない共有・消費)。
+/// この関数は呼び出し元(`/v1/generate-with-search`)がリクエスト
+/// ボディで直接渡した認証情報のみを使い、グローバル状態には
+/// 一切触れないため、各ブラウザ利用者が自分のキーを自分のリクエスト
+/// にだけ使わせることができる——開発者が別途設定したグローバルな
+/// キーがこの経路で消費されることは無い。
+pub async fn search_with_credentials(query: &str, max_results: u8, api_key: &str, cx: &str) -> Result<Vec<SearchResult>> {
     if query.trim().is_empty() {
         bail!("search query must not be empty");
     }
@@ -119,8 +141,8 @@ pub async fn search(query: &str, max_results: u8) -> Result<Vec<SearchResult>> {
     let res = client
         .get(GOOGLE_CSE_ENDPOINT)
         .query(&[
-            ("key", api_key.as_str()),
-            ("cx", cx.as_str()),
+            ("key", api_key),
+            ("cx", cx),
             ("q", query),
             ("num", &max_results.clamp(1, 10).to_string()),
         ])
