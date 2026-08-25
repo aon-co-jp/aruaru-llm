@@ -7,7 +7,15 @@
 [Українська](README-Ukrainian.md) · [עברית](README-Hebrew.md) ·
 [فارسی](README-Persian.md) · [العربية](README-Arabic.md)
 
-> 📌 **最近の更新(2026-08-10)**: `open-cuda`側`GptModel::
+> 📌 **最近の更新(2026-08-25)**: (1) Google検索APIキーをリクエスト単位で
+> 指定できるようにした(`POST /v1/generate-with-search`の任意フィールド
+> `google_search_api_key`/`google_search_cx`)——複数の訪問者が同じ
+> インスタンスを共有するデプロイ(VPS等)で、ある訪問者のキー設定が
+> 他の訪問者の検索へ影響しないようにするための修正。(2) ブラウザ内AI
+> 実行(WASM+WebGPU)構想の技術検証・段階的導入計画を策定(未実装、計画
+> 段階)。いずれも詳細は[CLAUDE.md](CLAUDE.md)の2026-08-25エントリ参照。
+>
+> 📌 **更新(2026-08-10)**: `open-cuda`側`GptModel::
 > generate_with_repetition_penalty`(CTRL方式の繰り返しペナルティ)を
 > `/v1/generate`へ配線し、**既定で有効化**した(`ARUARU_LLM_REPETITION_
 > PENALTY`環境変数、既定値`1.3`、`1.0`にすると従来のペナルティ無し挙動)。

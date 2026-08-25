@@ -6,6 +6,26 @@
 > `CLAUDE.md`の内容を必ず確認してください。
 
 
+## 0. Google検索APIキーのリクエスト単位オーバーライド(2026-08-25新設)
+
+`POST /v1/generate-with-search`は任意フィールド`google_search_api_key`/
+`google_search_cx`を受け付ける。両方指定された場合、プロセス全体で
+共有されるグローバル設定(環境変数/`POST /v1/settings/google-search`)には
+一切触れず、そのリクエスト限りの認証情報として`web_search::
+search_with_credentials()`を使う。**複数の訪問者が同一インスタンスを
+共有するデプロイ(VPS等)では、この経路を使うことで訪問者間のAPIキー・
+クォータの意図しない共有・消費を防げる**——移植先でも同様のマルチ
+テナント公開シナリオがあれば、この設計をそのまま踏襲すること。
+
+## 0b. ブラウザ内AI実行(WASM+WebGPU)構想(2026-08-25追記、計画段階)
+
+RPoemの`PORTING.md`/`CLAUDE.md`(2026-08-25エントリ)に技術検証結果
+(`wgpu`のwasm32ビルド成功)・段階的導入計画を記載済み。第1段階では
+このリポジトリのGPT-2/distilgpt2生成ロジック(現状CPU実行)を
+`wasm32-unknown-unknown`向けにビルドできるCargo featureを追加する
+想定——移植先でこの機能を先行実装する場合はRPoem側のCLAUDE.mdを
+必ず先に確認すること。
+
 ## 1. open-cuda連携パターン(SET構成)
 
 `src/scoring.rs`に、open-cudaの`GpuDevice`実行パイプライン

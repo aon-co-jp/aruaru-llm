@@ -1,5 +1,51 @@
 # 設計思想＆開発方針＆開発環境ルール(aruaru-llm)
 
+> **📌 2026-08-25追記: (1)ブラウザ内AI実行(WASM+WebGPU)構想の段階的導入
+> 計画を確定、(2)複数訪問者が共有するVPSデプロイでGoogle検索APIキーが
+> 意図せず共有・消費されるバグを修正(実装・実機検証済み)**
+>
+> **(1) ブラウザ内AI実行構想**: 詳細な調査結果・技術検証(`wgpu`+
+> `wasm32-unknown-unknown`のコンパイル成功確認)・3段階の導入計画は
+> `RPoem/CLAUDE.md`同日エントリを正本とする(重複を避けるためここでは
+> 要約のみ): 第1段階でこのリポジトリのGPT-2/distilgpt2生成ロジック
+> (現状CPU実行、`opencuda_cpu::CpuDevice`経由)を`wasm32-unknown-unknown`
+> 向けにビルドできるCargo featureを追加し、RPoemの`apps/desktop-wasm`
+> (Tauri互換WASMシェル)がこれをホスト、open-englishのフロントエンドが
+> 直接読み込む——という「トライブリッド」構成にする計画。第2段階で
+> `wgpu`経由のWebGPUバックエンドをopen-cudaのGEMM/Attentionカーネルへ
+> 適用しGPU対応へ拡張する。いずれも**今回は未着手**(調査・計画確定
+> のみ)——次回セッションでaruaru-llm側のwasm32 featureの追加から着手する。
+>
+> **(2) Google検索APIキーの共有消費バグ修正(実装済み・実機検証済み)**:
+> `POST /v1/generate-with-search`が使う`web_search::search()`は
+> プロセス全体で1組しか保持できないグローバル認証情報
+> (`read_credentials()`、環境変数または`POST /v1/settings/
+> google-search`経由)を参照する設計だった——**複数の訪問者が同じ
+> aruaru-llmインスタンス(VPS上の共有デプロイ)へブラウザ経由で
+> アクセスする場合、ある訪問者が自分のキーを設定すると他の全訪問者の
+> 検索もそのキーへ切り替わり、意図せず共有・消費されてしまう**実バグ
+> だった(ユーザー指摘「開発者が設定したAPIキーとIDは、アクセス者は
+> 使わない、消費しない様に」への対応)。
+> - `src/web_search.rs`に`search_with_credentials(query, max_results,
+>   api_key, cx)`を新設——グローバル設定に一切触れず、呼び出し元が
+>   明示的に渡した認証情報のみでこのリクエスト限りの検索を行う。
+> - `GenerateWithSearchRequest`(`src/main.rs`)に`google_search_api_key`/
+>   `google_search_cx`(いずれも任意)を追加。両方指定されていれば
+>   `search_with_credentials`を最優先で使い、未指定ならこれまで通り
+>   グローバル設定(`is_configured`/`search`)へフォールバックする
+>   (単一利用者がローカルPCで環境変数設定する既存の使い方は無変更)。
+> - **検証**: `cargo check --release`成功(新規警告なし、既存の
+>   pre-existing警告5件のみ)。open-english側(`app.js`)を対応する
+>   実装へ更新し、実ブラウザで「保存→localStorageへ格納→クリア」の
+>   一連の流れをJS経由で確認済み(詳細は`open-english/CLAUDE.md`
+>   同日エントリ参照)。**実際にVPS上で2人の訪問者が別々のキーを
+>   使って同時にリクエストするE2E検証は未実施**(コードレビュー+
+>   単体コンパイル確認+ブラウザ側のlocalStorage動作確認までの範囲、
+>   正直な開示)。
+> - 次にすべきこと: (a) 実際に複数ブラウザセッションからの同時
+>   リクエストで、互いのキーが混ざらないことをE2E検証、(b) 上記(1)の
+>   第1段階(aruaru-llmのwasm32ビルドfeature)への着手。
+
 > **📌 2026-08-19追記: 東芝SBM/DeepSeek調査タスクは完了・現状維持と判断
 > (`open-english/PORTING.md`のHANDOFFに残っていた「項目4未着手」を受けて
 > 日英中(簡体)中(繁体)4言語でWebSearch調査を実施)**:
