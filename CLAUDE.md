@@ -285,6 +285,33 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-08-25 セキュリティ監査(cargo audit)を実施(open-english側の
+  ユーザー指示「関連リポジトリのセキュリティ監査」の一環、詳細調査・
+  横断的な優先判断はopen-english/CLAUDE.md 2026-08-25エントリ参照)**:
+  1. **`h2`(0.4.15、DoS脆弱性RUSTSEC-2026-0258)を`cargo update -p
+     h2@0.4.15`で0.4.19へ互換範囲内更新**。直接の依存指定は無く
+     `hyper`経由の推移的依存のためコード変更不要。`cargo build
+     --release`成功、`cargo test --release`75 passed/0 failedを維持。
+  2. **残る2件(`h2`0.3.27・`protobuf`2.28.0)は対処せず記録のみ**:
+     いずれも`rust-bert`(NLLB翻訳用、`Cargo.toml`で`nllb-translate`
+     featureとして既定オフ)が引き込む古い`reqwest 0.11`→`hyper
+     0.14`→`h2 0.3.27`、および`rust_tokenizers`→`protobuf 2.28.0`の
+     経路。`cargo tree -i h2@0.3.27 --all-features`/`cargo tree -i
+     protobuf --all-features`で確認したところ、いずれも
+     `nllb-translate`feature配下でのみ到達可能で、**既定ビルド・
+     CI(`.github/workflows/*.yml`にこのfeatureを有効化する記述なし)
+     には一切含まれない**。`rust-bert`自体もcrates.io上の最新版が
+     0.23.0のままで、上流が依存を更新しない限りこちら側での修正手段が
+     無い(`nllb-translate`を将来的に別のNLLB実装へ差し替えるか、
+     rust-bert側の更新を待つ必要がある)。
+  3. **`cargo audit`最終結果**: 5件→2件(いずれも上記2番、既定ビルド
+     非対象)。加えて`bincode`/`number_prefix`/`paste`/
+     `rustls-pemfile`の「unmaintained」警告4件(脆弱性ではない)。
+  - 次にすべきこと: (1) `rust-bert`または代替のNLLB実装の更新状況を
+    定期的に確認する、(2) `nllb-translate`featureを実際に有効化して
+    使う場合は、この2件のリスクをドキュメント上明記した上で利用者へ
+    判断を委ねる。
+
 - **2026-08-23 (続き) 階層的アクセラレーション(CUDA → Vulkan → DirectX 12
   → CPU SIMD)を実装。DirectX段は動くが、この開発機ではCPUより遅い**:
 
