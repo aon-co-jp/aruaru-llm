@@ -1,4 +1,9 @@
 /target
+# GPUアクセラレーション版ビルドの出力先(2026-08-26新設、installer/windows/
+# aruaru-llm.iss参照、既定ビルドと衝突しないよう別target dirを使う)。
+/target-gpu
+# Windowsインストーラー(Inno Setup)のビルド成果物。
+/installer/windows/dist/
 # news_geo.rsが生成するローカルニュースDB(実行時の取得結果、Gitに含めない)。
 /data/news_db.json
 # multilingual-e5-small(Hugging Face、470MB超)。Gitに含めず、README/
