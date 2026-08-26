@@ -63,6 +63,62 @@
 > 方針の継続)、(3) `open-directx`/`open-cuda`が精度に寄与しないという
 > 事実誤認が生じないよう、ユーザーへの報告時に明確に切り分ける。
 
+> **📌 2026-08-26追記(続き4・実装): 検索コンテキスト活用精度の改善(方向性1
+> のみ実装、2・3は調査の結果いずれも見送り、正直に記録)**
+>
+> **実装したこと(方向性1: プロンプトエンジニアリング)**:
+> 1. `web_search::format_results_as_context`を`"- title: snippet"`の
+>    単純箇条書きから`"1. title: snippet"`という番号付きへ変更
+>    (`src/web_search.rs`)。
+> 2. プロンプト組み立てを`"Reference information from a web search:\n
+>    {context}\n\n{prompt}"`という単純連結から、`web_search::
+>    build_search_augmented_prompt`という新関数による
+>    `"Use the search results below to answer the question as
+>    accurately as possible. If the search results don't contain the
+>    answer, say so honestly.\n\nSearch results:\n{context}\n\n
+>    Question: {question}\nAnswer:"`というQA形式へ変更
+>    (`src/main.rs`の`/v1/generate-with-search`ハンドラ2箇所、
+>    利用者自身のキー使用時・共有設定使用時の両方)。
+> 3. **狙い(仮説であり保証ではない)**: GPT-2/distilgpt2の事前学習
+>    コーパスには`Question: ... Answer:`形式のQ&Aテキストが大量に
+>    含まれるため、指示追従のファインチューニングが無いモデルでも
+>    「Answer:」の直後の貪欲デコードが直前の検索結果コンテキストを
+>    踏まえた続きになりやすいのではないか、という改善の試み。
+>    **この書式変更だけで検索結果の活用が保証されるわけではない**点は
+>    従来どおり変わらない——`/v1/generate-with-search`のレスポンスにも
+>    その旨の`disclosure`は維持している(コード変更なし)。
+> 4. **テスト**: `src/web_search.rs`の単体テストを2件更新・追加
+>    (`format_results_as_context_joins_title_and_snippet`の期待値を
+>    番号付きへ更新、`build_search_augmented_prompt_uses_qa_format`を
+>    新規追加)。`cargo test web_search`で3件とも通過確認済み
+>    (2026-08-26実施)。**実GPT-2 124M重みでの生成品質の定性比較
+>    (新書式 vs 旧書式で実際に検索結果を踏まえた応答が増えるか)までは
+>    今回未実施**——ビルド・単体テストの確認に留まる。次回セッションで
+>    実サーバー起動+実際のクエリでの比較検証が必要。
+>
+> **方向性2(instruction-tunedモデルへの切替)は見送り**: GPT-2
+> アーキテクチャで`open-cuda-llm::GptModel`のsafetensorsローダーが
+> そのまま読み込める、対話・指示追従のファインチューニング済み小型
+> モデルの存在有無について、今回のセッションでは実機での検索・
+> ダウンロード検証まで手が回らなかった(時間・リミットの制約)。
+> **「調査して存在しないと確認した」わけではなく「今回は未調査」**
+> という状態であり、次回セッションの課題として持ち越す。
+>
+> **方向性3(要約段階の追加)も見送り**: 外部の要約特化モデルを
+> 追加導入する場合、モデルダウンロード・ロード方式の設計(既存の
+> `opencuda-llm::GptModel`のロード機構を流用できるか、別クレートが
+> 必要か)から検討が必要な規模のため、今回は着手せず次回課題とする。
+>
+> **open-directx/open-cudaとの切り分け(改めて明記)**: 今回実装した
+> 改善はいずれもプロンプト文字列の組み立て方の変更のみであり、
+> `open-directx`/`open-cuda`側のコードには一切触れていない。これらは
+> 従来どおりGPU推論の「速度」基盤であり、今回の「精度」改善とは
+> 無関係(過去のHANDOFFの記載と矛盾しないことを確認済み)。
+>
+> **次にすべきこと**: (1) 実GPT-2 124M重みでの新書式vs旧書式の定性
+> 比較検証、(2) instruction-tunedなGPT-2互換小型モデルの実在調査
+> (HuggingFace Hub中心)、(3) 要約段階追加の設計検討。
+
 > **📌 2026-08-26追記(続き2): GitHub検索・YouTube検索連携+無料枠切れ検知
 > (429)を新設、実機E2E検証済み**
 >

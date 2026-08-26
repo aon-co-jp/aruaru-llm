@@ -171,12 +171,44 @@ pub async fn search_with_credentials(query: &str, max_results: u8, api_key: &str
 
 /// 検索結果を、生成プロンプトへ埋め込むための短いコンテキスト文字列へ
 /// 整形する(タイトル+スニペットのみ、本文丸ごと転載はしない)。
+/// 検索結果をプロンプト埋め込み用の文脈テキストへ整形する。
+///
+/// 番号付き箇条書き(`1. Title: snippet`)にしているのは、GPT-2/distilgpt2の
+/// ような指示追従ファインチューニング無しのモデルでも、事前学習コーパスに
+/// 頻出する「番号付きリスト→それを参照した回答」というパターン補完に
+/// 乗りやすくするため(`- `単純箇条書きより番号付きの方が、後続の
+/// `Question: ... Answer:`形式との整合が取りやすい)。詳細は
+/// CLAUDE.mdの2026-08-26追記(検索コンテキスト活用精度の改善)を参照。
 pub fn format_results_as_context(results: &[SearchResult]) -> String {
     results
         .iter()
-        .map(|r| format!("- {}: {}", r.title, r.snippet))
+        .enumerate()
+        .map(|(i, r)| format!("{}. {}: {}", i + 1, r.title, r.snippet))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// 検索結果コンテキストとユーザーの質問文から、GPT-2/distilgpt2の
+/// 貪欲デコードで検索結果を踏まえた応答が出やすい形にプロンプトを組み立てる。
+///
+/// 単純な`"Reference information...\n{context}\n\n{prompt}"`連結
+/// (旧実装)ではなく`"Search results: ... Question: ... Answer:"`という
+/// QA形式にしているのは、GPT-2の事前学習コーパス(Webテキスト全般)に
+/// この種のQ&A形式のテキストが大量に含まれているため、指示追従の
+/// ファインチューニングが無いモデルでも「Answer:」の直後に検索結果を
+/// 踏まえた続きを生成するパターン補完が起きやすいという狙い(仮説)。
+/// **保証ではなく改善の試みである点に注意**——GPT-2系は依然として
+/// 対話・指示追従のファインチューニングを受けていないため、この書式
+/// 変更だけで検索結果の活用が保証されるわけではない。詳細は
+/// CLAUDE.mdの2026-08-26追記(検索コンテキスト活用精度の改善)を参照。
+pub fn build_search_augmented_prompt(context: &str, question: &str) -> String {
+    format!(
+        "Use the search results below to answer the question as accurately as possible. \
+If the search results don't contain the answer, say so honestly.\n\n\
+Search results:\n{context}\n\n\
+Question: {question}\n\
+Answer:"
+    )
 }
 
 #[cfg(test)]
@@ -208,6 +240,14 @@ mod tests {
             SearchResult { title: "B".to_string(), snippet: "bbb".to_string(), link: "http://b".to_string() },
         ];
         let ctx = format_results_as_context(&results);
-        assert_eq!(ctx, "- A: aaa\n- B: bbb");
+        assert_eq!(ctx, "1. A: aaa\n2. B: bbb");
+    }
+
+    #[test]
+    fn build_search_augmented_prompt_uses_qa_format() {
+        let prompt = build_search_augmented_prompt("1. A: aaa", "What is A?");
+        assert!(prompt.contains("Search results:\n1. A: aaa"));
+        assert!(prompt.contains("Question: What is A?"));
+        assert!(prompt.trim_end().ends_with("Answer:"));
     }
 }

@@ -7,6 +7,21 @@
 [Українська](README-Ukrainian.md) · [עברית](README-Hebrew.md) ·
 [فارسی](README-Persian.md) · [العربية](README-Arabic.md)
 
+> 📌 **最近の更新(2026-08-26続き)**: `/v1/generate-with-search`の
+> プロンプト組み立てを、検索結果を単純連結するだけの旧書式から
+> `"Search results: ...\nQuestion: {prompt}\nAnswer:"`というQA形式
+> (`web_search::build_search_augmented_prompt`)へ変更した。GPT-2の
+> 事前学習コーパスに多いQ&A形式のパターン補完に乗せることで、検索
+> 結果を踏まえた応答が出やすくなることを狙った改善の試みであり、
+> **確実に検索結果を活用するようになったことを保証するものではない**
+> (GPT-2/distilgpt2は指示追従のファインチューニングを受けていないため)。
+> instruction-tunedモデルへの切替・要約段階の追加は調査未完了のため
+> 見送り、次回セッションの課題とした。**この改善はプロンプト文字列の
+> 組み立て方の変更のみであり、open-directx/open-cuda(GPU推論の
+> 「速度」基盤)には一切手を加えていない**——応答の「精度」とGPU
+> 推論の「速度」は引き続き別の話である。詳細は
+> [CLAUDE.md](CLAUDE.md)の2026-08-26追記(続き4)参照。
+>
 > 📌 **最近の更新(2026-08-26)**: Windows用インストーラー
 > `aruaru-llm-installer.exe`を新設(管理者権限のPowerShellを手動で
 > 立ち上げる必要なし)。open-cuda/open-directxのVulkan/DirectXバック
