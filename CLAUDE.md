@@ -1,5 +1,57 @@
 # 設計思想＆開発方針＆開発環境ルール(aruaru-llm)
 
+> **📌 2026-08-26追記(続き): マルチLLMプロバイダ(ChatGPT/DeepSeek/
+> Gemini/Claude)連携+優先順位フォールバック機能を新設、実機E2E検証・
+> セキュリティ見直し済み**
+>
+> ユーザー指示「open-englishのGoogle検索APIキーの他にChatGPT無料枠・
+> DeepSeek無料枠・Gemini・Claudeを単体でも同時実行でも使えるように」
+> +「無料枠を優先で使い切り順番に使用、にチェックを付けられる様に」
+> への対応。
+>
+> **新規モジュール**: `src/chat_providers.rs`(OpenAI/DeepSeek/Gemini/
+> Claudeへの単体・同時実行呼び出し、既存`web_search.rs`と同じ設計
+> パターン——APIキーはプロセスメモリ上保持のみ・環境変数フォールバック・
+> 正直なエラー開示)+`src/provider_priority.rs`(Google検索を含む
+> 5サービス共通の優先順位リスト管理)。新設エンドポイント:
+> `POST/GET/DELETE /v1/settings/chat-providers`・
+> `POST /v1/chat-providers/complete`(単体)・
+> `POST /v1/chat-providers/complete-multi`(同時実行、成功/失敗を
+> プロバイダ別に返す)・`POST/GET/DELETE /v1/settings/provider-priority`・
+> `POST /v1/chat-providers/complete-priority`(優先順に試し最初の
+> 成功を返す)。
+>
+> **セキュリティ見直し(実装後の再検証で発見・修正)**: (1) Geminiの
+> APIキーをクエリ文字列(`?key=...`)ではなくヘッダー(`x-goog-api-key`、
+> Google公式推奨方式)経由に変更——クエリ文字列だとリバースプロキシ・
+> アクセスログに平文で残りやすいため。(2)
+> `CHAT_PROVIDER_PROMPT_CHAR_LIMIT`(20,000文字)を新設し、3エンドポイント
+> (単体/同時実行/優先順位)すべてに適用——誤って巨大なテキストを
+> そのまま外部有料APIへ送ってしまう事故(意図せぬ高額請求・無料枠の
+> 急速な枯渇)を防ぐ実用的な安全弁。
+>
+> **実機検証**: `cargo build --release`成功、`cargo test --release`
+> 81件全green(新規6件含む)。実際にサーバーを起動し、4社すべてへ
+> 偽キーで実HTTPリクエストを送り、各社の実際のエラー応答
+> (OpenAI/DeepSeek/Gemini/Claude、いずれも本物のAPIエンドポイントへ
+> 到達し正しいエラー形式で応答)を確認。HashMap<Provider,String>の
+> JSON往復・優先順位の部分指定(足りない分は既定順序で補完)・
+> 不正なプロバイダ名/サービス名でのバリデーションエラー・
+> 20,000文字超プロンプトの拒否・Geminiヘッダー認証経路が実際に機能
+> することも確認済み。open-english側のUI(「🔀 AI Provider Priority」
+> パネル)からの実ブラウザ操作→aruaru-llmへの設定反映→外部API実呼び出し
+> までの一気通貫E2Eも確認済み(詳細は`open-english/CLAUDE.md`
+> 2026-08-26エントリ参照)。
+>
+> **正直な開示**: 「無料枠を使い切ったら次へ」の判定はAPI呼び出しの
+> 失敗全般をトリガーにしており、失敗理由が本当に「無料枠切れ」なのか
+> 他の一時的なエラーなのかを正確に判別する精度は保証しない。
+>
+> 次にすべきこと: (1) 「無料枠切れ」をより正確に判別する仕組み
+> (HTTPステータスコード・エラー本文のパターンマッチ等)の検討、
+> (2) 複数プロバイダの応答を1つへ要約・統合する機能(現状はプロバイダ
+> 別の生の応答を返すのみ)。
+
 > **📌 2026-08-26追記: Windows用インストーラー`aruaru-llm-installer.exe`を
 > 新設(GPU版=open-cuda Vulkan/DirectXの「SET」をオプトインで同梱+
 > インストール中に推奨モデルを選択できるダイアログ)、実機検証済み**

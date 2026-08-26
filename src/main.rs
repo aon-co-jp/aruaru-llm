@@ -24,6 +24,7 @@
 
 mod bow_fallback;
 mod cache_optimizer;
+mod chat_providers;
 mod device_pool;
 mod geo_content;
 mod referrals;
@@ -36,12 +37,14 @@ mod model_catalog;
 mod news_geo;
 mod nllb;
 mod phone_task;
+mod provider_priority;
 mod scoring;
 mod security;
 mod self_update;
 mod signatures;
 mod tenants;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -733,6 +736,216 @@ async fn clear_google_search_settings() -> Response {
 
 async fn get_google_search_settings_status() -> Response {
     json_response(StatusCode::OK, &GoogleSearchSettingsStatusResponse { configured: web_search::is_configured() })
+}
+
+/// `POST /v1/settings/chat-providers` — ブラウザの設定パネルからChatGPT/
+/// DeepSeek/Gemini/ClaudeのAPIキーを保存する(`set_google_search_settings`
+/// と同じ設計: メモリ上にのみ保持、ディスク書き込み・ログ出力は一切
+/// 行わない)。
+#[derive(Debug, Deserialize)]
+struct ChatProviderSettingsRequest {
+    provider: chat_providers::Provider,
+    api_key: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ChatProviderSettingsStatusResponse {
+    /// APIキーの値自体は絶対に返さない(`GoogleSearchSettingsStatusResponse`
+    /// と同じ設計)。設定済みのプロバイダ一覧のみを返す。
+    configured_providers: Vec<chat_providers::Provider>,
+}
+
+async fn set_chat_provider_settings(req: Request) -> Response {
+    let Json(body): Json<ChatProviderSettingsRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    chat_providers::set_runtime_key(body.provider, body.api_key);
+    json_response(StatusCode::OK, &ChatProviderSettingsStatusResponse { configured_providers: chat_providers::configured_providers() })
+}
+
+async fn clear_chat_provider_settings() -> Response {
+    chat_providers::clear_runtime_keys();
+    json_response(StatusCode::OK, &ChatProviderSettingsStatusResponse { configured_providers: chat_providers::configured_providers() })
+}
+
+async fn get_chat_provider_settings_status() -> Response {
+    json_response(StatusCode::OK, &ChatProviderSettingsStatusResponse { configured_providers: chat_providers::configured_providers() })
+}
+
+/// `POST /v1/chat-providers/complete` — 単体のプロバイダ(ChatGPT/
+/// DeepSeek/Gemini/Claudeのいずれか1つ)を呼び出す。`api_key`が
+/// リクエストボディに含まれていればこのリクエスト限りで使用し
+/// (共有VPS上での意図しないキー消費を避ける、`generate_with_search`と
+/// 同じ設計)、無ければ実行時/環境変数設定へフォールバックする。
+#[derive(Debug, Deserialize)]
+struct ChatProviderCompleteRequest {
+    provider: chat_providers::Provider,
+    prompt: String,
+    #[serde(default)]
+    api_key: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ChatProviderCompleteResponse {
+    provider: chat_providers::Provider,
+    text: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ChatProviderErrorResponse {
+    provider: chat_providers::Provider,
+    error: String,
+}
+
+/// 外部チャットプロバイダAPIへ渡すプロンプトの上限文字数(2026-08-26
+/// セキュリティ見直しで新設)。**正直な開示**: これは悪意ある攻撃者を
+/// 完全に防ぐものではなく、誤って巨大なテキスト(例: ファイルの中身を
+/// まるごと貼り付けてしまった等)をそのまま外部の有料APIへ送ってしまい
+/// 意図せず高額請求・無料枠の急速な枯渇を招く事故を防ぐための実用的な
+/// 上限。各社の実際のトークン上限(モデルにより数千〜数十万トークン)
+/// とは無関係な、このリポジトリ独自の保守的な安全弁。
+const CHAT_PROVIDER_PROMPT_CHAR_LIMIT: usize = 20_000;
+
+fn chat_provider_prompt_too_long(prompt: &str) -> bool {
+    prompt.chars().count() > CHAT_PROVIDER_PROMPT_CHAR_LIMIT
+}
+
+async fn chat_provider_complete(req: Request) -> Response {
+    let Json(req): Json<ChatProviderCompleteRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    if chat_provider_prompt_too_long(&req.prompt) {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            &serde_json::json!({"error": format!("prompt exceeds {CHAT_PROVIDER_PROMPT_CHAR_LIMIT} characters")}),
+        );
+    }
+    let result = match req.api_key.as_deref() {
+        Some(key) if !key.trim().is_empty() => chat_providers::complete_with_key(req.provider, key, &req.prompt).await,
+        _ => chat_providers::complete(req.provider, &req.prompt).await,
+    };
+    match result {
+        Ok(text) => json_response(StatusCode::OK, &ChatProviderCompleteResponse { provider: req.provider, text }),
+        Err(err) => {
+            tracing::warn!("chat_provider_complete failed: {err:#}");
+            json_response(StatusCode::SERVICE_UNAVAILABLE, &ChatProviderErrorResponse { provider: req.provider, error: format!("{err:#}") })
+        }
+    }
+}
+
+/// `POST /v1/chat-providers/complete-multi` — 複数プロバイダを同時実行
+/// (並列にHTTPリクエストを投げ、成功分をプロバイダ別に、失敗分も
+/// エラー内容付きで正直に返す。1つの応答へ統合・要約する処理は
+/// 行わない——呼び出し元・利用者が結果を比較できるようにするため)。
+#[derive(Debug, Deserialize)]
+struct ChatProviderCompleteMultiRequest {
+    providers: Vec<chat_providers::Provider>,
+    prompt: String,
+    /// プロバイダごとの持ち込みAPIキー(任意、`provider`名をキーとする
+    /// JSONオブジェクト)。指定が無いプロバイダは実行時/環境変数設定へ
+    /// フォールバックする。
+    #[serde(default)]
+    api_keys: HashMap<chat_providers::Provider, String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ChatProviderCompleteMultiResponse {
+    replies: Vec<chat_providers::ProviderReply>,
+    failures: Vec<chat_providers::ProviderFailure>,
+}
+
+async fn chat_provider_complete_multi(req: Request) -> Response {
+    let Json(req): Json<ChatProviderCompleteMultiRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    if req.providers.is_empty() {
+        return json_response(StatusCode::BAD_REQUEST, &serde_json::json!({"error": "providers must not be empty"}));
+    }
+    if req.prompt.trim().is_empty() {
+        return json_response(StatusCode::BAD_REQUEST, &serde_json::json!({"error": "prompt must not be empty"}));
+    }
+    if chat_provider_prompt_too_long(&req.prompt) {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            &serde_json::json!({"error": format!("prompt exceeds {CHAT_PROVIDER_PROMPT_CHAR_LIMIT} characters")}),
+        );
+    }
+    let (replies, failures) = chat_providers::complete_multi(&req.providers, &req.api_keys, &req.prompt).await;
+    json_response(StatusCode::OK, &ChatProviderCompleteMultiResponse { replies, failures })
+}
+
+/// `POST /v1/settings/provider-priority` — Google検索+ChatGPT/DeepSeek/
+/// Gemini/Claudeの5サービスを横断した「無料枠を優先で使い切り、順番に
+/// 使用」チェックボックスの有効/無効+優先順序を設定する(ユーザー指示
+/// 「Google、ChatGPT/DeepSeek/Gemini/Claudeは、無料枠を優先で使い切り
+/// 順番に使用、にチェックを付けられる様にして。Googleなどは、順番を
+/// 入力したり、数字のラジオボタンを押すかのどちらかで優先の順番を
+/// 変更可能にして」への対応)。`order`はフロントエンド側が「番号入力」
+/// または「ラジオボタン」いずれのUIで組み立てても良い、サーバー側は
+/// 並び替え済みの配列を受け取るだけ(UI実装の自由度を残す設計)。
+#[derive(Debug, Deserialize)]
+struct ProviderPrioritySettingsRequest {
+    enabled: bool,
+    #[serde(default)]
+    order: Vec<provider_priority::PriorityService>,
+}
+
+async fn set_provider_priority_settings(req: Request) -> Response {
+    let Json(body): Json<ProviderPrioritySettingsRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    provider_priority::set_priority(body.enabled, body.order);
+    json_response(StatusCode::OK, &provider_priority::status())
+}
+
+async fn reset_provider_priority_settings() -> Response {
+    provider_priority::reset_priority();
+    json_response(StatusCode::OK, &provider_priority::status())
+}
+
+async fn get_provider_priority_settings_status() -> Response {
+    json_response(StatusCode::OK, &provider_priority::status())
+}
+
+/// `POST /v1/chat-providers/complete-priority` — 上記の優先順位設定に
+/// 従い、設定済みのプロバイダを順番に試し最初に成功したものを返す
+/// (`chat_providers::complete_in_priority_order`)。優先順位機能が
+/// 無効化されている場合でも呼び出しは可能(その場合は既定順序=
+/// Google→OpenAI→DeepSeek→Gemini→Claudeで、設定済みの最初の1件のみを
+/// 試す——`enabled`はUI側のチェックボックス状態を表すだけで、この
+/// エンドポイント自体は常に「順番に試す」動作をする、無効時に何も
+/// しないと利用者が混乱するのを避けるため)。
+#[derive(Debug, Deserialize)]
+struct ChatProviderCompletePriorityRequest {
+    prompt: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ChatProviderCompletePriorityResponse {
+    reply: Option<chat_providers::ProviderReply>,
+    attempted: Vec<chat_providers::PriorityAttempt>,
+}
+
+async fn chat_provider_complete_priority(req: Request) -> Response {
+    let Json(req): Json<ChatProviderCompletePriorityRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    if req.prompt.trim().is_empty() {
+        return json_response(StatusCode::BAD_REQUEST, &serde_json::json!({"error": "prompt must not be empty"}));
+    }
+    if chat_provider_prompt_too_long(&req.prompt) {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            &serde_json::json!({"error": format!("prompt exceeds {CHAT_PROVIDER_PROMPT_CHAR_LIMIT} characters")}),
+        );
+    }
+    let result = chat_providers::complete_in_priority_order(&req.prompt).await;
+    json_response(StatusCode::OK, &ChatProviderCompletePriorityResponse { reply: result.reply, attempted: result.attempted })
 }
 
 #[derive(Debug, Deserialize)]
@@ -1833,6 +2046,21 @@ async fn main() -> anyhow::Result<()> {
             post(handler_fn(|req, _p| Box::pin(set_google_search_settings(req))))
                 .get(plain(|| Box::pin(get_google_search_settings_status())))
                 .delete(plain(|| Box::pin(clear_google_search_settings()))),
+        )
+        .at(
+            "/v1/settings/chat-providers",
+            post(handler_fn(|req, _p| Box::pin(set_chat_provider_settings(req))))
+                .get(plain(|| Box::pin(get_chat_provider_settings_status())))
+                .delete(plain(|| Box::pin(clear_chat_provider_settings()))),
+        )
+        .at("/v1/chat-providers/complete", post(handler_fn(|req, _p| Box::pin(chat_provider_complete(req)))))
+        .at("/v1/chat-providers/complete-multi", post(handler_fn(|req, _p| Box::pin(chat_provider_complete_multi(req)))))
+        .at("/v1/chat-providers/complete-priority", post(handler_fn(|req, _p| Box::pin(chat_provider_complete_priority(req)))))
+        .at(
+            "/v1/settings/provider-priority",
+            post(handler_fn(|req, _p| Box::pin(set_provider_priority_settings(req))))
+                .get(plain(|| Box::pin(get_provider_priority_settings_status())))
+                .delete(plain(|| Box::pin(reset_provider_priority_settings()))),
         )
         .at(
             "/v1/models/optimize-cache",
