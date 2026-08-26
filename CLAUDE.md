@@ -1,5 +1,68 @@
 # 設計思想＆開発方針＆開発環境ルール(aruaru-llm)
 
+> **📌 2026-08-26追記(続き3・未着手タスク記録): 「検索結果をGPT-2が
+> 正確に活用する保証はない」という制約を、Rust+RPoem+open-directx/
+> open-cuda+aruaru-llm側の改善で緩和できないか、次回セッションで調査・
+> 改善すること(ユーザー指示)**
+>
+> **English summary**: `/v1/generate-with-search` embeds Google search
+> results into the prompt, but the underlying model (GPT-2/distilgpt2,
+> no instruction-tuning) has no guaranteed ability to actually make use
+> of that context correctly — this has been an honestly-disclosed
+> limitation since the feature's introduction. The user asked that a
+> **future session** investigate whether engineering improvements
+> across Rust + RPoem + open-directx/open-cuda + aruaru-llm can reduce
+> this limitation (not necessarily eliminate it), and implement what
+> is found to help. **Nothing has been implemented yet** — this entry
+> only records the task for next time.
+>
+> **背景**: ユーザーから「Google検索結果を参考に情報収集して解析して
+> AIが回答に役立てているという事ですね」との確認に対し、`/v1/generate-
+> with-search`(`web_search.rs`+`generation.rs`)が実際に検索結果を
+> プロンプトへ埋め込んでいることは事実だが、**埋め込んだコンテキストを
+> モデルが正確に踏まえて応答する保証は無い**(GPT-2/distilgpt2は
+> 対話・指示追従のファインチューニングを受けていない素の事前学習済み
+> 言語モデルの貪欲デコードのため)という既存の正直な開示は変わらない、
+> と回答した。この制約自体を、Rust+RPoem+open-directx/open-cuda+
+> aruaru-llmという既存の技術スタックの改善で緩和できないか調査・改善
+> することを次回タスクとして記録する(ユーザー指示「この部分を...
+> それらに+αで改善は可能かどうか次回検証して改善する様に」)。
+>
+> **調査・検討すべき方向性(未着手、次回の出発点)**:
+> 1. **プロンプトエンジニアリング側の改善**(モデル自体は変えない):
+>    検索結果の埋め込み位置・書式・件数を変えることで、GPT-2の限られた
+>    文脈window内での効果を上げられないか(例: 現状は
+>    `"Reference information from a web search:\n{context}\n\n{prompt}"`
+>    という単純な連結、指示追従を促す定型フレーズの追加余地がある)。
+> 2. **指示追従にやや強いモデルへの切替**(`open-cuda-llm`側の対応が
+>    前提): 現行カタログ(gpt2/distilgpt2/gpt2-medium/large/xl)は
+>    いずれも対話・指示追従のファインチューニング無しの素のGPT-2
+>    アーキテクチャ。instruction-tunedな小型モデル(例: GPT-2ベースの
+>    対話ファインチューニング版が存在するか要調査)への切替、または
+>    ファインチューニング自体をこのエコシステム内で行えるか(学習用
+>    データセット・計算資源の要否含め)の検討が必要。
+> 3. **検索結果の「要約」を挟む段階の追加**: 生の検索結果(タイトル+
+>    スニペット)をそのまま渡すのではなく、まず短い要約ステップを
+>    挟んでからプロンプトへ埋め込む設計(ただし要約自体もGPT-2が担う
+>    なら同じ限界を抱える——外部の要約特化モデル/ルールベース抽出の
+>    要否を含めて検討)。
+> 4. **`open-directx`/`open-cuda`側の役割の再確認**: これらはGPU
+>    推論の高速化基盤であり、**応答品質(検索結果の活用精度)には
+>    直接寄与しない**——過去のHANDOFF(2026-07-26等)で繰り返し確認
+>    してきた通り、GPU配線は速度の話であって精度の話ではない。この
+>    点をユーザーへ正直に伝えた上で、期待値のすり合わせが必要
+>    (「+α」がGPU高速化ではなくモデル・プロンプト側の改善であること
+>    を明確にする)。
+> 5. **RPoemの役割**: HTTP層の実装であり、検索結果活用の精度には
+>    無関係(該当なし、期待値の誤解が無いよう明記)。
+>
+> **次にすべきこと**: (1) 上記1〜3の実現可能性を実際に調査・実験する
+> (プロンプト書式の変更は即座に試せる、モデル切替はHugging Face上の
+> 候補調査から)、(2) 改善が確認できた分だけ実装し、確認できなかった
+> ものは「試したが効果が無かった」と正直に記録する(誇張しない既存
+> 方針の継続)、(3) `open-directx`/`open-cuda`が精度に寄与しないという
+> 事実誤認が生じないよう、ユーザーへの報告時に明確に切り分ける。
+
 > **📌 2026-08-26追記(続き2): GitHub検索・YouTube検索連携+無料枠切れ検知
 > (429)を新設、実機E2E検証済み**
 >
