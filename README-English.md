@@ -7,6 +7,22 @@
 [Українська](README-Ukrainian.md) · [עברית](README-Hebrew.md) ·
 [فارسی](README-Persian.md) · [العربية](README-Arabic.md)
 
+> 📌 **Recent update (2026-08-26)**: Changed the `/v1/generate-with-search`
+> prompt assembly from plain concatenation to a QA-style format
+> (`web_search::build_search_augmented_prompt`: `"Search results:
+> ...\nQuestion: {prompt}\nAnswer:"`). The idea is that GPT-2's
+> pretraining corpus contains a lot of Q&A-formatted text, so this
+> pattern may make greedy decoding more likely to continue in a way
+> that actually uses the preceding search context — **this is an
+> attempted improvement, not a guarantee** that the model now reliably
+> uses search results (GPT-2/distilgpt2 have no instruction-tuning).
+> Switching to an instruction-tuned model and adding a summarization
+> step were investigated but not completed this session, so both are
+> deferred. **This change only touches prompt string assembly** —
+> open-directx/open-cuda (the GPU inference *speed* layer) were not
+> touched, since they don't affect response *accuracy*. See
+> [CLAUDE.md](CLAUDE.md)'s 2026-08-26 entry for details.
+>
 > 📌 **Recent update (2026-08-10)**: Wired `open-cuda`'s new `GptModel::
 > generate_with_repetition_penalty` (CTRL-style repetition penalty) into
 > `/v1/generate`, **enabled by default** (`ARUARU_LLM_REPETITION_PENALTY`

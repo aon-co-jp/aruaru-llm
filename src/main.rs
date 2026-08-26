@@ -654,7 +654,7 @@ async fn generate_with_search(req: Request, device: Arc<dyn GpuDevice>, registry
         match web_search::search_with_credentials(&req.prompt, 3, &api_key, &cx).await {
             Ok(results) if !results.is_empty() => {
                 let context = web_search::format_results_as_context(&results);
-                (format!("Reference information from a web search:\n{context}\n\n{}", req.prompt), true, results, None)
+                (web_search::build_search_augmented_prompt(&context, &req.prompt), true, results, None)
             }
             Ok(_) => (req.prompt.clone(), false, Vec::new(), Some("Google returned zero results for this query.".to_string())),
             Err(err) => {
@@ -667,7 +667,7 @@ async fn generate_with_search(req: Request, device: Arc<dyn GpuDevice>, registry
         match web_search::search(&req.prompt, 3).await {
             Ok(results) if !results.is_empty() => {
                 let context = web_search::format_results_as_context(&results);
-                (format!("Reference information from a web search:\n{context}\n\n{}", req.prompt), true, results, None)
+                (web_search::build_search_augmented_prompt(&context, &req.prompt), true, results, None)
             }
             Ok(_) => (req.prompt.clone(), false, Vec::new(), Some("Google returned zero results for this query.".to_string())),
             Err(err) => {
