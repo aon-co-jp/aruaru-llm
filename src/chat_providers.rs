@@ -137,6 +137,37 @@ pub struct ProviderReply {
 pub struct ProviderFailure {
     pub provider: Provider,
     pub error: String,
+    /// このプロバイダの無料枠(レート制限)を使い切ったと判定できたか
+    /// (ユーザー指示「Google等のAIの一日の無料枠を使い切ると『本日の
+    /// 無料枠は使い切りました』と英語と日本語で表示して」への対応)。
+    /// **正直な開示**: HTTP 429(Too Many Requests、4社共通でレート
+    /// 制限/無料枠超過時に返す規約上のステータスコード)を根拠に
+    /// 判定しており、「一時的なトラフィック過多による429」と「本当に
+    /// その日の無料枠を使い切った429」を区別する手段は無い——4社とも
+    /// 両者を同じステータスコードで表現するため、これ以上細かい判別は
+    /// 技術的にできない。
+    pub quota_exceeded: bool,
+}
+
+/// HTTPステータス429(Too Many Requests)を無料枠/レート制限超過の
+/// サインとして扱う。OpenAI・DeepSeek・Gemini・Claudeいずれも公式
+/// ドキュメント上、レート制限・クォータ超過時に429を返す規約のため、
+/// 4社共通のヒューリスティックとして採用する。
+fn is_quota_exceeded_status(status: reqwest::StatusCode) -> bool {
+    status == reqwest::StatusCode::TOO_MANY_REQUESTS
+}
+
+/// 429エラーを`bail!`する際に付けるマーカー接頭辞。呼び出し元
+/// (`complete_multi`/`complete_in_priority_order`)がこの接頭辞の有無で
+/// `quota_exceeded`を判定し、表示用のエラー文からは接頭辞を取り除く。
+const QUOTA_EXCEEDED_MARKER: &str = "QUOTA_EXCEEDED::";
+
+fn split_quota_exceeded(err: &anyhow::Error) -> (bool, String) {
+    let full = format!("{err:#}");
+    match full.strip_prefix(QUOTA_EXCEEDED_MARKER) {
+        Some(rest) => (true, rest.to_string()),
+        None => (false, full),
+    }
 }
 
 /// 単一プロバイダを呼び出す(`web_search::search_with_credentials`と同じ
@@ -189,7 +220,10 @@ pub async fn complete_multi(providers: &[Provider], keys: &HashMap<Provider, Str
     for handle in handles {
         match handle.await {
             Ok((provider, Ok(text))) => replies.push(ProviderReply { provider, text }),
-            Ok((provider, Err(err))) => failures.push(ProviderFailure { provider, error: format!("{err:#}") }),
+            Ok((provider, Err(err))) => {
+                let (quota_exceeded, error) = split_quota_exceeded(&err);
+                failures.push(ProviderFailure { provider, error, quota_exceeded });
+            }
             Err(join_err) => tracing::warn!("chat provider task panicked: {join_err:#}"),
         }
     }
@@ -207,12 +241,24 @@ pub async fn complete_multi(providers: &[Provider], keys: &HashMap<Provider, Str
 pub struct PriorityAttempt {
     pub provider: Provider,
     pub error: String,
+    pub quota_exceeded: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PriorityCompleteResult {
     pub reply: Option<ProviderReply>,
     pub attempted: Vec<PriorityAttempt>,
+    /// 試行した全プロバイダが無料枠(レート制限)超過で失敗し、かつ
+    /// 1件も成功しなかったか(ユーザー指示「Google等のAIの一日の無料枠を
+    /// 使い切ると『本日の無料枠は使い切りました』と英語と日本語で表示
+    /// して」への対応、フロントエンドがこの一言をそのまま出せるよう
+    /// サーバー側で判定して返す)。**正直な開示**: 有料契約(課金設定
+    /// 済み)のプロバイダは429を返さずそのまま成功するため、この
+    /// フラグは自動的に`false`になる——「有料版も契約していたら
+    /// 自動で継続する」という要件は、無料枠切れの判定を待たず単に
+    /// 実際のAPI呼び出しが成功する、という既存の仕組みでそのまま
+    /// 満たされる(有料/無料を明示的に切り替えるロジックは不要)。
+    pub all_quota_exceeded: bool,
 }
 
 pub async fn complete_in_priority_order(prompt: &str) -> PriorityCompleteResult {
@@ -226,11 +272,15 @@ pub async fn complete_in_priority_order(prompt: &str) -> PriorityCompleteResult 
             continue;
         }
         match complete(provider, prompt).await {
-            Ok(text) => return PriorityCompleteResult { reply: Some(ProviderReply { provider, text }), attempted },
-            Err(err) => attempted.push(PriorityAttempt { provider, error: format!("{err:#}") }),
+            Ok(text) => return PriorityCompleteResult { reply: Some(ProviderReply { provider, text }), attempted, all_quota_exceeded: false },
+            Err(err) => {
+                let (quota_exceeded, error) = split_quota_exceeded(&err);
+                attempted.push(PriorityAttempt { provider, error, quota_exceeded });
+            }
         }
     }
-    PriorityCompleteResult { reply: None, attempted }
+    let all_quota_exceeded = !attempted.is_empty() && attempted.iter().all(|a| a.quota_exceeded);
+    PriorityCompleteResult { reply: None, attempted, all_quota_exceeded }
 }
 
 // --- OpenAI (ChatGPT) --------------------------------------------------
@@ -270,7 +320,8 @@ async fn complete_openai(client: &reqwest::Client, api_key: &str, prompt: &str) 
     if !res.status().is_success() {
         let status = res.status();
         let text = res.text().await.unwrap_or_else(|_| "(failed to read response body)".to_string());
-        bail!("OpenAI returned HTTP {status}: {text}");
+        let marker = if is_quota_exceeded_status(status) { QUOTA_EXCEEDED_MARKER } else { "" };
+        bail!("{marker}OpenAI returned HTTP {status}: {text}");
     }
     let parsed: OpenAiResponse = res.json().await.context("failed to parse OpenAI response")?;
     parsed.choices.into_iter().next().map(|c| c.message.content).context("OpenAI response contained no choices")
@@ -286,7 +337,8 @@ async fn complete_deepseek(client: &reqwest::Client, api_key: &str, prompt: &str
     if !res.status().is_success() {
         let status = res.status();
         let text = res.text().await.unwrap_or_else(|_| "(failed to read response body)".to_string());
-        bail!("DeepSeek returned HTTP {status}: {text}");
+        let marker = if is_quota_exceeded_status(status) { QUOTA_EXCEEDED_MARKER } else { "" };
+        bail!("{marker}DeepSeek returned HTTP {status}: {text}");
     }
     let parsed: OpenAiResponse = res.json().await.context("failed to parse DeepSeek response")?;
     parsed.choices.into_iter().next().map(|c| c.message.content).context("DeepSeek response contained no choices")
@@ -344,7 +396,8 @@ async fn complete_gemini(client: &reqwest::Client, api_key: &str, prompt: &str) 
     if !res.status().is_success() {
         let status = res.status();
         let text = res.text().await.unwrap_or_else(|_| "(failed to read response body)".to_string());
-        bail!("Gemini returned HTTP {status}: {text}");
+        let marker = if is_quota_exceeded_status(status) { QUOTA_EXCEEDED_MARKER } else { "" };
+        bail!("{marker}Gemini returned HTTP {status}: {text}");
     }
     let parsed: GeminiResponse = res.json().await.context("failed to parse Gemini response")?;
     parsed
@@ -390,7 +443,8 @@ async fn complete_claude(client: &reqwest::Client, api_key: &str, prompt: &str) 
     if !res.status().is_success() {
         let status = res.status();
         let text = res.text().await.unwrap_or_else(|_| "(failed to read response body)".to_string());
-        bail!("Claude returned HTTP {status}: {text}");
+        let marker = if is_quota_exceeded_status(status) { QUOTA_EXCEEDED_MARKER } else { "" };
+        bail!("{marker}Claude returned HTTP {status}: {text}");
     }
     let parsed: ClaudeResponse = res.json().await.context("failed to parse Claude response")?;
     parsed.content.into_iter().next().map(|b| b.text).context("Claude response contained no content blocks")
@@ -436,5 +490,28 @@ mod tests {
     async fn complete_with_key_rejects_empty_prompt() {
         let err = complete_with_key(Provider::Openai, "sk-test", "   ").await.unwrap_err();
         assert!(err.to_string().contains("empty"));
+    }
+
+    #[test]
+    fn split_quota_exceeded_detects_marker_and_strips_it() {
+        let err = anyhow::anyhow!("{QUOTA_EXCEEDED_MARKER}OpenAI returned HTTP 429: rate limited");
+        let (quota_exceeded, message) = split_quota_exceeded(&err);
+        assert!(quota_exceeded);
+        assert_eq!(message, "OpenAI returned HTTP 429: rate limited");
+    }
+
+    #[test]
+    fn split_quota_exceeded_false_for_ordinary_errors() {
+        let err = anyhow::anyhow!("Claude returned HTTP 401 Unauthorized: invalid key");
+        let (quota_exceeded, message) = split_quota_exceeded(&err);
+        assert!(!quota_exceeded);
+        assert_eq!(message, "Claude returned HTTP 401 Unauthorized: invalid key");
+    }
+
+    #[test]
+    fn is_quota_exceeded_status_matches_only_429() {
+        assert!(is_quota_exceeded_status(reqwest::StatusCode::TOO_MANY_REQUESTS));
+        assert!(!is_quota_exceeded_status(reqwest::StatusCode::UNAUTHORIZED));
+        assert!(!is_quota_exceeded_status(reqwest::StatusCode::OK));
     }
 }

@@ -27,8 +27,10 @@ mod cache_optimizer;
 mod chat_providers;
 mod device_pool;
 mod geo_content;
+mod github_search;
 mod referrals;
 mod web_search;
+mod youtube_search;
 mod generation;
 mod hardware;
 mod idle_background_fold;
@@ -738,6 +740,72 @@ async fn get_google_search_settings_status() -> Response {
     json_response(StatusCode::OK, &GoogleSearchSettingsStatusResponse { configured: web_search::is_configured() })
 }
 
+/// `POST /v1/settings/github-search` — ブラウザの設定パネルからGitHub
+/// Personal Access Token(任意)を保存する(ユーザー指示「GitHub連携も、
+/// チェックを付けられる機能と実際に連携する機能を付けて」への対応)。
+/// **正直な開示**: トークンは検索の利用自体には必須ではない
+/// (`github_search`モジュールdoc参照、未認証だとレート制限が10/分に
+/// なるだけ)。
+#[derive(Debug, Deserialize)]
+struct GithubSearchSettingsRequest {
+    #[serde(default)]
+    token: String,
+}
+
+#[derive(Debug, Serialize)]
+struct GithubSearchSettingsStatusResponse {
+    token_configured: bool,
+}
+
+async fn set_github_search_settings(req: Request) -> Response {
+    let Json(body): Json<GithubSearchSettingsRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    github_search::set_runtime_token(body.token);
+    json_response(StatusCode::OK, &GithubSearchSettingsStatusResponse { token_configured: github_search::is_token_configured() })
+}
+
+async fn clear_github_search_settings() -> Response {
+    github_search::clear_runtime_token();
+    json_response(StatusCode::OK, &GithubSearchSettingsStatusResponse { token_configured: github_search::is_token_configured() })
+}
+
+async fn get_github_search_settings_status() -> Response {
+    json_response(StatusCode::OK, &GithubSearchSettingsStatusResponse { token_configured: github_search::is_token_configured() })
+}
+
+/// `POST /v1/settings/youtube-search` — ブラウザの設定パネルからYouTube
+/// Data API v3のAPIキーを保存する(ユーザー指示「Youtube連携機能も
+/// 付けて」への対応、`set_google_search_settings`と同じ設計)。
+#[derive(Debug, Deserialize)]
+struct YoutubeSearchSettingsRequest {
+    api_key: String,
+}
+
+#[derive(Debug, Serialize)]
+struct YoutubeSearchSettingsStatusResponse {
+    configured: bool,
+}
+
+async fn set_youtube_search_settings(req: Request) -> Response {
+    let Json(body): Json<YoutubeSearchSettingsRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    youtube_search::set_runtime_key(body.api_key);
+    json_response(StatusCode::OK, &YoutubeSearchSettingsStatusResponse { configured: youtube_search::is_configured() })
+}
+
+async fn clear_youtube_search_settings() -> Response {
+    youtube_search::clear_runtime_key();
+    json_response(StatusCode::OK, &YoutubeSearchSettingsStatusResponse { configured: youtube_search::is_configured() })
+}
+
+async fn get_youtube_search_settings_status() -> Response {
+    json_response(StatusCode::OK, &YoutubeSearchSettingsStatusResponse { configured: youtube_search::is_configured() })
+}
+
 /// `POST /v1/settings/chat-providers` — ブラウザの設定パネルからChatGPT/
 /// DeepSeek/Gemini/ClaudeのAPIキーを保存する(`set_google_search_settings`
 /// と同じ設計: メモリ上にのみ保持、ディスク書き込み・ログ出力は一切
@@ -919,15 +987,41 @@ async fn get_provider_priority_settings_status() -> Response {
 /// 試す——`enabled`はUI側のチェックボックス状態を表すだけで、この
 /// エンドポイント自体は常に「順番に試す」動作をする、無効時に何も
 /// しないと利用者が混乱するのを避けるため)。
+/// Google検索・GitHub検索・YouTube検索を任意で有効化するチェックボックス
+/// (ユーザー指示「Github連携も、チェックを付けられる機能と実際に連携
+/// する機能を付けて」「Youtube連携機能も付けて」への対応)。有効化された
+/// 検索の結果は、プロンプト本文の前にコンテキストとして埋め込まれる
+/// (`generate_with_search`と同じブリッジ式)。**正直な開示**: 各検索
+/// APIが未設定/失敗した場合はその旨を`search_notes`で正直に開示し、
+/// 検索無しでチャット補完自体は続行する(サービス全体を壊さない設計)。
 #[derive(Debug, Deserialize)]
 struct ChatProviderCompletePriorityRequest {
     prompt: String,
+    #[serde(default)]
+    use_google_search: bool,
+    #[serde(default)]
+    use_github_search: bool,
+    #[serde(default)]
+    use_youtube_search: bool,
+    /// 利用者自身が持ち込んだ検索APIキー(任意、`generate_with_search`と
+    /// 同じ「共有VPS上でグローバル設定を消費しない」設計)。
+    #[serde(default)]
+    google_search_api_key: Option<String>,
+    #[serde(default)]
+    google_search_cx: Option<String>,
+    #[serde(default)]
+    github_token: Option<String>,
+    #[serde(default)]
+    youtube_api_key: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 struct ChatProviderCompletePriorityResponse {
     reply: Option<chat_providers::ProviderReply>,
     attempted: Vec<chat_providers::PriorityAttempt>,
+    all_quota_exceeded: bool,
+    /// 実際に使われた検索コンテキスト(空なら検索無しでの応答)。
+    search_notes: Vec<String>,
 }
 
 async fn chat_provider_complete_priority(req: Request) -> Response {
@@ -944,8 +1038,70 @@ async fn chat_provider_complete_priority(req: Request) -> Response {
             &serde_json::json!({"error": format!("prompt exceeds {CHAT_PROVIDER_PROMPT_CHAR_LIMIT} characters")}),
         );
     }
-    let result = chat_providers::complete_in_priority_order(&req.prompt).await;
-    json_response(StatusCode::OK, &ChatProviderCompletePriorityResponse { reply: result.reply, attempted: result.attempted })
+
+    let mut context_blocks: Vec<String> = Vec::new();
+    let mut search_notes: Vec<String> = Vec::new();
+
+    if req.use_google_search {
+        let own_credentials = match (&req.google_search_api_key, &req.google_search_cx) {
+            (Some(k), Some(c)) if !k.trim().is_empty() && !c.trim().is_empty() => Some((k.clone(), c.clone())),
+            _ => None,
+        };
+        let result = match own_credentials {
+            Some((api_key, cx)) => web_search::search_with_credentials(&req.prompt, 3, &api_key, &cx).await,
+            None if web_search::is_configured() => web_search::search(&req.prompt, 3).await,
+            None => Err(anyhow::anyhow!("Google Custom Search is not configured (no API key/cx set)")),
+        };
+        match result {
+            Ok(results) if !results.is_empty() => {
+                context_blocks.push(format!("Google search results:\n{}", web_search::format_results_as_context(&results)));
+                search_notes.push(format!("google: {} result(s)", results.len()));
+            }
+            Ok(_) => search_notes.push("google: 0 results".to_string()),
+            Err(err) => search_notes.push(format!("google: failed ({err:#})")),
+        }
+    }
+
+    if req.use_github_search {
+        let token = req.github_token.as_deref().filter(|t| !t.trim().is_empty());
+        match github_search::search_with_optional_token(&req.prompt, 3, token).await {
+            Ok(results) if !results.is_empty() => {
+                context_blocks.push(format!("GitHub repository search results:\n{}", github_search::format_results_as_context(&results)));
+                search_notes.push(format!("github: {} result(s)", results.len()));
+            }
+            Ok(_) => search_notes.push("github: 0 results".to_string()),
+            Err(err) => search_notes.push(format!("github: failed ({err:#})")),
+        }
+    }
+
+    if req.use_youtube_search {
+        let key = req.youtube_api_key.as_deref().filter(|k| !k.trim().is_empty());
+        let result = match key {
+            Some(k) => youtube_search::search_with_key(&req.prompt, 3, k).await,
+            None => youtube_search::search(&req.prompt, 3).await,
+        };
+        match result {
+            Ok(results) if !results.is_empty() => {
+                context_blocks.push(format!("YouTube video search results:\n{}", youtube_search::format_results_as_context(&results)));
+                search_notes.push(format!("youtube: {} result(s)", results.len()));
+            }
+            Ok(_) => search_notes.push("youtube: 0 results".to_string()),
+            Err(err) => search_notes.push(format!("youtube: failed ({err:#})")),
+        }
+    }
+
+    let augmented_prompt = if context_blocks.is_empty() { req.prompt.clone() } else { format!("{}\n\n{}", context_blocks.join("\n\n"), req.prompt) };
+    if chat_provider_prompt_too_long(&augmented_prompt) {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            &serde_json::json!({"error": format!("prompt (with search context) exceeds {CHAT_PROVIDER_PROMPT_CHAR_LIMIT} characters")}),
+        );
+    }
+    let result = chat_providers::complete_in_priority_order(&augmented_prompt).await;
+    json_response(
+        StatusCode::OK,
+        &ChatProviderCompletePriorityResponse { reply: result.reply, attempted: result.attempted, all_quota_exceeded: result.all_quota_exceeded, search_notes },
+    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -2046,6 +2202,18 @@ async fn main() -> anyhow::Result<()> {
             post(handler_fn(|req, _p| Box::pin(set_google_search_settings(req))))
                 .get(plain(|| Box::pin(get_google_search_settings_status())))
                 .delete(plain(|| Box::pin(clear_google_search_settings()))),
+        )
+        .at(
+            "/v1/settings/github-search",
+            post(handler_fn(|req, _p| Box::pin(set_github_search_settings(req))))
+                .get(plain(|| Box::pin(get_github_search_settings_status())))
+                .delete(plain(|| Box::pin(clear_github_search_settings()))),
+        )
+        .at(
+            "/v1/settings/youtube-search",
+            post(handler_fn(|req, _p| Box::pin(set_youtube_search_settings(req))))
+                .get(plain(|| Box::pin(get_youtube_search_settings_status())))
+                .delete(plain(|| Box::pin(clear_youtube_search_settings()))),
         )
         .at(
             "/v1/settings/chat-providers",
