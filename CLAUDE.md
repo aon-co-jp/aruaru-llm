@@ -1,5 +1,59 @@
 # 設計思想＆開発方針＆開発環境ルール(aruaru-llm)
 
+> **📌 2026-08-26追記(続き2): GitHub検索・YouTube検索連携+無料枠切れ検知
+> (429)を新設、実機E2E検証済み**
+>
+> ユーザー指示「GitHub連携も、チェックを付けられる機能と実際に連携する
+> 機能を付けて」+「Youtube連携機能も付けて」+「Googleなどの一日の
+> 無料枠を使い切ると『本日の無料枠は使い切りました』と英語と日本語で
+> 表示して。有料版も契約していたら自動で継続する機能を付けて」への対応。
+>
+> **新規モジュール**: `src/github_search.rs`(GitHub Search API、
+> `web_search.rs`と同じ設計パターン——Personal Access Tokenは任意
+> 〈未設定でも動作、レート制限10/分→30/分に緩和されるだけ〉、リポジトリ
+> メタデータ〈名前・説明・URL・スター数〉のみ取得)+
+> `src/youtube_search.rs`(YouTube Data API v3、APIキー必須、動画タイトル・
+> チャンネル名・URLのみ取得)。いずれも`POST/GET/DELETE /v1/settings/
+> github-search`・`/v1/settings/youtube-search`で設定。
+>
+> **`POST /v1/chat-providers/complete-priority`を拡張**: `use_google_
+> search`/`use_github_search`/`use_youtube_search`(bool)+各サービスの
+> 持ち込みキーを受け取り、有効化されたサービスの検索結果をプロンプトへ
+> コンテキストとして埋め込んでからチャット補完を呼ぶ(`generate_with_
+> search`と同じブリッジ式)。`search_notes`フィールドで実際に何件
+> ヒットしたか/なぜ失敗したかを常に開示する。
+>
+> **無料枠切れ検知**: `chat_providers.rs`にHTTP 429(Too Many Requests、
+> 4社共通のレート制限/無料枠超過ステータス)を検知する
+> `is_quota_exceeded_status`+マーカー方式(`QUOTA_EXCEEDED::`接頭辞)を
+> 追加。`ProviderFailure`/`PriorityAttempt`に`quota_exceeded: bool`、
+> `PriorityCompleteResult`に`all_quota_exceeded: bool`(試行した全社が
+> 無料枠切れで1件も成功しなかったか)を追加。**正直な開示**: 429は
+> 「一時的な過多」と「本当にその日の無料枠切れ」を区別できない4社共通の
+> 制約——これ以上の精度は技術的に不可能。**「有料版も契約していたら
+> 自動で継続」の実現方法**: 有料契約(課金設定)済みのプロバイダは429を
+> 返さずそのまま成功するため、明示的な有料/無料切替ロジックは追加して
+> いない——同じAPIキーで課金が有効なら黙って成功するだけ、という
+> 既存の仕組みでそのまま要件を満たす。
+>
+> **セキュリティ**: GeminiのAPIキーを`?key=`から`x-goog-api-key`
+> ヘッダーへ変更(Google公式推奨)。プロンプト長20,000文字上限を新設
+> (3エンドポイントすべてに適用、誤った高額請求・無料枠急速枯渇を防止)。
+>
+> **実機検証**: `cargo build --release`成功、`cargo test --release`
+> 92件全green(新規11件)。実際にサーバーを起動し、GitHub検索が
+> トークン無しでも本物のGitHub APIへ到達し実データ(3件)を取得する
+> ことを確認、YouTube検索の未設定時フォールバックも確認。
+> open-english側UIから実ブラウザ操作でDB保存確認ダイアログ・
+> APIキー取得先リンク(4社)・保存→サーバー反映の一気通貫も確認済み
+> (詳細は`open-english/CLAUDE.md`同日エントリ参照)。
+>
+> 次にすべきこと: (1) 実際に429を意図的に発生させての
+> `all_quota_exceeded`実機検証(無料枠を実際に使い切る必要があり
+> 今回は未実施、ユニットテストでのマーカー判定ロジック検証にとどまる)、
+> (2) GitHubコード検索(`/search/code`)への対応要否の検討(現状は
+> リポジトリメタデータ検索のみ)。
+
 > **📌 2026-08-26追記(続き): マルチLLMプロバイダ(ChatGPT/DeepSeek/
 > Gemini/Claude)連携+優先順位フォールバック機能を新設、実機E2E検証・
 > セキュリティ見直し済み**
