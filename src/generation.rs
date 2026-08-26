@@ -734,6 +734,36 @@ mod tests {
         assert!(!text.is_empty(), "generated text should not be empty");
     }
 
+    /// 検索結果活用の新旧プロンプト書式(2026-08-26改善)を、実GPT-2
+    /// 124M重みで定性比較する。CIでは実行しない(`--ignored`指定時のみ)、
+    /// 出力は`--nocapture`で目視確認する用途(自動アサーションでの
+    /// 「活用できている/いない」判定はGPT-2の出力が決定的でも意味論的な
+    /// 一致判定が難しいため行わない、正直な限界)。
+    #[test]
+    #[ignore]
+    fn qualitative_compare_old_vs_new_search_prompt_format() {
+        let dir = PathBuf::from("models/gpt2");
+        if !dir.join("model.safetensors").exists() {
+            eprintln!("skipping qualitative comparison: real GPT-2 weights not present at {dir:?}");
+            return;
+        }
+        select_model(dir).expect("select_model should succeed for a real, valid model directory");
+        let device: Arc<dyn GpuDevice> = CpuDevice::new(0);
+
+        let context = "1. Rust Programming Language: Rust is a systems programming language \
+            focused on safety, speed, and concurrency.";
+        let question = "What is Rust used for?";
+
+        let old_format = format!("Reference information from a web search:\n{context}\n\n{question}");
+        let new_format = crate::web_search::build_search_augmented_prompt(context, question);
+
+        let old_output = generate(&device, &old_format, 40).expect("old-format generate should succeed");
+        let new_output = generate(&device, &new_format, 40).expect("new-format generate should succeed");
+
+        eprintln!("=== old format prompt ===\n{old_format}\n=== old format output ===\n{old_output}\n");
+        eprintln!("=== new format prompt ===\n{new_format}\n=== new format output ===\n{new_output}\n");
+    }
+
     #[test]
     fn select_model_fails_cleanly_for_a_nonexistent_directory() {
         let bogus = PathBuf::from(format!("/definitely/does/not/exist/{}", rand_suffix()));
