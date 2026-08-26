@@ -1,5 +1,37 @@
 # 設計思想＆開発方針＆開発環境ルール(aruaru-llm)
 
+> **📌 2026-08-27追記(次回タスク記録、未着手): Claude(Anthropic)キーの
+> ブラウザ直接呼び出し化(open-english側からの提案、要アーキテクチャ
+> 設計)**
+>
+> `open-english`側で、GitHubトークン・Google検索キーと同様に「ブラウザ
+> から直接プロバイダAPIを呼び、この`aruaru-llm`サーバーへは平文キーを
+> 送らない」方式を、Claude(Anthropic)キーにも適用できないか検討した
+> (詳細は`open-english/CLAUDE.md`の2026-08-27追記(続き2)参照)。
+>
+> **Web調査で確認した事実**: AnthropicのAPIは`anthropic-dangerous-
+> direct-browser-access: true`ヘッダーでブラウザからの直接呼び出しに
+> 対応済み(2024年8月導入、Anthropic公式が「dangerous」と命名)。一方
+> OpenAI・GeminiはCORS未対応でブラウザから直接呼べない(サーバー経由が
+> 必須)。DeepSeekは未確認。
+>
+> **このリポジトリ側への影響**: 現状`chat_providers::
+> complete_in_priority_order`(`src/chat_providers.rs`)が、ChatGPT/
+> DeepSeek/Gemini/Claudeの4プロバイダすべてを一律にこのサーバー経由で
+> 扱い、無料枠切れ時の自動フォールバックを行っている。Claudeだけを
+> ブラウザ直接呼び出しへ分離する場合、**このフォールバックロジックを
+> どう保つか**(例: 「Claudeがブラウザ直接呼び出しで失敗したら、
+> このサーバー経由の他プロバイダへフォールバックする」というクライアント
+> 側〈open-english〉とサーバー側〈aruaru-llm〉にまたがる制御フローの
+> 再設計が必要)。中途半端に実装すると既存の複数プロバイダフォール
+> バックが壊れるリスクがあるため、今回は着手していない。
+>
+> **次にすべきこと**: open-english側のユーザーとアーキテクチャ方針
+> (フォールバック制御をクライアント側・サーバー側どちらに置くか)を
+> すり合わせてから、`complete_in_priority_order`の変更に着手する。
+>
+> ---
+>
 > **📌 2026-08-26追記(続き5): 定性比較テスト実施+instruction/dialogue-
 > tunedなGPT-2互換モデルの実機検証(結論: ブロック要因あり、カタログ
 > 追加は見送り)**
