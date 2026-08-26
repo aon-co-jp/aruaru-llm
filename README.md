@@ -7,7 +7,15 @@
 [Українська](README-Ukrainian.md) · [עברית](README-Hebrew.md) ·
 [فارسی](README-Persian.md) · [العربية](README-Arabic.md)
 
-> 📌 **最近の更新(2026-08-25)**: (1) Google検索APIキーをリクエスト単位で
+> 📌 **最近の更新(2026-08-26)**: Windows用インストーラー
+> `aruaru-llm-installer.exe`を新設(管理者権限のPowerShellを手動で
+> 立ち上げる必要なし)。open-cuda/open-directxのVulkan/DirectXバック
+> エンドを組み込んだGPU版を任意でインストール可能(既定は未チェック
+> ——実測でCPU版より遅いGPUがあることが分かっているため)、インストール
+> 中に推奨モデルサイズを検出しYes/No/Cancelで選べるダイアログ付き。
+> 詳細は[CLAUDE.md](CLAUDE.md)の2026-08-26エントリ参照。
+>
+> 📌 **更新(2026-08-25)**: (1) Google検索APIキーをリクエスト単位で
 > 指定できるようにした(`POST /v1/generate-with-search`の任意フィールド
 > `google_search_api_key`/`google_search_cx`)——複数の訪問者が同じ
 > インスタンスを共有するデプロイ(VPS等)で、ある訪問者のキー設定が

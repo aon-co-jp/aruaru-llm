@@ -1,5 +1,82 @@
 # 設計思想＆開発方針＆開発環境ルール(aruaru-llm)
 
+> **📌 2026-08-26追記: Windows用インストーラー`aruaru-llm-installer.exe`を
+> 新設(GPU版=open-cuda Vulkan/DirectXの「SET」をオプトインで同梱+
+> インストール中に推奨モデルを選択できるダイアログ)、実機検証済み**
+>
+> ユーザー指示「open-englishでaruaru-llmはopen-cudaとopen-directxと
+> 一緒に使用したほうが本領を発揮するならSETでダウンロードしてインス
+> トールする仕様にして、リポジトリ名-installer.exeという名前に統一
+> して」+「インストール途中で、推薦のLLMを提示してLLMの特徴も英語と
+> 日本語で提示してもう一つ大きなLLMにしますか?などのメッセージ後に
+> 選択してLLMをインストール可能として」への対応。
+>
+> **「SET」の解釈(正直な開示)**: open-cuda/open-directxはaruaru-llmとは
+> 別のスタンドアロンアプリではなく、Cargo path依存として直接リンクする
+> Rustライブラリ(`opencuda-vulkan`/`opencuda-directx`crate)——したがって
+> 「一緒にインストール」の実体は「これらのGPUバックエンドを組み込んで
+> ビルドした1本の実行ファイル」を指す。`installer/windows/aruaru-llm.iss`
+> に`installgpu`タスク(既定**未チェック**)を新設し、選択時のみ
+> `--features hw-detect-vulkan,real-vulkan,hw-detect-directx,real-dx12`で
+> ビルドした`target-gpu/`版のexeを同名で上書きインストールする。
+> **既定を未チェックにした理由**: このプロジェクト自身の実測
+> (2026-08-23 HANDOFF参照、低スペックGT 730でGPU版がCPU版より約4.8倍
+> 遅かった)に基づく——「一緒に使えば必ず本領を発揮する」とは主張せず、
+> 効果は機種依存であることをインストーラー・README-INSTALLED.txt双方に
+> 明記した。
+>
+> **命名規則の統一**: `OutputBaseFilename=aruaru-llm-installer`
+> (open-englishの`open-english-installer`と同じ`<リポジトリ名>-
+> installer.exe`規則、バージョン番号なしの固定ファイル名)。
+> `PrivilegesRequired=lowest`——管理者権限のPowerShellを手動で立ち
+> 上げる必要をなくす(ユーザー指摘「パワーシェルを管理者で立ち上げる
+> のは面倒くさいです」への対応、インストーラー内部でのPowerShell呼び
+> 出し自体は問題ないとの確認済み)。
+>
+> **インストール中のモデル選択ダイアログ(`installer/windows/
+> recommend-model.ps1`、新規)**: `[Run]`セクションから実行され、(1)
+> 一時ポート(47600)でaruaru-llm.exeを起動、(2)`GET /v1/recommend`で
+> ハードウェア検出+推奨モデルを取得、(3)`GET /v1/models/catalog`で
+> カタログ一覧を取得し「推奨モデルの1段階大きいモデル」も算出、
+> (4)`System.Windows.Forms.MessageBox`で日英併記のYes/No/Cancel
+> ダイアログ(推奨モデルの特徴・正直な開示・サイズを表示、Yes=推奨
+> モデルをインストール、No=推奨→さらに大きいモデルへ、Cancel=
+> スキップ)、(5)選択に応じて既存の`POST /v1/recommend-and-download`・
+> `POST /v1/download-larger`を呼ぶ——**新しいダウンロード経路は
+> 追加していない**、既存APIをインストーラーから呼ぶ導線を新設した
+> のみ。サイレントインストール(`/VERYSILENT`、自動更新等)では
+> `skipifsilent`フラグによりこのダイアログ自体をスキップする。
+>
+> **実機検証**: (a) `cargo check --release --features hw-detect-vulkan,
+> real-vulkan,hw-detect-directx,real-dx12`成功、(b) 両ビルド
+> (`target/release/`・`target-gpu/release/`)を実際にビルド、(c)
+> `ISCC.exe`で実際に`aruaru-llm-installer.exe`を生成、(d) `recommend-
+> model.ps1`が依存する`GET /v1/recommend`・`GET /v1/models/catalog`の
+> 実JSON形状(`hardware.gpu_name`・`recommended_model_id`・
+> `models[].display_name_ja/en`・`approx_size_mb`等)を実際にサーバーを
+> 起動して`curl`で確認し、フィールド名の食い違い(`catalog.entries`が
+> 実際には`catalog.models`だった)を発見・修正、(e) PowerShellスクリプト
+> のUTF-8 BOM欠落による構文エラー(このエコシステムで繰り返し発生する
+> 既知のパターン)を実際に`[System.Management.Automation.Language.
+> Parser]::ParseFile`で検出・BOM付与により解消、(f) `/VERYSILENT`での
+> 無人インストールが新しい`[Run]`ステップでハングしないことを実際に
+> インストールを実行して確認(exit code 0、タイムアウトせず完了)。
+> **正直な開示・未検証**: 対話モード(GUIウィザード)でのダイアログ
+> 実表示・実際のYes/No/Cancelクリック操作は、この開発環境が非対話的な
+> ため未検証(ロジック自体はAPI呼び出しレベルで検証済み)。
+>
+> CI(`.github/workflows/release.yml`)もWindows向けに(a) 既定ビルド、
+> (b) GPU版ビルド(`CARGO_TARGET_DIR=target-gpu`)、(c) Inno Setup
+> (`choco install innosetup`)による`aruaru-llm-installer.exe`ビルド、
+> の3段を追加し、GitHub Releaseへ添付するよう更新済み(実CI実行の
+> 確認は次回タグpush時)。
+>
+> 次にすべきこと: (1) 実際にタグをpushしてCIが3ビルド(CPU/GPU/
+> インストーラー)とも成功することを確認、(2) 対話モードでの実際の
+> ダイアログ操作確認、(3) open-english側の「まとめてインストール」
+> タスクからこの新しい`aruaru-llm-installer.exe`を使うよう切り替える
+> か(現状は生のzipを`fetch-aruaru-llm.ps1`で取得する方式のまま)検討。
+
 > **📌 2026-08-25追記: (1)ブラウザ内AI実行(WASM+WebGPU)構想の段階的導入
 > 計画を確定、(2)複数訪問者が共有するVPSデプロイでGoogle検索APIキーが
 > 意図せず共有・消費されるバグを修正(実装・実機検証済み)**

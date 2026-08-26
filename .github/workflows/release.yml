@@ -70,9 +70,24 @@ jobs:
           git clone --depth=1 https://github.com/aon-co-jp/open-web-server.git ../open-web-server
           git clone --depth=1 https://github.com/aon-co-jp/RS-SmartTCP.git ../RS-SmartTCP
           git clone --depth=1 https://github.com/aon-co-jp/open-raid-z.git ../open-raid-z
-      - name: Build
+      - name: Build (default, CPU-only)
         run: cargo build --release --bin aruaru-llm
-      - name: Package
+      - name: Build (GPU acceleration variant — open-cuda Vulkan+DirectX "SET")
+        # ユーザー指示「aruaru-llmはopen-cudaとopen-directxと一緒に使用した
+        # 方が本領を発揮するならSETでダウンロードしてインストールする
+        # 仕様に」への対応。open-cuda/open-directxはRustライブラリのため
+        # 「一緒にインストール」の実体は「この2つのバックエンドを組み込んで
+        # ビルドした1本の実行ファイル」——別のtarget dirへビルドし、
+        # デフォルト(CPU)版を上書きしないようにする。正直な開示:
+        # このGPU版が実際に速いとは限らない(installer/windows/
+        # README-INSTALLED.txt・aruaru-llm.iss参照、開発機での実測では
+        # CPU版より遅かった)——インストーラー側で既定オフのオプトイン
+        # タスクとして提供する。
+        shell: pwsh
+        run: |
+          $env:CARGO_TARGET_DIR = "target-gpu"
+          cargo build --release --bin aruaru-llm --features hw-detect-vulkan,real-vulkan,hw-detect-directx,real-dx12
+      - name: Package (zip, for manual install.ps1 users)
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist
@@ -83,6 +98,18 @@ jobs:
         with:
           name: aruaru-llm-windows-x86_64
           path: aruaru-llm-windows-x86_64.zip
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+      - name: Build aruaru-llm-installer.exe
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}" -replace '^v', ''
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=$version installer\windows\aruaru-llm.iss
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aruaru-llm-installer
+          path: installer/windows/dist/aruaru-llm-installer.exe
 
   release:
     name: GitHub Releaseへ添付
@@ -96,3 +123,4 @@ jobs:
           files: |
             aruaru-llm-linux-x86_64/aruaru-llm-linux-x86_64.tar.gz
             aruaru-llm-windows-x86_64/aruaru-llm-windows-x86_64.zip
+            aruaru-llm-installer/aruaru-llm-installer.exe
