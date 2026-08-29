@@ -1,5 +1,16 @@
 # aruaru-llm
 
+> 🎯 **aruaru-db × RPoem SET policy (2026-08-29)**: `aruaru-db`'s
+> `CLAUDE.md` opening note explains that aruaru-db only delivers "no
+> REST API needed, compatible with WunderGraph Cosmo's paid
+> Enterprise tier" when paired (SET) with RPoem. This repo
+> (aruaru-llm) is instead paired with `open-cuda` as an independent
+> AI inference layer (see the "no-contract independent AI" section)
+> and is a separate concern from that REST/API-key work — but any
+> future expansion of its own dynamic tenant registration
+> (`src/tenants.rs`) should still ask "does this strengthen the
+> aruaru-db+RPoem SET value?" before adding REST alternatives.
+
 *日本語*: [README.md](README.md) ·
 *English*: this is the original ·
 *Other languages*: [Deutsch](README-German.md) · [Italiano](README-Italian.md) ·

@@ -1,5 +1,20 @@
 # 設計思想＆開発方針＆開発環境ルール(aruaru-llm)
 
+> ## 🎯 aruaru-db×RPoem SET連携方針(2026-08-29、全リポジトリ横展開)
+> **正本はaruaru-db/CLAUDE.md冒頭「🎯最重要・最優先で常に念頭に置く
+> こと」**: aruaru-dbはRPoemとSET(対)で使うことで初めて「REST API
+> 不要・WunderGraph Cosmo有料版(Enterprise)互換」という価値が
+> 成立する設計であり、REST APIの代替をただ闇雲に作ることは避ける
+> べきという戒めが記されている。**このリポジトリ(aruaru-llm)は
+> `open-cuda`とのSET(既存の「契約不要の独自AI」節参照)でopen-english
+> 等から呼ばれるAI推論エンジンであり、aruaru-db/RPoemのREST API層とは
+> 独立した別レイヤー**——ただし`src/tenants.rs`の「分身の術」動的
+> テナント登録・独自のAPIキー的な仕組みを今後拡張する際は、必ず
+> 「これはaruaru-db+RPoem SETとの連携価値を強化するか」を自問する
+> こと(闇雲な代替を避ける)。別アカウント/別セッションから再開する
+> 場合は、まずaruaru-db/CLAUDE.md冒頭の「🔄 セッション再開用メモ」を
+> 読むこと。
+
 > **📌 2026-08-27追記(続き・次回タスク記録、未着手): F32のGPT-2互換
 > ファインチューニング済みモデル候補を発見(要精査)、DeepSeekの
 > CORS非対応を確認**
