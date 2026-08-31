@@ -45,10 +45,12 @@ mod security;
 mod self_update;
 mod signatures;
 mod tenants;
+mod transcribe;
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use base64::Engine as _;
 use bytes::Bytes;
 use opencuda_core::GpuDevice;
 use opencuda_cpu::CpuDevice;
@@ -1224,6 +1226,161 @@ async fn translate(req: Request, device: Arc<dyn GpuDevice>, registry: Arc<Tenan
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct TranscribeRequest {
+    /// 16kHz mono の f32 PCM サンプル(範囲 -1.0..=1.0)をリトルエンディアン
+    /// バイト列にして base64 エンコードしたもの。`open-english` の
+    /// `blobToPcm16k()` が `OfflineAudioContext` で 16kHz mono へリサンプル
+    /// 済みの `Float32Array` をそのまま送る想定。
+    pcm_f32_base64: String,
+    /// サンプルレート(Hz)。Whisper は 16000 固定のため、それ以外は `400`。
+    #[serde(default = "default_transcribe_sample_rate")]
+    sample_rate: u32,
+    /// 言語コード(例 `"en"` / `"ja"`)。省略/`"auto"` なら Whisper に検出させる。
+    #[serde(default)]
+    language: Option<String>,
+    #[serde(default)]
+    tenant: Option<String>,
+}
+
+fn default_transcribe_sample_rate() -> u32 {
+    16000
+}
+
+#[derive(Debug, Serialize)]
+struct TranscribeResponse {
+    transcript: String,
+    /// Whisper が検出/使用した言語コード。
+    language: String,
+    engine: &'static str,
+    disclosure: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct TranscribeErrorResponse {
+    error: String,
+    engine: &'static str,
+}
+
+fn transcribe_engine_label() -> &'static str {
+    if transcribe::is_available() {
+        "whisper-cpp-v0"
+    } else {
+        "whisper-not-compiled-in"
+    }
+}
+
+/// `POST /v1/transcribe` — whisper.cpp(`whisper-rs`)で音声を書き起こす
+/// (2026-08-29新設、`open-english/docs/SPEECH_RECOGNITION_REDESIGN.md`
+/// の P2-β。ブラウザ内 Whisper〈P2-α〉では端末性能が足りない利用者向けに、
+/// 自分の PC で起動している aruaru-llm 側で書き起こす経路)。
+///
+/// **正直な開示**: `whisper-transcribe` feature を有効化した実ビルドが
+/// 前提(既定ビルドでは常に `503` + 「rebuild with --features
+/// whisper-transcribe」を返す)。`nllb-translate` と同じく whisper.cpp は
+/// C++ ビルドを要するため既定 feature には含めていない。
+async fn transcribe(req: Request, registry: Arc<TenantRegistry>) -> Response {
+    idle_background_fold::touch_activity();
+    let Json(req): Json<TranscribeRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    log_tenant_usage("transcribe", &req.tenant, &registry);
+
+    if !transcribe::is_available() {
+        return json_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            &TranscribeErrorResponse {
+                error: "whisper transcription is not available in this build; rebuild aruaru-llm with \
+                    --features whisper-transcribe and place a GGML model at ARUARU_LLM_WHISPER_MODEL \
+                    (or <crate>/models/whisper/ggml-base.bin)"
+                    .to_string(),
+                engine: transcribe_engine_label(),
+            },
+        );
+    }
+    if req.sample_rate != 16000 {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            &TranscribeErrorResponse {
+                error: format!("sample_rate must be 16000 (got {}); resample to 16kHz mono client-side", req.sample_rate),
+                engine: transcribe_engine_label(),
+            },
+        );
+    }
+
+    let raw = match base64::engine::general_purpose::STANDARD.decode(req.pcm_f32_base64.as_bytes()) {
+        Ok(b) => b,
+        Err(e) => {
+            return json_response(
+                StatusCode::BAD_REQUEST,
+                &TranscribeErrorResponse { error: format!("pcm_f32_base64 is not valid base64: {e}"), engine: transcribe_engine_label() },
+            );
+        }
+    };
+    if raw.is_empty() || raw.len() % 4 != 0 {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            &TranscribeErrorResponse {
+                error: format!("decoded PCM must be a non-empty multiple of 4 bytes (little-endian f32); got {} bytes", raw.len()),
+                engine: transcribe_engine_label(),
+            },
+        );
+    }
+    // 上限: 16kHz mono f32 で 10 分ぶん(= 16000 * 60 * 10 * 4 バイト ≒ 38MB)。
+    const MAX_PCM_BYTES: usize = 16_000 * 60 * 10 * 4;
+    if raw.len() > MAX_PCM_BYTES {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            &TranscribeErrorResponse {
+                error: format!("audio too long: {} bytes decoded, limit is {} (~10 minutes at 16kHz mono f32)", raw.len(), MAX_PCM_BYTES),
+                engine: transcribe_engine_label(),
+            },
+        );
+    }
+    let pcm: Vec<f32> = raw
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+
+    let language = req
+        .language
+        .as_deref()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.eq_ignore_ascii_case("auto"))
+        .map(str::to_string);
+
+    // whisper.cpp の `full()` は同期の重い計算(自前スレッドプールでの
+    // ビームサーチ + GPU/CPU カーネル)。`generate` と同じく
+    // `spawn_blocking` へ逃がして tokio ワーカーを塞がない。
+    let result = tokio::task::spawn_blocking(move || transcribe::transcribe_pcm16k(&pcm, language.as_deref())).await;
+
+    match result {
+        Ok(Ok(out)) => json_response(
+            StatusCode::OK,
+            &TranscribeResponse {
+                transcript: out.text,
+                language: out.language,
+                engine: transcribe_engine_label(),
+                disclosure: "Transcribed by whisper.cpp (GGML Whisper model) running on this aruaru-llm instance. \
+                    Accuracy depends on the model size (ggml-base is fast but modest; use ggml-large-v3-turbo for best quality), \
+                    audio quality, and background noise. Non-English accuracy varies by language.",
+            },
+        ),
+        Ok(Err(e)) => {
+            tracing::warn!("transcribe failed: {e}");
+            json_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                &TranscribeErrorResponse { error: e, engine: transcribe_engine_label() },
+            )
+        }
+        Err(join_err) => json_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &TranscribeErrorResponse { error: format!("transcribe task panicked: {join_err}"), engine: transcribe_engine_label() },
+        ),
+    }
+}
+
 /// `GET /v1/models/catalog` — インストール可能なGPT-2アーキテクチャ互換
 /// モデルの一覧(ダウンロード前、どのモデルが選択可能かを提示するため)。
 #[derive(Debug, Serialize)]
@@ -1593,7 +1750,47 @@ struct RuntimeInfoResponse {
     /// 階層的アクセラレーション(CUDA → Vulkan → DirectX → CPU SIMD)の
     /// うち、**実際に**どの段が有効になっているか(2026-08-23追加)。
     acceleration: AccelerationInfo,
+    /// `POST /v1/transcribe`(whisper.cpp 音声認識)の状態(2026-08-29追加、
+    /// SPEECH_RECOGNITION_REDESIGN.md P2-β)。
+    whisper: WhisperTierInfo,
     disclosure: &'static str,
+}
+
+/// `POST /v1/transcribe` の可否と、whisper.cpp のどの計算バックエンドが
+/// このビルドに組み込まれているか(2026-08-29新設)。
+///
+/// **正直な開示**: `compiled_in` は `whisper-transcribe` feature の有無、
+/// `model_present` は `ARUARU_LLM_WHISPER_MODEL`(既定 `<crate>/models/
+/// whisper/ggml-base.bin`)にファイルが実在するか。両方 true のときだけ
+/// `/v1/transcribe` が実際に書き起こせる。
+#[derive(Debug, Serialize)]
+struct WhisperTierInfo {
+    compiled_in: bool,
+    /// `"cuda"` / `"vulkan"` / `"cpu"` / `"not-compiled-in"`。
+    backend: &'static str,
+    model_path: String,
+    model_present: bool,
+    detail: &'static str,
+}
+
+fn whisper_tier_info() -> WhisperTierInfo {
+    let compiled_in = transcribe::is_available();
+    let model_present = transcribe::model_present();
+    WhisperTierInfo {
+        compiled_in,
+        backend: transcribe::backend_label(),
+        model_path: transcribe::model_path().to_string_lossy().to_string(),
+        model_present,
+        detail: if compiled_in && model_present {
+            "POST /v1/transcribe is ready (whisper.cpp compiled in and a GGML model is present)."
+        } else if compiled_in {
+            "whisper.cpp is compiled in, but no GGML model file was found at the configured path — \
+             set ARUARU_LLM_WHISPER_MODEL or place ggml-base.bin there."
+        } else {
+            "Not compiled in. Rebuild with --features whisper-transcribe (add whisper-cuda / \
+             whisper-vulkan for GPU) to enable POST /v1/transcribe."
+        },
+    }
 }
 
 /// 階層的アクセラレーション各段の状態(2026-08-23新設)。
@@ -1795,6 +1992,7 @@ async fn runtime_info(pool: Arc<device_pool::DevicePool>) -> Response {
             summary_ja,
             cpu_simd: cpu_simd_info(),
             acceleration,
+            whisper: whisper_tier_info(),
             disclosure: "This endpoint only reports which open-cuda device backend is actually in use; \
                          it does not itself accelerate anything. The default build is CPU-only. \
                          The standalone aon-co-jp/open-directx repository is not involved.",
@@ -2135,6 +2333,7 @@ async fn main() -> anyhow::Result<()> {
     let generate_search_registry = Arc::clone(&registry);
     let translate_pool = Arc::clone(&device_pool);
     let translate_registry = Arc::clone(&registry);
+    let transcribe_registry = Arc::clone(&registry);
     let admin_register_registry = Arc::clone(&registry);
     let admin_list_registry = Arc::clone(&registry);
     let admin_remove_registry = Arc::clone(&registry);
@@ -2187,6 +2386,13 @@ async fn main() -> anyhow::Result<()> {
                 let device = translate_pool.next_device();
                 let registry = Arc::clone(&translate_registry);
                 async move { translate(req, device, registry).await }
+            })),
+        )
+        .at(
+            "/v1/transcribe",
+            post(handler_fn(move |req, _p| {
+                let registry = Arc::clone(&transcribe_registry);
+                async move { transcribe(req, registry).await }
             })),
         )
         .at("/v1/models/catalog", get(plain(|| Box::pin(list_model_catalog()))))
