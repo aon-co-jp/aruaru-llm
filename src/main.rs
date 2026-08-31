@@ -1264,21 +1264,23 @@ struct TranscribeErrorResponse {
 
 fn transcribe_engine_label() -> &'static str {
     if transcribe::is_available() {
-        "whisper-cpp-v0"
+        "whisper.cpp-cli-v0"
     } else {
-        "whisper-not-compiled-in"
+        "whisper-not-available"
     }
 }
 
-/// `POST /v1/transcribe` — whisper.cpp(`whisper-rs`)で音声を書き起こす
-/// (2026-08-29新設、`open-english/docs/SPEECH_RECOGNITION_REDESIGN.md`
-/// の P2-β。ブラウザ内 Whisper〈P2-α〉では端末性能が足りない利用者向けに、
-/// 自分の PC で起動している aruaru-llm 側で書き起こす経路)。
+/// `POST /v1/transcribe` — whisper.cpp のプレビルド CLI(`whisper-cli`)を
+/// 子プロセス起動して音声を書き起こす(2026-08-29新設・方針変更、
+/// `open-english/docs/SPEECH_RECOGNITION_REDESIGN.md` の P2-β。ブラウザ内
+/// Whisper〈P2-α〉では端末性能が足りない利用者向けに、自分の PC で起動
+/// している aruaru-llm 側で書き起こす経路)。
 ///
-/// **正直な開示**: `whisper-transcribe` feature を有効化した実ビルドが
-/// 前提(既定ビルドでは常に `503` + 「rebuild with --features
-/// whisper-transcribe」を返す)。`nllb-translate` と同じく whisper.cpp は
-/// C++ ビルドを要するため既定 feature には含めていない。
+/// **正直な開示**: `whisper-cli` 実行ファイルと GGML モデル(いずれも
+/// リポジトリ非同梱)が実在する場合のみ動作する。無ければ `503` +
+/// 入手先を案内するエラーを返す。当初は `whisper-rs` を直接リンクする
+/// 設計だったが、Windows/MSVC でビルド不能な上流ブロッカーがあるため
+/// CLI サブプロセス方式へ変更した(`src/transcribe.rs` モジュール doc 参照)。
 async fn transcribe(req: Request, registry: Arc<TenantRegistry>) -> Response {
     idle_background_fold::touch_activity();
     let Json(req): Json<TranscribeRequest> = match Json::from_body(req).await {
@@ -1291,10 +1293,14 @@ async fn transcribe(req: Request, registry: Arc<TenantRegistry>) -> Response {
         return json_response(
             StatusCode::SERVICE_UNAVAILABLE,
             &TranscribeErrorResponse {
-                error: "whisper transcription is not available in this build; rebuild aruaru-llm with \
-                    --features whisper-transcribe and place a GGML model at ARUARU_LLM_WHISPER_MODEL \
-                    (or <crate>/models/whisper/ggml-base.bin)"
-                    .to_string(),
+                error: format!(
+                    "whisper transcription is not available: {}. Download a prebuilt whisper-cli from \
+                     https://github.com/ggml-org/whisper.cpp/releases and a GGML model (e.g. ggml-base.bin), \
+                     place them at {} and {} (or set ARUARU_LLM_WHISPER_CLI / ARUARU_LLM_WHISPER_MODEL).",
+                    if !transcribe::cli_present() { "whisper-cli not found" } else { "GGML model not found" },
+                    transcribe::cli_path().display(),
+                    transcribe::model_path().display(),
+                ),
                 engine: transcribe_engine_label(),
             },
         );
@@ -1350,9 +1356,9 @@ async fn transcribe(req: Request, registry: Arc<TenantRegistry>) -> Response {
         .filter(|l| !l.is_empty() && !l.eq_ignore_ascii_case("auto"))
         .map(str::to_string);
 
-    // whisper.cpp の `full()` は同期の重い計算(自前スレッドプールでの
-    // ビームサーチ + GPU/CPU カーネル)。`generate` と同じく
-    // `spawn_blocking` へ逃がして tokio ワーカーを塞がない。
+    // whisper-cli の子プロセスは同期の重い処理(WAV 書き出し + プロセス
+    // 起動 + 書き起こし待ち)。`generate` と同じく `spawn_blocking` へ
+    // 逃がして tokio ワーカーを塞がない。
     let result = tokio::task::spawn_blocking(move || transcribe::transcribe_pcm16k(&pcm, language.as_deref())).await;
 
     match result {
@@ -1756,39 +1762,47 @@ struct RuntimeInfoResponse {
     disclosure: &'static str,
 }
 
-/// `POST /v1/transcribe` の可否と、whisper.cpp のどの計算バックエンドが
-/// このビルドに組み込まれているか(2026-08-29新設)。
+/// `POST /v1/transcribe`(whisper.cpp CLI 音声認識)の可否と実体パス
+/// (2026-08-29新設・方針変更)。
 ///
-/// **正直な開示**: `compiled_in` は `whisper-transcribe` feature の有無、
-/// `model_present` は `ARUARU_LLM_WHISPER_MODEL`(既定 `<crate>/models/
-/// whisper/ggml-base.bin`)にファイルが実在するか。両方 true のときだけ
-/// `/v1/transcribe` が実際に書き起こせる。
+/// **正直な開示**: 実装は whisper.cpp のプレビルド CLI(`whisper-cli`)を
+/// 子プロセス起動する方式(`whisper-rs` の直接リンクは Windows/MSVC で
+/// ビルド不能なため撤回)。`cli_present` と `model_present` の両方が
+/// true のときだけ `/v1/transcribe` が実際に書き起こせる。いずれも
+/// リポジトリには同梱していない。
 #[derive(Debug, Serialize)]
 struct WhisperTierInfo {
-    compiled_in: bool,
-    /// `"cuda"` / `"vulkan"` / `"cpu"` / `"not-compiled-in"`。
+    /// CLI・モデルの両方が実在し `/v1/transcribe` が動作可能か。
+    available: bool,
+    /// `"whisper.cpp-cli"` / `"not-available"`。
     backend: &'static str,
+    cli_path: String,
+    cli_present: bool,
     model_path: String,
     model_present: bool,
     detail: &'static str,
 }
 
 fn whisper_tier_info() -> WhisperTierInfo {
-    let compiled_in = transcribe::is_available();
+    let cli_present = transcribe::cli_present();
     let model_present = transcribe::model_present();
     WhisperTierInfo {
-        compiled_in,
+        available: cli_present && model_present,
         backend: transcribe::backend_label(),
+        cli_path: transcribe::cli_path().to_string_lossy().to_string(),
+        cli_present,
         model_path: transcribe::model_path().to_string_lossy().to_string(),
         model_present,
-        detail: if compiled_in && model_present {
-            "POST /v1/transcribe is ready (whisper.cpp compiled in and a GGML model is present)."
-        } else if compiled_in {
-            "whisper.cpp is compiled in, but no GGML model file was found at the configured path — \
-             set ARUARU_LLM_WHISPER_MODEL or place ggml-base.bin there."
+        detail: if cli_present && model_present {
+            "POST /v1/transcribe is ready (whisper-cli and a GGML model are both present)."
+        } else if !cli_present && !model_present {
+            "Neither whisper-cli nor a GGML model was found. Download a prebuilt whisper-cli from \
+             github.com/ggml-org/whisper.cpp/releases and a model (e.g. ggml-base.bin); \
+             or set ARUARU_LLM_WHISPER_CLI / ARUARU_LLM_WHISPER_MODEL."
+        } else if !cli_present {
+            "whisper-cli not found (a GGML model is present). Add a prebuilt whisper-cli or set ARUARU_LLM_WHISPER_CLI."
         } else {
-            "Not compiled in. Rebuild with --features whisper-transcribe (add whisper-cuda / \
-             whisper-vulkan for GPU) to enable POST /v1/transcribe."
+            "GGML model not found (whisper-cli is present). Add ggml-base.bin or set ARUARU_LLM_WHISPER_MODEL."
         },
     }
 }
