@@ -209,9 +209,14 @@ fn parse_whisper_json(bytes: &[u8]) -> Result<TranscribeOutput, String> {
 
 /// 16kHz mono の f32 PCM(範囲 -1.0..=1.0)を書き起こす。
 ///
-/// CLI もモデルも無ければ `Err`(呼び出し側 `main.rs::transcribe` が
-/// `503` + 正直なメッセージを返す)。
-pub fn transcribe_pcm16k(pcm: &[f32], language: Option<&str>) -> Result<TranscribeOutput, String> {
+/// `prompt` は contextual biasing 用(直前の文脈・期待語彙)で、
+/// whisper-cli の `--prompt` へ渡す。CLI もモデルも無ければ `Err`
+/// (呼び出し側 `main.rs::transcribe` が `503` + 正直なメッセージを返す)。
+pub fn transcribe_pcm16k(
+    pcm: &[f32],
+    language: Option<&str>,
+    prompt: Option<&str>,
+) -> Result<TranscribeOutput, String> {
     if pcm.is_empty() {
         return Err("audio is empty".to_string());
     }
@@ -257,6 +262,9 @@ pub fn transcribe_pcm16k(pcm: &[f32], language: Option<&str>) -> Result<Transcri
             .arg("-np") // 進捗等を標準出力へ出さない
             .arg("-t")
             .arg(threads.to_string());
+        if let Some(p) = prompt.map(str::trim).filter(|p| !p.is_empty()) {
+            cmd.arg("--prompt").arg(p); // contextual biasing(初期プロンプト)
+        }
 
         let output = run_with_timeout(cmd)?;
         if !output.status.success() {
@@ -312,7 +320,7 @@ mod tests {
         if std::env::var("ARUARU_LLM_WHISPER_CLI").is_ok() {
             return; // 実 CLI がある環境ではスキップ
         }
-        let r = transcribe_pcm16k(&[0.1_f32; 1600], Some("en"));
+        let r = transcribe_pcm16k(&[0.1_f32; 1600], Some("en"), None);
         assert!(r.is_err());
         let msg = r.unwrap_err();
         assert!(msg.contains("whisper.cpp CLI not found") || msg.contains("model not found"));

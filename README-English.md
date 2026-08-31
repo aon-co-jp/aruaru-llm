@@ -170,7 +170,7 @@ understanding).
   no framework) with one "Download recommended LLM" button, progress
   display, and a generation-test panel once switched.
 - `POST /v1/transcribe` (added 2026-08-29) — `{"pcm_f32_base64": "...",
-  "sample_rate": 16000, "language": "auto"(optional), "tenant": "..."(optional)}`
+  "sample_rate": 16000, "language": "auto"(optional), "prompt": "recent context"(optional), "tenant": "..."(optional)}`
   → `{"transcript": "...", "language": "...", "engine": "...", "disclosure": "..."}`.
   `pcm_f32_base64` is 16 kHz mono f32 PCM as a little-endian byte array,
   base64-encoded (the format open-english's `blobToPcm16k()` produces).
