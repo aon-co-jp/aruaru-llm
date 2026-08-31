@@ -757,6 +757,55 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-08-29 `POST /v1/transcribe`(whisper.cpp 音声認識)を新設
+  (open-english の `docs/SPEECH_RECOGNITION_REDESIGN.md` P2-β、
+  ブラウザ内 Whisper〈P2-α〉では端末性能が足りない利用者向けに、
+  自分の PC で起動している aruaru-llm 側で書き起こす経路)**:
+  1. **新規 `src/transcribe.rs` + Cargo feature `whisper-transcribe`
+     (既定オフ、`whisper-cuda`/`whisper-vulkan` で whisper.cpp の GPU
+     バックエンドを追加有効化)**。`nllb-translate` と全く同じ「重量級
+     C++ 依存(`whisper-rs`=whisper.cpp、CMake+bindgen/libclang)は
+     feature 隔離、未指定時は既定ビルド・CI・VPS 本番に一切影響しない」
+     方針。feature 無効時の `POST /v1/transcribe` は `503` +
+     「rebuild with --features whisper-transcribe」を返す。
+  2. **`POST /v1/transcribe`**: `{pcm_f32_base64, sample_rate(=16000),
+     language(任意/"auto"), tenant}` → `{transcript, language, engine,
+     disclosure}`。`pcm_f32_base64` は 16kHz mono f32 PCM のリトル
+     エンディアンバイト列を base64 化したもの(open-english の
+     `blobToPcm16k()` 出力形式)。`sample_rate≠16000`・base64 不正・
+     4 の倍数でない・10 分超(~38MB)はいずれも `400`。重い `full()` は
+     `spawn_blocking` へ逃がす(`generate` と同じ)。モデルパスは
+     `ARUARU_LLM_WHISPER_MODEL`(既定 `<crate>/models/whisper/ggml-base.bin`、
+     リポジトリには同梱しない)。
+  3. **`GET /v1/runtime` に `whisper` フィールドを追加**:
+     `compiled_in`(feature の有無)/`backend`(`cuda`/`vulkan`/`cpu`/
+     `not-compiled-in`)/`model_path`/`model_present`/`detail`。両方
+     true のときだけ `/v1/transcribe` が実際に書き起こせる、という
+     正直な表示。
+  4. **検証**: 既定ビルド(feature 無し)`cargo build --release` 成功、
+     `cargo test --release` **97 件全 green**(新規 `transcribe` テスト
+     4 件含む、回帰なし)。実サーバー起動+実 HTTP で
+     `GET /v1/runtime` の `whisper` フィールドが正しく
+     `compiled_in:false, backend:"not-compiled-in"` を返すこと、
+     `POST /v1/transcribe` が `503` + 正直なエラーを返すことを確認。
+  5. **正直な開示・未検証(最重要)**: `--features whisper-transcribe` の
+     実ビルドを試したところ、C++ ツールチェーン(CMake/libclang/bindgen)
+     自体は動作したが、**`whisper-rs-sys v0.13.1` の事前生成バインディングの
+     サイズ表明**(`whisper_full_params` = 264 バイト前提)がローカルで
+     コンパイルした whisper.cpp の構造体レイアウトと食い違い、
+     `attempt to compute 1_usize - 264_usize, which would overflow` で
+     ビルド失敗(このリポジトリのコードではなく上流 `whisper-rs-sys` の
+     パッケージング問題)。実モデルロード・実書き起こしの E2E は未達
+     (`nllb-translate` と同じ状況)。**feature コード
+     (`src/transcribe.rs` の `#[cfg(feature = "whisper-transcribe")]`
+     ブロック)は whisper-rs 0.14 の API に対して書いたが、上流ビルドが
+     通らないため実コンパイル検証はできていない。**
+  - 次にすべきこと: (1) 動作する `whisper-rs` バージョンへのピン留め
+     (`=0.13` 等)または上流修正の追従、その後 feature ブロックの実
+     コンパイル+実 GGML モデルでの `POST /v1/transcribe` 実 HTTP 検証、
+     (2) open-english 側 P2-γ(Web Speech API + ブラウザ Whisper +
+     この `/v1/transcribe` の 3 経路 n-best 融合)への配線。
+
 - **2026-08-25 セキュリティ監査(cargo audit)を実施(open-english側の
   ユーザー指示「関連リポジトリのセキュリティ監査」の一環、詳細調査・
   横断的な優先判断はopen-english/CLAUDE.md 2026-08-25エントリ参照)**:

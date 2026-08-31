@@ -81,6 +81,19 @@ rand = "0.8"
 # 引き続き必要——置き換えたのは生の文字列パース呼び出し(`parse_strict`)
 # のみで、型付きDeserialize自体はserdeに委ねる。
 rust-json = { path = "../RS-JSON" }
+# base64: `POST /v1/transcribe` が受け取る 16kHz mono f32 PCM(または WAV)
+# ペイロードのデコードに使う。既存 crate(reqwest 等)が推移的に複数版を
+# 持つが、直接依存として明示しておく。
+base64 = "0.22"
+# ブラウザ内 Whisper(P2-α)では端末性能に限界があるため、利用者が自分の
+# PC で起動している aruaru-llm 側で whisper.cpp による書き起こしを行える
+# ようにする(2026-08-29追加、SPEECH_RECOGNITION_REDESIGN.md P2-β)。
+# **正直な開示**: whisper.cpp は C++ ビルド(CMake + bindgen/libclang)を
+# 要し、このエコシステムの「重量級フレームワーク非依存」方針からは外れる
+# ため、`nllb-translate` と同じく既定 feature には含めず `whisper-transcribe`
+# feature 配下でのみ有効にする(未指定時は `POST /v1/transcribe` が 503 +
+# 正直なエラーを返すのみで、既定ビルド・CI・VPS 本番への影響はゼロ)。
+whisper-rs = { version = "0.14", optional = true, default-features = false }
 
 [features]
 default = []
@@ -105,6 +118,13 @@ real-vulkan = ["dep:opencuda-vulkan", "opencuda-vulkan/real-vulkan"]
 # (`DirectXDevice`はDXILカーネルしか実行できないため。
 # `open-cuda-llm::GptModel::set_matmul_dxil_offload`のdoc参照)。
 real-dx12 = ["dep:opencuda-directx", "opencuda-directx/real-dx12"]
+# whisper.cpp(`whisper-rs`)による `POST /v1/transcribe` の実体
+# (2026-08-29追加、SPEECH_RECOGNITION_REDESIGN.md P2-β)。既定オフ。
+# `whisper-cuda` / `whisper-vulkan` は whisper.cpp の GPU バックエンドを
+# 追加で有効化する(open-cuda が使うのと同じ物理 GPU 上で走る)。
+whisper-transcribe = ["dep:whisper-rs"]
+whisper-cuda = ["whisper-transcribe", "whisper-rs/cuda"]
+whisper-vulkan = ["whisper-transcribe", "whisper-rs/vulkan"]
 
 [dev-dependencies]
 tempfile = "3"
