@@ -13,31 +13,36 @@
 //! 乗っている)に、より大きな Whisper モデルでの書き起こしを任せる」
 //! 経路をサーバー側に用意する。
 //!
-//! # 正直な開示(アーキテクチャ上の妥協、`nllb.rs` と同じ方針)
+//! # 実装方式(2026-08-29 方針変更): whisper.cpp プレビルド CLI の子プロセス
 //!
-//! whisper.cpp(`whisper-rs` crate 経由)は C++ ビルド(CMake +
-//! C コンパイラ + bindgen/libclang)を要する。このエコシステムが
-//! GPT-2・BERT で貫いてきた「手作り Rust 実装 + safetensors 直接
-//! ロード、重量級フレームワーク非依存」からは外れる。そのため
-//! `whisper-transcribe` Cargo feature(**既定オフ**)の背後に隔離し、
-//! 未指定時のビルド(CI・VPS 本番)には一切影響しない。feature 無効時の
-//! `POST /v1/transcribe` は `503` + 正直なエラーメッセージを返す。
+//! 当初は `whisper-rs`(whisper.cpp の Rust バインディング)を直接リンク
+//! する設計だったが、多言語再調査で **`whisper-rs-sys` は Windows(MSVC)
+//! で bindgen が glibc 固有型を生成して破綻する既知ブロッカー**があり、
+//! `whisper-rs 0.16.0` でも `WHISPER_DONT_GENERATE_BINDINGS=1` でも
+//! 解消しないと判明した(§3.6)。open-english の主対象は Windows 上で
+//! 利用者が起動する aruaru-llm なので、この方式は成立しない。
 //!
-//! whisper.cpp 自身の GPU バックエンド(CUDA / Vulkan / Metal)は
-//! `open-cuda` とは別実装だが、有効化すれば `open-cuda` が使うのと
-//! **同じ物理 GPU** 上で走る。CPU 実行時は whisper.cpp が自前で
-//! AVX2/FMA/NEON をディスパッチする(`open-cpu` とは別実装だが目的は同じ)。
-//! feature 名の `open-cuda/open-directx/open-cpu に乗る` は「同じ
-//! ハードウェアを共有する」という意味であって、これらのクレートを
-//! 直接呼ぶわけではない(誇張しない)。
+//! 代わりに **whisper.cpp の公式リリース同梱プレビルド CLI
+//! (`whisper-cli` / 旧名 `main`)を子プロセスとして起動**する。これは
+//! このエコシステムが既に多用しているパターン——`Db::backup_postgres_
+//! via_pg_dump` が `pg_dump` を、`component_update` が `Expand-Archive`
+//! を、Android 連携が `adb` を子プロセスで呼ぶのと同じ。C++ リンク・
+//! bindgen を完全に回避でき、GPU バックエンド(Vulkan/CUDA/Metal)は
+//! プレビルド CLI 側で選ばれたものがそのまま使われる(open-cuda が使う
+//! のと同じ物理 GPU 上で走る)。**Cargo feature は不要**(コンパイル時
+//! 依存が無いため)。`is_available()` は「CLI 実行ファイルとモデルが
+//! 実在するか」を実行時に判定する。
 //!
 //! # 検証状況(正直な開示)
 //!
-//! `whisper-transcribe` feature を有効化した実ビルド・実モデルロード・
-//! 実書き起こしの E2E は、この開発環境に whisper.cpp のビルド
-//! ツールチェーン(libclang)と GGML モデルファイルが無いため
-//! **未検証**(`nllb-translate` と同じ状況)。既定ビルドが壊れない
-//! こと(feature 無効時のフォールバック・型・テスト)までを確認済み。
+//! 実 CLI(`whisper-cli`)+ 実 GGML モデルでの書き起こし E2E は、この
+//! 開発環境に両方が無いため **未検証**。既定ビルドが壊れないこと
+//! (型・テスト・CLI/モデル不在時の `503` フォールバック)までを確認済み。
+//! 次周: プレビルド `whisper-cli` + `ggml-base.bin` を用意して
+//! `POST /v1/transcribe` を実 HTTP で検証する。
+
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 /// 書き起こし結果。
 #[derive(Debug, Clone, serde::Serialize)]
@@ -45,179 +50,298 @@ pub struct TranscribeOutput {
     /// 書き起こしたテキスト(前後の空白は除去済み)。
     pub text: String,
     /// Whisper が検出/使用した言語コード(例 `"en"` / `"ja"`)。
-    /// 言語を明示指定した場合はそれをそのまま返す。
     pub language: String,
 }
 
-/// このビルドで whisper.cpp 書き起こしが利用可能か(feature フラグの
-/// 実行時問い合わせ、`/v1/runtime` の `whisper` tier 表示と
-/// `/v1/transcribe` の可否判定に使う)。
-pub fn is_available() -> bool {
-    cfg!(feature = "whisper-transcribe")
+/// whisper.cpp CLI(`whisper-cli` / 旧名 `main`)のパス候補。
+/// `ARUARU_LLM_WHISPER_CLI` で上書き可、既定は `<crate>/models/whisper/` 下。
+pub fn cli_candidates() -> Vec<PathBuf> {
+    if let Ok(p) = std::env::var("ARUARU_LLM_WHISPER_CLI") {
+        return vec![PathBuf::from(p)];
+    }
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("models").join("whisper");
+    if cfg!(target_os = "windows") {
+        vec![dir.join("whisper-cli.exe"), dir.join("main.exe")]
+    } else {
+        vec![dir.join("whisper-cli"), dir.join("main")]
+    }
 }
 
-/// whisper.cpp のどの計算バックエンドがこのビルドに組み込まれているか
-/// (`whisper-rs` の feature 転送で決まる)。`/v1/runtime` の
-/// `whisper.backend` に出す。
-pub fn backend_label() -> &'static str {
-    if cfg!(feature = "whisper-cuda") {
-        "cuda"
-    } else if cfg!(feature = "whisper-vulkan") {
-        "vulkan"
-    } else if cfg!(feature = "whisper-transcribe") {
-        "cpu"
-    } else {
-        "not-compiled-in"
-    }
+/// 実在する最初の CLI パス(無ければ最初の候補を返す — 表示用)。
+pub fn cli_path() -> PathBuf {
+    let cands = cli_candidates();
+    cands.iter().find(|p| p.is_file()).cloned().unwrap_or_else(|| cands[0].clone())
+}
+
+pub fn cli_present() -> bool {
+    cli_candidates().iter().any(|p| p.is_file())
 }
 
 /// GGML モデルファイルのパス。`ARUARU_LLM_WHISPER_MODEL` で上書き可、
 /// 既定は `<crate>/models/whisper/ggml-base.bin`。
-pub fn model_path() -> std::path::PathBuf {
+pub fn model_path() -> PathBuf {
     if let Ok(p) = std::env::var("ARUARU_LLM_WHISPER_MODEL") {
-        return std::path::PathBuf::from(p);
+        return PathBuf::from(p);
     }
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+    Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("models")
         .join("whisper")
         .join("ggml-base.bin")
 }
 
-/// 現在の設定でモデルファイルが実在してロードを試せる状態か
-/// (`/v1/runtime` の `whisper.model_present` に出す。feature が
-/// 無効でもパスの存在チェックだけは常に行える)。
 pub fn model_present() -> bool {
     model_path().is_file()
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// feature 有効時: whisper-rs(whisper.cpp)で実際に書き起こす
-// ─────────────────────────────────────────────────────────────────────
-#[cfg(feature = "whisper-transcribe")]
-mod imp {
-    use super::TranscribeOutput;
-    use std::sync::Mutex;
-    use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+/// `POST /v1/transcribe` が実際に書き起こせる状態か(CLI とモデルの両方が
+/// 実在するか)。`/v1/runtime` の `whisper` 段と `/v1/transcribe` の可否
+/// 判定に使う。
+pub fn is_available() -> bool {
+    cli_present() && model_present()
+}
 
-    /// モデルの遅延ロード + スレッド間共有(初回リクエストでのみ
-    /// GGML をロード、以降は使い回す。`generation.rs` の GPT-2 重み
-    /// ロードと同じ「初回コスト許容・ウォームアップ後は高速」方針)。
-    static CTX: std::sync::OnceLock<Mutex<Result<WhisperContext, String>>> = std::sync::OnceLock::new();
+/// `/v1/runtime` の `whisper.backend` 表示。
+pub fn backend_label() -> &'static str {
+    if is_available() {
+        "whisper.cpp-cli"
+    } else {
+        "not-available"
+    }
+}
 
-    fn context() -> Result<std::sync::MutexGuard<'static, Result<WhisperContext, String>>, String> {
-        let cell = CTX.get_or_init(|| {
-            let path = super::model_path();
-            let loaded = path
-                .to_str()
-                .ok_or_else(|| "whisper model path is not valid UTF-8".to_string())
-                .and_then(|p| {
-                    WhisperContext::new_with_params(p, WhisperContextParameters::default())
-                        .map_err(|e| format!("failed to load whisper model {p}: {e}"))
-                });
-            Mutex::new(loaded)
-        });
-        cell.lock().map_err(|_| "whisper context lock poisoned".to_string())
+/// 16kHz mono 16-bit PCM の最小 WAV を書き出す(whisper-cli は 16kHz WAV を
+/// 要求するため。ヘッダ 44 バイト + i16 サンプル)。
+fn write_wav_16k_mono(path: &Path, pcm: &[f32]) -> std::io::Result<()> {
+    let data_len = (pcm.len() * 2) as u32;
+    let mut f = std::io::BufWriter::new(std::fs::File::create(path)?);
+    f.write_all(b"RIFF")?;
+    f.write_all(&(36 + data_len).to_le_bytes())?;
+    f.write_all(b"WAVE")?;
+    f.write_all(b"fmt ")?;
+    f.write_all(&16u32.to_le_bytes())?; // fmt チャンクサイズ
+    f.write_all(&1u16.to_le_bytes())?; // PCM
+    f.write_all(&1u16.to_le_bytes())?; // mono
+    f.write_all(&16_000u32.to_le_bytes())?; // サンプルレート
+    f.write_all(&32_000u32.to_le_bytes())?; // バイトレート = 16000*1*2
+    f.write_all(&2u16.to_le_bytes())?; // ブロックアライン
+    f.write_all(&16u16.to_le_bytes())?; // bits per sample
+    f.write_all(b"data")?;
+    f.write_all(&data_len.to_le_bytes())?;
+    for &s in pcm {
+        let v = (s.clamp(-1.0, 1.0) * 32767.0) as i16;
+        f.write_all(&v.to_le_bytes())?;
+    }
+    f.flush()
+}
+
+/// `temp_dir` 下にこのプロセス専用の一意なサブディレクトリを作る
+/// (`tempfile` crate を実行時依存に加えないための最小実装)。
+fn make_scratch_dir() -> std::io::Result<PathBuf> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let dir = std::env::temp_dir().join(format!("aruaru-llm-whisper-{}-{}-{}", std::process::id(), ts, n));
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+/// whisper-cli を子プロセスで起動し、壁時計上限(既定 300 秒、
+/// `ARUARU_LLM_WHISPER_TIMEOUT_SECS` で調整可)を超えたら kill する。
+fn run_with_timeout(mut cmd: std::process::Command) -> Result<std::process::Output, String> {
+    let timeout_secs: u64 = std::env::var("ARUARU_LLM_WHISPER_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(300);
+    let mut child = cmd
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("failed to start whisper-cli: {e}"))?;
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_status)) => {
+                return child.wait_with_output().map_err(|e| format!("whisper-cli wait failed: {e}"));
+            }
+            Ok(None) => {
+                if start.elapsed().as_secs() >= timeout_secs {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!("whisper-cli timed out after {timeout_secs}s"));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err(e) => return Err(format!("whisper-cli try_wait failed: {e}")),
+        }
+    }
+}
+
+/// whisper-cli が書き出した JSON からテキストと言語を取り出す。
+/// バージョン差に強いよう `serde_json::Value` で緩くパースする。
+fn parse_whisper_json(bytes: &[u8]) -> Result<TranscribeOutput, String> {
+    let v: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|e| format!("whisper-cli JSON parse failed: {e}"))?;
+    let mut text = String::new();
+    if let Some(arr) = v.get("transcription").and_then(|t| t.as_array()) {
+        for seg in arr {
+            if let Some(s) = seg.get("text").and_then(|t| t.as_str()) {
+                text.push_str(s);
+            }
+        }
+    }
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        return Err("whisper-cli produced no text (silence or too short?)".to_string());
+    }
+    let language = v
+        .get("result")
+        .and_then(|r| r.get("language"))
+        .and_then(|l| l.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    Ok(TranscribeOutput { text, language })
+}
+
+/// 16kHz mono の f32 PCM(範囲 -1.0..=1.0)を書き起こす。
+///
+/// CLI もモデルも無ければ `Err`(呼び出し側 `main.rs::transcribe` が
+/// `503` + 正直なメッセージを返す)。
+pub fn transcribe_pcm16k(pcm: &[f32], language: Option<&str>) -> Result<TranscribeOutput, String> {
+    if pcm.is_empty() {
+        return Err("audio is empty".to_string());
+    }
+    if !cli_present() {
+        return Err(format!(
+            "whisper.cpp CLI not found (looked for {}); download a prebuilt whisper-cli from \
+             https://github.com/ggml-org/whisper.cpp/releases and place it there, or set ARUARU_LLM_WHISPER_CLI",
+            cli_candidates().iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(" / ")
+        ));
+    }
+    if !model_present() {
+        return Err(format!(
+            "whisper GGML model not found at {} (download e.g. ggml-base.bin, or set ARUARU_LLM_WHISPER_MODEL)",
+            model_path().display()
+        ));
     }
 
-    /// 16kHz mono の f32 PCM(範囲 -1.0..=1.0)を書き起こす。
-    pub fn transcribe_pcm16k(pcm: &[f32], language: Option<&str>) -> Result<TranscribeOutput, String> {
-        if pcm.is_empty() {
-            return Err("audio is empty".to_string());
-        }
-        let guard = context()?;
-        let ctx = guard.as_ref().map_err(|e| e.clone())?;
-        let mut state = ctx.create_state().map_err(|e| format!("failed to create whisper state: {e}"))?;
+    let scratch = make_scratch_dir().map_err(|e| format!("could not create scratch dir: {e}"))?;
+    let wav = scratch.join("audio.wav");
+    let out_prefix = scratch.join("out");
+    let out_json = scratch.join("out.json");
 
-        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-        // "auto" 相当: language 未指定なら Whisper に検出させる。
-        params.set_language(language.or(Some("auto")));
-        params.set_translate(false);
-        params.set_print_special(false);
-        params.set_print_progress(false);
-        params.set_print_realtime(false);
-        params.set_print_timestamps(false);
-        // whisper.cpp が自前で使うスレッド数(CPU 実行時)。open-cpu の
-        // 検出ではなく whisper.cpp 側の既定に任せるが、論理コア数の
-        // 半分程度に抑えてサーバーの他リクエストを圧迫しないようにする。
+    let result = (|| {
+        write_wav_16k_mono(&wav, pcm).map_err(|e| format!("could not write WAV: {e}"))?;
+
         let threads = (std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2) / 2).max(1);
-        params.set_n_threads(threads as i32);
+        let lang = language
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .unwrap_or("auto");
 
-        state.full(params, pcm).map_err(|e| format!("whisper transcription failed: {e}"))?;
+        let mut cmd = std::process::Command::new(cli_path());
+        cmd.arg("-m")
+            .arg(model_path())
+            .arg("-f")
+            .arg(&wav)
+            .arg("-l")
+            .arg(lang)
+            .arg("-oj") // JSON 出力(-of で指定した prefix + ".json")
+            .arg("-of")
+            .arg(&out_prefix)
+            .arg("-nt") // テキストにタイムスタンプを付けない
+            .arg("-np") // 進捗等を標準出力へ出さない
+            .arg("-t")
+            .arg(threads.to_string());
 
-        let n = state.full_n_segments().map_err(|e| format!("full_n_segments failed: {e}"))?;
-        let mut text = String::new();
-        for i in 0..n {
-            let seg = state
-                .full_get_segment_text(i)
-                .map_err(|e| format!("full_get_segment_text({i}) failed: {e}"))?;
-            text.push_str(&seg);
+        let output = run_with_timeout(cmd)?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!(
+                "whisper-cli exited with {}: {}",
+                output.status,
+                stderr.lines().last().unwrap_or("").trim()
+            ));
         }
-        let text = text.trim().to_string();
-        if text.is_empty() {
-            return Err("whisper produced no text (silence or too short?)".to_string());
-        }
+        let json = std::fs::read(&out_json)
+            .map_err(|e| format!("whisper-cli did not write {}: {e}", out_json.display()))?;
+        parse_whisper_json(&json)
+    })();
 
-        let detected = match language {
-            Some(l) => l.to_string(),
-            None => state
-                .full_lang_id()
-                .ok()
-                .and_then(|id| whisper_rs::get_lang_str(id).map(|s| s.to_string()))
-                .unwrap_or_else(|| "unknown".to_string()),
-        };
-
-        Ok(TranscribeOutput { text, language: detected })
-    }
+    let _ = std::fs::remove_dir_all(&scratch); // ベストエフォート後始末
+    result
 }
-
-// ─────────────────────────────────────────────────────────────────────
-// feature 無効時: 常にエラー(呼び出し側は 503 + 正直なメッセージを返す)
-// ─────────────────────────────────────────────────────────────────────
-#[cfg(not(feature = "whisper-transcribe"))]
-mod imp {
-    use super::TranscribeOutput;
-
-    pub fn transcribe_pcm16k(_pcm: &[f32], _language: Option<&str>) -> Result<TranscribeOutput, String> {
-        Err("whisper-transcribe feature not enabled at build time \
-             (rebuild aruaru-llm with --features whisper-transcribe, and place a GGML model \
-             at ARUARU_LLM_WHISPER_MODEL or <crate>/models/whisper/ggml-base.bin)"
-            .to_string())
-    }
-}
-
-pub use imp::transcribe_pcm16k;
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn is_available_reflects_the_compiled_feature_flag() {
-        assert_eq!(is_available(), cfg!(feature = "whisper-transcribe"));
-    }
-
-    #[test]
-    fn backend_label_is_not_compiled_in_for_the_default_build() {
-        if !cfg!(feature = "whisper-transcribe") {
-            assert_eq!(backend_label(), "not-compiled-in");
+    fn is_available_is_false_without_cli_or_model_in_dev() {
+        // 開発環境には whisper-cli も ggml モデルも無いので false のはず。
+        // (env 上書きが無い前提。CI もこの状態。)
+        if std::env::var("ARUARU_LLM_WHISPER_CLI").is_err()
+            && std::env::var("ARUARU_LLM_WHISPER_MODEL").is_err()
+        {
+            assert!(!is_available());
+            assert_eq!(backend_label(), "not-available");
         }
     }
 
     #[test]
     fn model_path_honors_the_env_override() {
-        // 直列化のため専用の一意な値を使う(他テストと環境変数を共有
-        // しない: このキーは transcribe 以外では読まれない)。
         std::env::set_var("ARUARU_LLM_WHISPER_MODEL", "/tmp/some-model.bin");
-        assert_eq!(model_path(), std::path::PathBuf::from("/tmp/some-model.bin"));
+        assert_eq!(model_path(), PathBuf::from("/tmp/some-model.bin"));
         std::env::remove_var("ARUARU_LLM_WHISPER_MODEL");
         assert!(model_path().ends_with("ggml-base.bin"));
     }
 
-    #[cfg(not(feature = "whisper-transcribe"))]
     #[test]
-    fn transcribe_reports_unavailable_when_feature_disabled() {
-        let r = transcribe_pcm16k(&[0.0_f32; 16], None);
+    fn cli_path_honors_the_env_override() {
+        std::env::set_var("ARUARU_LLM_WHISPER_CLI", "/opt/whisper/whisper-cli");
+        assert_eq!(cli_path(), PathBuf::from("/opt/whisper/whisper-cli"));
+        std::env::remove_var("ARUARU_LLM_WHISPER_CLI");
+    }
+
+    #[test]
+    fn transcribe_reports_unavailable_when_cli_missing() {
+        if std::env::var("ARUARU_LLM_WHISPER_CLI").is_ok() {
+            return; // 実 CLI がある環境ではスキップ
+        }
+        let r = transcribe_pcm16k(&[0.1_f32; 1600], Some("en"));
         assert!(r.is_err());
-        assert!(r.unwrap_err().contains("not enabled"));
+        let msg = r.unwrap_err();
+        assert!(msg.contains("whisper.cpp CLI not found") || msg.contains("model not found"));
+    }
+
+    #[test]
+    fn write_wav_16k_mono_has_a_valid_riff_header() {
+        let dir = make_scratch_dir().unwrap();
+        let p = dir.join("t.wav");
+        write_wav_16k_mono(&p, &[0.0, 0.5, -0.5, 1.0]).unwrap();
+        let bytes = std::fs::read(&p).unwrap();
+        assert_eq!(&bytes[0..4], b"RIFF");
+        assert_eq!(&bytes[8..12], b"WAVE");
+        // 44 バイトヘッダ + 4 サンプル * 2 バイト
+        assert_eq!(bytes.len(), 44 + 8);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parse_whisper_json_extracts_text_and_language() {
+        let j = r#"{"result":{"language":"ja"},"transcription":[{"text":" Hello "},{"text":"world"}]}"#;
+        let out = parse_whisper_json(j.as_bytes()).unwrap();
+        assert_eq!(out.text, "Hello world");
+        assert_eq!(out.language, "ja");
+    }
+
+    #[test]
+    fn parse_whisper_json_errs_on_empty_transcription() {
+        let j = r#"{"result":{"language":"en"},"transcription":[{"text":"   "}]}"#;
+        assert!(parse_whisper_json(j.as_bytes()).is_err());
     }
 }
