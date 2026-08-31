@@ -806,19 +806,39 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
      解消しない**既知ブロッカー(bindgen が glibc 固有型を生成、issue
      2026-04-21、公式 fix 未提供)と判明。バージョンピン留めでは解決
      しない。
-  - 次にすべきこと(**方針変更**): (1) `whisper-rs` を直接リンクするのを
-     やめ、**whisper.cpp のプレビルド CLI(`whisper-cli.exe`、公式リリース
-     同梱)をサブプロセス起動**する方式へ `src/transcribe.rs` の
-     `#[cfg(feature = "whisper-transcribe")]` ブロックを差し替える
-     (`Db::backup_postgres_via_pg_dump` が `pg_dump` を、`component_update`
-     が `Expand-Archive` を子プロセスで呼ぶのと同じパターン。C++ リンク・
-     bindgen を完全回避、GPU は CLI 側 feature で選択)。CLI パスは
-     `ARUARU_LLM_WHISPER_CLI`(既定 `<crate>/models/whisper/whisper-cli.exe`)。
-     `Cargo.toml` の `whisper-rs` optional dep は削除。`POST /v1/transcribe`
-     ・`GET /v1/runtime` の `whisper` 段・feature 名はそのまま維持。
-     (2) その後 実 GGML モデル + プレビルド CLI で `POST /v1/transcribe`
-     実 HTTP 検証。(3) open-english 側 P2-γ(Web Speech API + ブラウザ
-     Whisper + この `/v1/transcribe` の 3 経路 n-best 融合)への配線。
+  - **✅ 方針変更を実装済み(2026-08-29 続き、コミット `24bcfd1`)**:
+     上記 5 の feature ブロックを全面撤去し、**whisper.cpp のプレビルド
+     CLI(`whisper-cli` / 旧 `main`)を子プロセス起動**する方式へ書き換えた
+     (`pg_dump` / `Expand-Archive` / `adb` と同じパターン。C++ リンク・
+     bindgen を完全回避)。
+     - `src/transcribe.rs`: 16kHz mono f32 PCM → 最小 WAV 手書き →
+       `whisper-cli -m <model> -f <wav> -l <lang|auto> -oj -of <prefix>
+       -nt -np -t <n>` → `<prefix>.json` を `serde_json::Value` で緩く
+       パース(バージョン差に強く)。壁時計上限(既定 300s、
+       `ARUARU_LLM_WHISPER_TIMEOUT_SECS`)超過で kill。スクラッチは
+       `temp_dir` 下の一意サブディレクトリ(`tempfile` crate を実行時
+       依存に加えない、後始末はベストエフォート)。
+     - **`Cargo.toml` から `whisper-rs` optional dep と
+       `whisper-transcribe`/`whisper-cuda`/`whisper-vulkan` feature を
+       削除**(コンパイル時依存が消えたため feature 不要)。`Cargo.lock`
+       から bindgen 等 -93 行。
+     - `is_available()` = `cli_present() && model_present()` の実行時
+       判定。CLI パス = `ARUARU_LLM_WHISPER_CLI`(既定
+       `<crate>/models/whisper/whisper-cli[.exe]`、`main[.exe]` も
+       フォールバック)。`GET /v1/runtime` の `whisper` 段を
+       `{available, backend, cli_path, cli_present, model_path,
+       model_present, detail}` へ。`503` エラーは whisper.cpp releases の
+       入手先を案内。
+     - **検証**: `cargo build --release` 成功、`cargo test --release`
+       **100 passed / 1 ignored**(新規 `transcribe` テスト 7 件 =
+       WAV RIFF ヘッダ・JSON パース(正常/空)・CLI/モデル不在時の
+       エラー・env 上書き 2 件、回帰なし)。**実 CLI + 実 GGML モデルでの
+       書き起こし E2E は環境に両方が無いため未達**——次周、プレビルド
+       `whisper-cli` + `ggml-base.bin` を用意して `POST /v1/transcribe`
+       を実 HTTP で検証する。
+  - 次にすべきこと: (1) 上記の実 E2E 検証。(2) open-english 側 P2-γ
+     (Web Speech API + ブラウザ Whisper + この `/v1/transcribe` の
+     3 経路 n-best 融合)への配線。
 
 - **2026-08-25 セキュリティ監査(cargo audit)を実施(open-english側の
   ユーザー指示「関連リポジトリのセキュリティ監査」の一環、詳細調査・
