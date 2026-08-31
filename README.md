@@ -212,7 +212,7 @@ Vulkan汎用パスは実装済み)。詳細はopen-cuda側の`CLAUDE.md`のHANDO
   場合は`400 Bad Request`を即座に返す(`/v1/generate`と同じ理由、
   実HTTPで検証済み)。
 - `POST /v1/transcribe`(2026-08-29追加) — `{"pcm_f32_base64": "...",
-  "sample_rate": 16000, "language": "auto"(任意), "tenant": "..."(任意)}` →
+  "sample_rate": 16000, "language": "auto"(任意), "prompt": "直前の文脈"(任意), "tenant": "..."(任意)}` →
   `{"transcript": "...", "language": "...", "engine": "...", "disclosure": "..."}`。
   `pcm_f32_base64`は16kHz mono の f32 PCM をリトルエンディアンバイト列に
   して base64 化したもの(`open-english`の`blobToPcm16k()`が生成する形式)。

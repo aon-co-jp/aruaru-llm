@@ -1239,6 +1239,12 @@ struct TranscribeRequest {
     /// 言語コード(例 `"en"` / `"ja"`)。省略/`"auto"` なら Whisper に検出させる。
     #[serde(default)]
     language: Option<String>,
+    /// contextual biasing 用のプロンプト(直前のトレーナー発話・練習問題の
+    /// 期待語彙など)。whisper-cli の `--prompt` へ渡す。Whisper のデコーダ
+    /// プロンプトは末尾 ~224 トークンしか効かないので、サーバー側で先頭を
+    /// 切り詰める。
+    #[serde(default)]
+    prompt: Option<String>,
     #[serde(default)]
     tenant: Option<String>,
 }
@@ -1356,10 +1362,29 @@ async fn transcribe(req: Request, registry: Arc<TenantRegistry>) -> Response {
         .filter(|l| !l.is_empty() && !l.eq_ignore_ascii_case("auto"))
         .map(str::to_string);
 
+    // contextual biasing プロンプト(末尾 ~1000 文字に切り詰め。Whisper の
+    // デコーダプロンプトは末尾しか効かないため末尾を残す)。
+    let prompt = req
+        .prompt
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(|p| {
+            let chars: Vec<char> = p.chars().collect();
+            if chars.len() > 1000 {
+                chars[chars.len() - 1000..].iter().collect()
+            } else {
+                p.to_string()
+            }
+        });
+
     // whisper-cli の子プロセスは同期の重い処理(WAV 書き出し + プロセス
     // 起動 + 書き起こし待ち)。`generate` と同じく `spawn_blocking` へ
     // 逃がして tokio ワーカーを塞がない。
-    let result = tokio::task::spawn_blocking(move || transcribe::transcribe_pcm16k(&pcm, language.as_deref())).await;
+    let result = tokio::task::spawn_blocking(move || {
+        transcribe::transcribe_pcm16k(&pcm, language.as_deref(), prompt.as_deref())
+    })
+    .await;
 
     match result {
         Ok(Ok(out)) => json_response(
