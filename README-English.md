@@ -169,8 +169,22 @@ understanding).
 - `GET /` (added 2026-07-27) — minimal static HTML UI (`static/index.html`,
   no framework) with one "Download recommended LLM" button, progress
   display, and a generation-test panel once switched.
+- `POST /v1/transcribe` (added 2026-08-29) — `{"pcm_f32_base64": "...",
+  "sample_rate": 16000, "language": "auto"(optional), "tenant": "..."(optional)}`
+  → `{"transcript": "...", "language": "...", "engine": "...", "disclosure": "..."}`.
+  `pcm_f32_base64` is 16 kHz mono f32 PCM as a little-endian byte array,
+  base64-encoded (the format open-english's `blobToPcm16k()` produces).
+  Speech recognition via whisper.cpp — **requires the `whisper-transcribe`
+  Cargo feature** (off by default; without it this returns `503` +
+  "rebuild with --features whisper-transcribe"). Same feature-isolation
+  policy as `nllb-translate`. `sample_rate ≠ 16000` / bad base64 / audio
+  over 10 minutes all return `400`. See the "Speech-recognition plugin"
+  section below.
 - `POST /admin/tenants` / `GET /admin/tenants` / `DELETE /admin/tenants/:host` — tenant registration management (`x-admin-token` header auth)
 - `GET /healthz` — health check
+- `GET /v1/runtime` — reports which compute backend is actually in use;
+  includes a `whisper` block (`compiled_in` / `backend` / `model_path` /
+  `model_present` / `detail`) added 2026-08-29 for `POST /v1/transcribe`.
 
 ### Hardware detection → recommended LLM size (added 2026-07-27)
 
@@ -225,6 +239,41 @@ replies and is lightweight/fast (a single embedding forward pass);
 `/v1/generate` runs the full GPT-2 124M model (548MB of weights) and is
 heavier but produces genuine free-form text. Pick whichever fits the use
 case.
+
+## Speech-recognition plugin (`whisper-transcribe` feature, added 2026-08-29)
+
+open-english's speech recognition was originally limited to the browser's
+Web Speech API. In-browser Whisper (transformers.js, "P2-α") was added,
+but is bounded by the user's device GPU/NPU/CPU. P2-β lets the user's own
+PC — which is already running `aruaru-llm` on the open-cuda / open-directx
+/ open-cpu inference stack — do the transcription with a larger Whisper
+model via `POST /v1/transcribe`. Canonical record:
+`open-english/docs/SPEECH_RECOGNITION_REDESIGN.md` (§P2-β).
+
+Exactly the same **Cargo-feature-toggled plugin** approach as
+`nllb-translate`:
+
+- **Install (enable)**: `cargo build --release --features whisper-transcribe`
+  (add `whisper-vulkan` or `whisper-cuda` to run whisper.cpp on the GPU —
+  the same physical GPU open-cuda uses). Place a GGML model at
+  `ARUARU_LLM_WHISPER_MODEL` (default `<crate>/models/whisper/ggml-base.bin`;
+  the model is **not** bundled).
+- **Uninstall (default)**: `cargo build --release`. `whisper-rs` is not in
+  the build at all; `POST /v1/transcribe` returns `503` + an honest
+  "rebuild with --features whisper-transcribe".
+- **Status**: `GET /v1/runtime` → `whisper` block.
+- **Honest disclosure / current state**: the `--features whisper-transcribe`
+  build currently **fails on Windows/MSVC** — `whisper-rs-sys`'s bindgen
+  emits glibc-specific types and the `whisper_full_params` size assertion
+  underflows (`1_usize - 264_usize overflow`). Re-research on 2026-08-29
+  confirmed this reproduces on `whisper-rs 0.16.0` and is **not** fixed by
+  `WHISPER_DONT_GENERATE_BINDINGS=1` (upstream issue, no fix yet). Since
+  the target is Windows, **the next iteration replaces the `whisper-rs`
+  link with spawning a prebuilt whisper.cpp CLI (`whisper-cli.exe`) as a
+  subprocess** — the same pattern this codebase already uses for `pg_dump`
+  / `Expand-Archive` / `adb`. The default build (feature off, CI/VPS
+  production) is unaffected: `cargo build --release` + `cargo test
+  --release` (97 tests) all green.
 
 ## "Shadow clone" (分身の術) architecture
 
