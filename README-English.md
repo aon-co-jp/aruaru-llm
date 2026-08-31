@@ -174,17 +174,18 @@ understanding).
   → `{"transcript": "...", "language": "...", "engine": "...", "disclosure": "..."}`.
   `pcm_f32_base64` is 16 kHz mono f32 PCM as a little-endian byte array,
   base64-encoded (the format open-english's `blobToPcm16k()` produces).
-  Speech recognition via whisper.cpp — **requires the `whisper-transcribe`
-  Cargo feature** (off by default; without it this returns `503` +
-  "rebuild with --features whisper-transcribe"). Same feature-isolation
-  policy as `nllb-translate`. `sample_rate ≠ 16000` / bad base64 / audio
-  over 10 minutes all return `400`. See the "Speech-recognition plugin"
-  section below.
+  Speech recognition via whisper.cpp — spawns a **prebuilt `whisper-cli`
+  subprocess** (no Cargo feature; drop the CLI binary and a GGML model in
+  place, or set `ARUARU_LLM_WHISPER_CLI` / `ARUARU_LLM_WHISPER_MODEL`).
+  Without them it returns `503` + a link to whisper.cpp releases.
+  `sample_rate ≠ 16000` / bad base64 / audio over 10 minutes all return
+  `400`. See the "Speech recognition" section below.
 - `POST /admin/tenants` / `GET /admin/tenants` / `DELETE /admin/tenants/:host` — tenant registration management (`x-admin-token` header auth)
 - `GET /healthz` — health check
 - `GET /v1/runtime` — reports which compute backend is actually in use;
-  includes a `whisper` block (`compiled_in` / `backend` / `model_path` /
-  `model_present` / `detail`) added 2026-08-29 for `POST /v1/transcribe`.
+  includes a `whisper` block (`available` / `backend` / `cli_path` /
+  `cli_present` / `model_path` / `model_present` / `detail`) added
+  2026-08-29 for `POST /v1/transcribe`.
 
 ### Hardware detection → recommended LLM size (added 2026-07-27)
 
@@ -240,40 +241,49 @@ replies and is lightweight/fast (a single embedding forward pass);
 heavier but produces genuine free-form text. Pick whichever fits the use
 case.
 
-## Speech-recognition plugin (`whisper-transcribe` feature, added 2026-08-29)
+## Speech recognition (`POST /v1/transcribe`, whisper.cpp CLI, added 2026-08-29)
 
 open-english's speech recognition was originally limited to the browser's
 Web Speech API. In-browser Whisper (transformers.js, "P2-α") was added,
 but is bounded by the user's device GPU/NPU/CPU. P2-β lets the user's own
-PC — which is already running `aruaru-llm` on the open-cuda / open-directx
-/ open-cpu inference stack — do the transcription with a larger Whisper
-model via `POST /v1/transcribe`. Canonical record:
+PC — which is already running `aruaru-llm` — do the transcription with a
+larger Whisper model via `POST /v1/transcribe`. Canonical record:
 `open-english/docs/SPEECH_RECOGNITION_REDESIGN.md` (§P2-β).
 
-Exactly the same **Cargo-feature-toggled plugin** approach as
-`nllb-translate`:
+**Implementation (2026-08-29 pivot)**: the original plan was to link
+`whisper-rs` (Rust bindings to whisper.cpp) directly, but `whisper-rs-sys`
+has a **known blocker on Windows/MSVC** — bindgen emits glibc-specific
+types and the `whisper_full_params` size assertion underflows
+(`1_usize - 264_usize overflow`); re-research confirmed this reproduces on
+`whisper-rs 0.16.0` and is **not** fixed by
+`WHISPER_DONT_GENERATE_BINDINGS=1` (upstream issue 2026-04-21, no fix
+yet). Since open-english targets Windows, the direct-link approach can't
+work. Instead we **spawn whisper.cpp's official prebuilt CLI
+(`whisper-cli` / legacy `main`) as a subprocess** — the same pattern this
+codebase already uses for `pg_dump` / `Expand-Archive` / `adb`. No C++
+link, no bindgen, and the CLI's chosen GPU backend is used as-is. **No
+Cargo feature** — with no compile-time dependency it's just part of the
+default build.
 
-- **Install (enable)**: `cargo build --release --features whisper-transcribe`
-  (add `whisper-vulkan` or `whisper-cuda` to run whisper.cpp on the GPU —
-  the same physical GPU open-cuda uses). Place a GGML model at
-  `ARUARU_LLM_WHISPER_MODEL` (default `<crate>/models/whisper/ggml-base.bin`;
-  the model is **not** bundled).
-- **Uninstall (default)**: `cargo build --release`. `whisper-rs` is not in
-  the build at all; `POST /v1/transcribe` returns `503` + an honest
-  "rebuild with --features whisper-transcribe".
-- **Status**: `GET /v1/runtime` → `whisper` block.
-- **Honest disclosure / current state**: the `--features whisper-transcribe`
-  build currently **fails on Windows/MSVC** — `whisper-rs-sys`'s bindgen
-  emits glibc-specific types and the `whisper_full_params` size assertion
-  underflows (`1_usize - 264_usize overflow`). Re-research on 2026-08-29
-  confirmed this reproduces on `whisper-rs 0.16.0` and is **not** fixed by
-  `WHISPER_DONT_GENERATE_BINDINGS=1` (upstream issue, no fix yet). Since
-  the target is Windows, **the next iteration replaces the `whisper-rs`
-  link with spawning a prebuilt whisper.cpp CLI (`whisper-cli.exe`) as a
-  subprocess** — the same pattern this codebase already uses for `pg_dump`
-  / `Expand-Archive` / `adb`. The default build (feature off, CI/VPS
-  production) is unaffected: `cargo build --release` + `cargo test
-  --release` (97 tests) all green.
+- **Enable**: drop two files in place (no rebuild).
+  1. whisper.cpp's [prebuilt `whisper-cli`](https://github.com/ggml-org/whisper.cpp/releases)
+     at `<crate>/models/whisper/whisper-cli` (`whisper-cli.exe` on
+     Windows), or point `ARUARU_LLM_WHISPER_CLI` at it.
+  2. a GGML model (`ggml-base.bin` = fast/modest, `ggml-large-v3-turbo` =
+     best; neither is bundled) at `<crate>/models/whisper/ggml-base.bin`,
+     or `ARUARU_LLM_WHISPER_MODEL`.
+- **Without them**: `POST /v1/transcribe` returns `503` + a link to
+  whisper.cpp releases.
+- **Status**: `GET /v1/runtime` → `whisper` block (`available`,
+  `cli_present`, `model_present`, `cli_path`, `model_path`, `detail`).
+- **Tuning**: `ARUARU_LLM_WHISPER_TIMEOUT_SECS` (default 300) caps the
+  subprocess wall-clock.
+- **Honest disclosure / verification**: `cargo build --release` succeeds;
+  `cargo test --release` — **100 passed** (7 new `transcribe` tests: WAV
+  RIFF header, whisper-cli JSON parsing, missing-CLI/model errors, env
+  overrides). **End-to-end with a real `whisper-cli` + real GGML model is
+  not yet verified** (this dev box has neither) — next iteration will set
+  both up and exercise `POST /v1/transcribe` over real HTTP.
 
 ## "Shadow clone" (分身の術) architecture
 

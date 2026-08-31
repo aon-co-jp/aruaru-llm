@@ -216,12 +216,11 @@ Vulkan汎用パスは実装済み)。詳細はopen-cuda側の`CLAUDE.md`のHANDO
   `{"transcript": "...", "language": "...", "engine": "...", "disclosure": "..."}`。
   `pcm_f32_base64`は16kHz mono の f32 PCM をリトルエンディアンバイト列に
   して base64 化したもの(`open-english`の`blobToPcm16k()`が生成する形式)。
-  **音声認識プラグイン(`whisper-transcribe` feature)がインストールされて
-  いれば**whisper.cpp(`whisper-rs`経由)でGGML Whisperモデルによる
-  書き起こしを行い、**インストールされていなければ**`503` +
-  「rebuild with --features whisper-transcribe」の正直なエラーを返す。
-  詳細は下記「音声認識プラグイン」節参照。`sample_rate`が16000以外・
-  base64不正・10分超の音声はいずれも`400`。
+  **whisper.cpp のプレビルド CLI(`whisper-cli`)と GGML Whisper モデルが
+  実在すれば**それを子プロセス起動して書き起こし、**無ければ**`503` +
+  入手先(whisper.cpp releases)を案内するエラーを返す。詳細は下記
+  「音声認識」節参照。`sample_rate`が16000以外・base64不正・10分超の音声は
+  いずれも`400`。
 - `GET /v1/recommend`（2026-07-27追加） — `open-cuda`(Vulkan)/`open-directx`
   (DXGI)経由のハードウェア検出(VRAM容量)から推奨モデルサイズを算出する
   (ダウンロードは行わない)。`{"hardware": {"gpu_detected":bool,
@@ -358,57 +357,47 @@ VRAMバッファをalloc→host→device転送→計算→device→host転送→
   起動時ログ(`translation plugin: ENABLED`/`not installed`)で現在の
   状態を確認できる。
 
-## 音声認識プラグイン(`whisper-transcribe` feature、2026-08-29追加)
+## 音声認識(`POST /v1/transcribe`、whisper.cpp CLI、2026-08-29追加)
 
 `open-english`の音声認識は、ブラウザの Web Speech API 頼みで精度が
 低かった。ブラウザ内 Whisper(transformers.js、P2-α)を追加したが、
 端末の GPU/NPU/CPU 性能に大きく左右され、large 級モデルはブラウザには
-重すぎる。P2-β として、**利用者が自分の PC で起動している aruaru-llm
-(既に open-cuda / open-directx / open-cpu の推論基盤に乗っている)に
+重すぎる。P2-β として、**利用者が自分の PC で起動している aruaru-llm に
 whisper.cpp でより大きな Whisper モデルの書き起こしを任せる**経路を
 `POST /v1/transcribe` として用意する(正本:
 `open-english/docs/SPEECH_RECOGNITION_REDESIGN.md` P2-β)。
 
-`nllb-translate` と全く同じ **Cargo feature による着脱式プラグイン**
-方式:
+**実装方式(2026-08-29 方針変更)**: 当初は `whisper-rs`(whisper.cpp の
+Rust バインディング)を直接リンクする設計だったが、`whisper-rs-sys` は
+**Windows(MSVC)で bindgen が破綻する既知ブロッカー**があり
+(`whisper-rs 0.16.0` でも `WHISPER_DONT_GENERATE_BINDINGS=1` でも解消
+しない、issue 2026-04-21)、open-english の主対象が Windows なので不成立。
+代わりに **whisper.cpp の公式リリース同梱プレビルド CLI(`whisper-cli` /
+旧 `main`)を子プロセス起動**する(`pg_dump` / `Expand-Archive` / `adb` を
+子プロセスで呼ぶのと同じパターン。C++ リンク・bindgen を完全回避、GPU
+バックエンドはプレビルド CLI 側で選ばれたものがそのまま使われる)。
+**Cargo feature は不要**——コンパイル時依存が無いため、既定ビルドに
+そのまま含まれる。
 
-- **インストール(有効化)**:
-  ```bash
-  cargo build --release --features whisper-transcribe
-  # GPU で走らせる場合(whisper.cpp 自身の Vulkan / CUDA バックエンド、
-  # open-cuda が使うのと同じ物理 GPU 上で動く):
-  cargo build --release --features whisper-vulkan   # または whisper-cuda
-  ```
-  この場合のみ `whisper-rs`(whisper.cpp、C++ ビルド)への依存が
-  ビルドに含まれる。GGML モデルファイルを `ARUARU_LLM_WHISPER_MODEL`
-  (既定 `<crate>/models/whisper/ggml-base.bin`)へ配置する必要がある
-  (モデルはこのリポジトリに同梱しない。`ggml-base` は軽量・そこそこ、
-  `ggml-large-v3-turbo` が最高品質)。
-- **アンインストール(既定状態)**:
-  ```bash
-  cargo build --release
-  ```
-  `whisper-rs` はビルドに一切含まれず、バイナリサイズ・依存グラフへの
-  影響はゼロ。`POST /v1/transcribe` は `503` +
-  「rebuild with --features whisper-transcribe」の正直なエラーを返す。
+- **有効化**: 2 つのファイルを置くだけ(ビルド不要)。
+  1. whisper.cpp の[プレビルド `whisper-cli`](https://github.com/ggml-org/whisper.cpp/releases)を
+     `<crate>/models/whisper/whisper-cli`(Windows は `whisper-cli.exe`)へ、
+     または `ARUARU_LLM_WHISPER_CLI` でパス指定。
+  2. GGML モデル(`ggml-base.bin` は軽量・そこそこ、`ggml-large-v3-turbo` が
+     最高品質。いずれも非同梱)を `<crate>/models/whisper/ggml-base.bin` へ、
+     または `ARUARU_LLM_WHISPER_MODEL` でパス指定。
+- **未配置時**: `POST /v1/transcribe` は `503` + 入手先を案内するエラー。
 - **状態確認**: `GET /v1/runtime` の `whisper` フィールド
-  (`compiled_in` / `backend` / `model_path` / `model_present` / `detail`)。
-- **正直な開示・検証状況**: `whisper-transcribe` feature を有効化した
-  実ビルド・実モデルロード・実書き起こしの E2E は **未検証**。
-  この開発環境で `--features whisper-transcribe` のビルドを試したところ、
-  C++ ツールチェーン(CMake / libclang / bindgen)自体は動作したが、
-  `whisper-rs-sys v0.13.1` の**事前生成バインディングのサイズ表明**
-  (`whisper_full_params` のサイズが 264 バイト前提)がローカルで
-  コンパイルした whisper.cpp の構造体レイアウトと食い違い、
-  `attempt to compute 1_usize - 264_usize, which would overflow` で
-  ビルドが失敗した(このリポジトリのコードではなく上流
-  `whisper-rs-sys` のパッケージング問題)。既定ビルド(feature 無し、
-  CI・VPS 本番相当)は影響を受けず正常にビルド・テスト(97 件全 green)
-  できることを確認済み。`nllb-translate` と同じ「重量級 C++ 依存は
-  feature 隔離、実 E2E は環境が揃い次第」という位置づけ。
-  - 次にすべきこと: 動作する `whisper-rs` バージョンへのピン留め、
-    または上流修正の追従。その後、実 GGML モデルで
-    `POST /v1/transcribe` を実 HTTP 検証する。
+  (`available` / `backend` / `cli_path` / `cli_present` / `model_path` /
+  `model_present` / `detail`)。
+- **調整**: `ARUARU_LLM_WHISPER_TIMEOUT_SECS`(既定 300)で子プロセスの
+  壁時計上限。
+- **正直な開示・検証状況**: `cargo build --release` 成功、
+  `cargo test --release` **100 件全 green**(新規 `transcribe` テスト 7 件
+  = WAV RIFF ヘッダ生成・whisper-cli JSON パース・CLI/モデル不在時の
+  エラー・env 上書き)。**実 `whisper-cli` + 実 GGML モデルでの書き起こし
+  E2E は、この開発環境に両方が無いため未検証**——次周、プレビルド CLI と
+  `ggml-base.bin` を用意して `POST /v1/transcribe` を実 HTTP で検証する。
 
 ## 「分身の術」構成
 

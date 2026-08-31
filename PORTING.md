@@ -218,34 +218,45 @@ penalty`(CTRL方式、penalty>1.0で既に登場したトークンのlogitを弱
    `via_generate == no_penalty`アサーションで裏付け済み)ため、移植先で
    挙動を変えたくない場合はこの値に設定すればよい。
 
-## 9. 音声認識プラグイン(`whisper-transcribe` feature、2026-08-29追加)
+## 9. 音声認識(`POST /v1/transcribe`、whisper.cpp CLI、2026-08-29追加)
 
 `POST /v1/transcribe`(`src/transcribe.rs`)を他プロジェクトへ持ち込む
 場合の要点。正本は `open-english/docs/SPEECH_RECOGNITION_REDESIGN.md`
 §P2-β。
 
-1. **`nllb-translate` と全く同じ feature 隔離パターン**でコピーする:
-   `Cargo.toml` の `[features]` に `whisper-transcribe`(既定オフ)、
-   `src/transcribe.rs` に `#[cfg(feature = "whisper-transcribe")]` /
-   `#[cfg(not(...))]` の 2 実装(有効時=実書き起こし、無効時=常に
-   `Err`)、`is_available()` で feature フラグを実行時に問い合わせる。
-2. **`whisper-rs` を直接リンクしないこと**。`whisper-rs-sys` は
+1. **`whisper-rs` を直接リンクしないこと**(最重要)。`whisper-rs-sys` は
    Windows(MSVC)で bindgen が glibc 固有型を生成して破綻する既知
    ブロッカーがあり、`0.16.0` でも `WHISPER_DONT_GENERATE_BINDINGS=1`
-   でも解消しない。代わりに **whisper.cpp のプレビルド CLI
-   (`whisper-cli.exe`)を子プロセス起動**する(`Db::backup_postgres_
-   via_pg_dump` が `pg_dump` を、`component_update` が `Expand-Archive`
-   を呼ぶのと同じパターン)。CLI パスは `ARUARU_LLM_WHISPER_CLI`。
-3. 入力は **16kHz mono f32 PCM の LE バイト列を base64 化**したもの
+   でも解消しない(issue 2026-04-21、公式 fix 未提供)。代わりに
+   **whisper.cpp の公式リリース同梱プレビルド CLI(`whisper-cli` / 旧
+   `main`)を子プロセス起動**する(`Db::backup_postgres_via_pg_dump` が
+   `pg_dump` を、`component_update` が `Expand-Archive` を、Android 連携が
+   `adb` を子プロセスで呼ぶのと同じパターン)。C++ リンク・bindgen を
+   完全回避できるため **Cargo feature は不要**——`src/transcribe.rs` は
+   常にコンパイルされ、`is_available()` = `cli_present() && model_present()`
+   の**実行時**判定で可否を出す。
+2. 実装(`src/transcribe.rs`、~250 行、外部 crate 追加なし): 16kHz mono
+   f32 PCM → 最小 WAV を手書き(44 バイトヘッダ + i16 サンプル)→
+   `whisper-cli -m <model> -f <wav> -l <lang|auto> -oj -of <prefix> -nt
+   -np -t <n>` を `std::process::Command` で起動 → `<prefix>.json` を
+   `serde_json::Value` で緩くパース(`transcription[].text` 連結、
+   `result.language`)。壁時計上限(既定 300s、`*_TIMEOUT_SECS`)超過で
+   `child.kill()`。スクラッチは `std::env::temp_dir()` 下の一意サブ
+   ディレクトリ(`tempfile` crate を実行時依存に加えない)。
+3. パス解決: `ARUARU_LLM_WHISPER_CLI`(既定 `<crate>/models/whisper/
+   whisper-cli[.exe]`、`main[.exe]` もフォールバック)、
+   `ARUARU_LLM_WHISPER_MODEL`(既定 `.../ggml-base.bin`)。どちらも
+   リポジトリ非同梱。無ければ `503` + 入手先(whisper.cpp releases)を案内。
+4. 入力は **16kHz mono f32 PCM の LE バイト列を base64 化**したもの
    (呼び出し側=ブラウザが `OfflineAudioContext` で 16kHz へリサンプル
    済みの `Float32Array` をそのまま送る想定)。`sample_rate ≠ 16000` /
    base64 不正 / 4 の倍数でない / 10 分超(~38MB)はいずれも `400`。
-4. 重い書き起こしは `tokio::task::spawn_blocking` へ逃がす
+5. 重い子プロセス処理は `tokio::task::spawn_blocking` へ逃がす
    (`generate` ハンドラと同じ)。
-5. `GET /v1/runtime` に `whisper` 段(`compiled_in` / `backend` /
-   `model_path` / `model_present` / `detail`)を追加し、feature の有無と
-   モデルファイルの実在を**正直に**見せる。両方 true のときだけ実際に
-   書き起こせる。
+6. `GET /v1/runtime` に `whisper` 段(`available` / `backend` /
+   `cli_path` / `cli_present` / `model_path` / `model_present` /
+   `detail`)を追加し、CLI とモデルの実在を**正直に**見せる。両方
+   true のときだけ実際に書き起こせる。
 
 ## 注意事項
 
