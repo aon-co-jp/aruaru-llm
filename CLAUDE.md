@@ -800,11 +800,25 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
      (`src/transcribe.rs` の `#[cfg(feature = "whisper-transcribe")]`
      ブロック)は whisper-rs 0.14 の API に対して書いたが、上流ビルドが
      通らないため実コンパイル検証はできていない。**
-  - 次にすべきこと: (1) 動作する `whisper-rs` バージョンへのピン留め
-     (`=0.13` 等)または上流修正の追従、その後 feature ブロックの実
-     コンパイル+実 GGML モデルでの `POST /v1/transcribe` 実 HTTP 検証、
-     (2) open-english 側 P2-γ(Web Speech API + ブラウザ Whisper +
-     この `/v1/transcribe` の 3 経路 n-best 融合)への配線。
+  - **追記(2026-08-29 多言語再調査、`open-english/docs/SPEECH_RECOGNITION_
+     REDESIGN.md` §3.6)**: `whisper-rs-sys` の Windows(MSVC)ビルド不能は
+     **`whisper-rs 0.16.0` でも `WHISPER_DONT_GENERATE_BINDINGS=1` でも
+     解消しない**既知ブロッカー(bindgen が glibc 固有型を生成、issue
+     2026-04-21、公式 fix 未提供)と判明。バージョンピン留めでは解決
+     しない。
+  - 次にすべきこと(**方針変更**): (1) `whisper-rs` を直接リンクするのを
+     やめ、**whisper.cpp のプレビルド CLI(`whisper-cli.exe`、公式リリース
+     同梱)をサブプロセス起動**する方式へ `src/transcribe.rs` の
+     `#[cfg(feature = "whisper-transcribe")]` ブロックを差し替える
+     (`Db::backup_postgres_via_pg_dump` が `pg_dump` を、`component_update`
+     が `Expand-Archive` を子プロセスで呼ぶのと同じパターン。C++ リンク・
+     bindgen を完全回避、GPU は CLI 側 feature で選択)。CLI パスは
+     `ARUARU_LLM_WHISPER_CLI`(既定 `<crate>/models/whisper/whisper-cli.exe`)。
+     `Cargo.toml` の `whisper-rs` optional dep は削除。`POST /v1/transcribe`
+     ・`GET /v1/runtime` の `whisper` 段・feature 名はそのまま維持。
+     (2) その後 実 GGML モデル + プレビルド CLI で `POST /v1/transcribe`
+     実 HTTP 検証。(3) open-english 側 P2-γ(Web Speech API + ブラウザ
+     Whisper + この `/v1/transcribe` の 3 経路 n-best 融合)への配線。
 
 - **2026-08-25 セキュリティ監査(cargo audit)を実施(open-english側の
   ユーザー指示「関連リポジトリのセキュリティ監査」の一環、詳細調査・
