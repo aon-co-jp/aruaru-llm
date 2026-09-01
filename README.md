@@ -144,6 +144,60 @@ Python向けのAIライブラリとLLMをRust向けの書き直しを開始し�
 > 専用で、生成とは役割分担している(無理に統合しない設計)。詳細・理由は
 > [CLAUDE.md](CLAUDE.md)を参照。
 
+## open-cudaは必須の相方(SET) / open-cuda is a required companion (SET)
+
+**日本語**: `aruaru-llm`は単体では成立しない。推論エンジンの本体は
+[`open-cuda`](https://github.com/aon-co-jp/open-cuda)の
+`opencuda-core`/`opencuda-cpu`/`opencuda-blas`/`opencuda-bert`/
+`open-cuda-llm`/`open-cuda-whisper`クレート(GEMM・Attention・
+埋め込み・GPT-2デコーダ・音声認識の実装)であり、`aruaru-llm`は
+それらをCargoの**path依存**(`../open-cuda/crates/opencuda-*`)として
+取り込んでHTTPで公開する薄い層にすぎない。したがって:
+
+- **ソースからビルドする場合**: `aruaru-llm`の隣(1つ上の階層)に
+  `open-cuda`をcloneしておくこと(`F:\...\repository\aruaru-llm`と
+  `F:\...\repository\open-cuda`が並ぶ配置)。CIの`release.yml`は
+  ビルド直前に`open-cuda`を自動cloneする。`RPoem`・`RS-JSON`等、他の
+  sibling path依存も同様。
+- **`aruaru-llm`を組み込む(HTTP経由で呼ぶ)側のリポジトリ**
+  (`open-english`等)も、`aruaru-llm`のビルド成果物を配布・実行する
+  以上、この`open-cuda`同梱の前提を必ず引き継ぐこと——`open-cuda`は
+  別プロセスではなく`aruaru-llm`バイナリへ静的リンクされるため、
+  リリース済みバイナリを使う限り追加のインストールは不要だが、
+  ソースから組む配布物では`open-cuda`のcloneが前提になる。
+- **配布バイナリ**: `aruaru-llm`の実行ファイルには`opencuda-*`の
+  コードが既に静的に含まれる(別途`open-cuda`をインストールする必要は
+  ない)。Vulkan/DirectXのGPUバックエンドだけは
+  `--features hw-detect-vulkan,real-vulkan,hw-detect-directx,real-dx12`
+  でビルドした場合のみ有効(`aruaru-llm-installer.exe`の`installgpu`
+  タスク、既定オフ)。
+
+**English**: `aruaru-llm` is not usable on its own. The actual
+inference engine lives in
+[`open-cuda`](https://github.com/aon-co-jp/open-cuda) — the
+`opencuda-core` / `opencuda-cpu` / `opencuda-blas` / `opencuda-bert` /
+`open-cuda-llm` / `open-cuda-whisper` crates (GEMM, attention,
+embeddings, the GPT-2 decoder, speech recognition). `aruaru-llm` pulls
+them in as Cargo **path dependencies** (`../open-cuda/crates/opencuda-*`)
+and is only a thin layer that exposes them over HTTP. Therefore:
+
+- **Building from source**: check out `open-cuda` next to `aruaru-llm`
+  (one directory up, so `.../repository/aruaru-llm` and
+  `.../repository/open-cuda` sit side by side). CI's `release.yml`
+  clones `open-cuda` automatically right before the build. The same
+  applies to the other sibling path deps (`RPoem`, `RS-JSON`, …).
+- **Repositories that consume `aruaru-llm`** (e.g. `open-english`) —
+  since they distribute and run `aruaru-llm` build artifacts, they
+  inherit this open-cuda requirement. `open-cuda` is statically linked
+  into the `aruaru-llm` binary (not a separate process), so a released
+  binary needs no extra install; a source-built distribution needs the
+  `open-cuda` checkout.
+- **Released binary**: the `aruaru-llm` executable already contains the
+  `opencuda-*` code statically (no separate `open-cuda` install). Only
+  the Vulkan/DirectX GPU backends require a build with
+  `--features hw-detect-vulkan,real-vulkan,hw-detect-directx,real-dx12`
+  (the `installgpu` task in `aruaru-llm-installer.exe`, off by default).
+
 ## open-cudaとのSET構成
 
 [`open-cuda`](https://github.com/aon-co-jp/open-cuda)(このエコシステムの

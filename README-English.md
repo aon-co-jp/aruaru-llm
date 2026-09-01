@@ -109,6 +109,38 @@ inference is eventually wired in.
 > lightweight, fast path for canned replies — intentionally not merged
 > with generation. See [CLAUDE.md](CLAUDE.md) for details and rationale.
 
+## open-cuda is a required companion (SET) / open-cudaは必須の相方
+
+**English**: `aruaru-llm` is not usable on its own. The actual inference
+engine lives in [`open-cuda`](https://github.com/aon-co-jp/open-cuda) —
+the `opencuda-core` / `opencuda-cpu` / `opencuda-blas` / `opencuda-bert` /
+`open-cuda-llm` / `open-cuda-whisper` crates — and `aruaru-llm` pulls them
+in as Cargo **path dependencies** (`../open-cuda/crates/opencuda-*`),
+acting only as a thin HTTP layer over them. So:
+
+- **Building from source**: check out `open-cuda` next to `aruaru-llm`
+  (`.../repository/aruaru-llm` and `.../repository/open-cuda` side by
+  side). CI's `release.yml` clones it automatically before the build.
+- **Repos that consume `aruaru-llm`** (e.g. `open-english`) inherit this
+  requirement whenever they distribute or build `aruaru-llm` artifacts.
+  `open-cuda` is statically linked into the `aruaru-llm` binary (not a
+  separate process), so a released binary needs no extra install; a
+  source-built distribution needs the `open-cuda` checkout.
+- **Released binary**: already contains the `opencuda-*` code statically.
+  Only the Vulkan/DirectX GPU backends need a build with
+  `--features hw-detect-vulkan,real-vulkan,hw-detect-directx,real-dx12`
+  (the `installgpu` task in `aruaru-llm-installer.exe`, off by default).
+
+**日本語**: `aruaru-llm`は単体では成立しない。推論エンジンの本体は
+`open-cuda`の`opencuda-*`/`open-cuda-llm`/`open-cuda-whisper`クレートで
+あり、`aruaru-llm`はそれらをCargoのpath依存として取り込みHTTPで公開する
+薄い層にすぎない。ソースからビルドする場合は`aruaru-llm`の隣に
+`open-cuda`をcloneすること(CIは自動clone)。`aruaru-llm`を組み込む
+リポジトリ(`open-english`等)もこの前提を引き継ぐ——ただし`open-cuda`は
+`aruaru-llm`バイナリへ静的リンクされるため、リリース済みバイナリを使う
+限り別途インストールは不要。Vulkan/DirectX GPUバックエンドのみ
+`--features ...real-vulkan...`ビルド時に有効(`installgpu`、既定オフ)。
+
 ## Paired ("SET") with open-cuda
 
 Depends on [`open-cuda`](https://github.com/aon-co-jp/open-cuda)'s

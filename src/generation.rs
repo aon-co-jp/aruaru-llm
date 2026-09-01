@@ -779,6 +779,13 @@ pub struct FoldResult {
     /// ことの透明性)。閾値版・ブロック探索版(線形アダプタ不使用)では
     /// `None`。
     pub ridge_lambda_used: Option<f32>,
+    /// **2026-09-01追加**: 線形アダプタ版のみ`Some(true)`。挿入した
+    /// アダプタ層が推論時にAttentionサブ層(QKV射影・softmax・P·V・
+    /// KVキャッシュ)を丸ごとスキップし、除去したブロックぶんの
+    /// Attention計算コストが実際に削減されることを示す(旧設計は出力を
+    /// ゼロで捨てるだけで演算は残っていた)。閾値版・ブロック探索版
+    /// (跡形もなく層を削除する)では`None`。
+    pub attention_compute_skipped: Option<bool>,
 }
 
 pub fn fold_active_model(device: &Arc<dyn GpuDevice>, sample_prompts: &[String], block_influence_threshold: f32) -> Result<FoldResult> {
@@ -829,6 +836,7 @@ pub fn fold_active_model(device: &Arc<dyn GpuDevice>, sample_prompts: &[String],
             generation quality is NOT guaranteed — compare completion_before_fold/completion_after_fold yourself.",
         quality_hint: None,
         ridge_lambda_used: None,
+        attention_compute_skipped: None,
     })
 }
 
@@ -917,6 +925,7 @@ pub fn fold_active_model_by_block(device: &Arc<dyn GpuDevice>, sample_prompts: &
             riskier; our own measurement showed clear breakdown when removing 5 of 6 layers).",
         quality_hint: Some(quality_hint),
         ridge_lambda_used: None,
+        attention_compute_skipped: None,
     })
 }
 
@@ -1007,6 +1016,8 @@ pub fn fold_active_model_with_linear_adapter(device: &Arc<dyn GpuDevice>, sample
             (SHIFT-LLM/SlimLLM着想、arXiv:2608.25068/arXiv:2505.22689——これらは非常に新しい論文であり本実装は\
             再現実装ではなく独自の簡略版です)。実測(6層中5層除去という極端な予算)では、跡形もなく削除する旧方式が\
             完全な劣化ループに陥ったのに対し、この方式は劣化ループを回避し実在の単語を使った出力を生成しました。\
+            挿入したアダプタ層は推論時にAttentionサブ層(QKV射影・softmax・P·V・KVキャッシュ)を丸ごとスキップするため、\
+            除去したブロックぶんのAttention計算コストは実際に削減されます(旧設計は出力をゼロで捨てるだけで演算は残っていました)。\
             正直な限界: これは完全な修正ではありません——出力は依然として文法的に一貫した文章にはならず、\
             単語の羅列に近いままです。品質は保証されません——必ず前後の生成サンプルを見比べてください。",
         disclosure_en: "This is NOT a DeepSeek-specific technique (our research found no such thing as a 'DeepSeek \
@@ -1015,11 +1026,15 @@ pub fn fold_active_model_with_linear_adapter(device: &Arc<dyn GpuDevice>, sample
             (arXiv:2608.25068 / arXiv:2505.22689; these are very recent papers and this is our own simplified \
             implementation, not a faithful reproduction). In our own measurement at an extreme budget (removing \
             5 of 6 layers), plain deletion collapsed into a degenerate repetition loop, while this approach avoided \
-            that collapse and produced output using real words. Honest limitation: this is NOT a complete fix — \
+            that collapse and produced output using real words. The inserted adapter layer skips the entire \
+            attention sub-layer at inference time (QKV projection, softmax, P·V, KV-cache), so the removed block's \
+            attention compute cost is genuinely eliminated (the old design merely discarded the output while still \
+            running the math). Honest limitation: this is NOT a complete fix — \
             the output is still not fully coherent, grammatical text, closer to a word salad. Quality is not \
             guaranteed — always compare the before/after generation sample yourself.",
         quality_hint: Some(quality_hint),
         ridge_lambda_used: Some(adapter_report.ridge_lambda_used),
+        attention_compute_skipped: Some(adapter_report.attention_compute_skipped),
     })
 }
 
