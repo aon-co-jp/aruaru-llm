@@ -1598,6 +1598,15 @@ struct FoldLayersRequest {
     /// 優れていることを確認済み、`aruaru-llm/CLAUDE.md`参照)。
     #[serde(default)]
     num_layers_to_remove: Option<usize>,
+    /// **2026-09-01追加(さらに続き)**: `num_layers_to_remove`指定時のみ
+    /// 有効。`true`なら除去ブロックを跡形もなく消すのではなく、
+    /// 最小二乗法でフィットした軽量な線形アダプタ層へ置換する
+    /// (`generation::fold_active_model_with_linear_adapter`)——極端な
+    /// 予算(除去する層数がモデルの大部分を占める場合)で実測上、
+    /// 完全な劣化ループを回避できることを確認済み(ただし完全な修正では
+    /// ない、`aruaru-llm/CLAUDE.md`参照)。既定`false`(=跡形もなく削除)。
+    #[serde(default)]
+    use_linear_adapter: bool,
 }
 
 fn default_block_influence_threshold() -> f32 {
@@ -1637,9 +1646,10 @@ async fn fold_layers_handler(req: Request, device: Arc<dyn GpuDevice>) -> Respon
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    let result = tokio::task::spawn_blocking(move || match body.num_layers_to_remove {
-        Some(n) => generation::fold_active_model_by_block(&device, &body.sample_prompts, n),
-        None => generation::fold_active_model(&device, &body.sample_prompts, body.block_influence_threshold),
+    let result = tokio::task::spawn_blocking(move || match (body.num_layers_to_remove, body.use_linear_adapter) {
+        (Some(n), true) => generation::fold_active_model_with_linear_adapter(&device, &body.sample_prompts, n),
+        (Some(n), false) => generation::fold_active_model_by_block(&device, &body.sample_prompts, n),
+        (None, _) => generation::fold_active_model(&device, &body.sample_prompts, body.block_influence_threshold),
     })
     .await;
     match result {
