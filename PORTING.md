@@ -12,6 +12,22 @@
 > `CLAUDE.md`の内容を必ず確認してください。
 
 
+## -1. Model Folding(2026-09-01新設)——依存先`open-cuda`側`open-cuda-llm`クレートの新規API
+
+`POST /v1/models/fold-layers`(3モード: 独立閾値/連続ブロック探索/線形
+アダプタ)・`POST /v1/models/layer-redundancy`の実体は`open-cuda`側
+`open-cuda-llm::GptModel`の`analyze_layer_redundancy`/
+`prune_redundant_layers`/`find_best_layer_block_to_remove`/
+`remove_layer_block`/`fold_block_with_linear_adapter`にある
+(このリポジトリは薄いHTTPラッパー`generation.rs`のみ)。移植先でも
+`open-cuda`をsibling path依存として持ってくる際は、この一式が
+`crates/open-cuda-llm/src/lib.rs`に含まれることを確認すること。
+「DeepSeekの折りたたみ理論」は実在しない技術である旨・実装した
+代替手法(ShortGPT/Gromov et al./SHIFT-LLM/SlimLLM着想)の詳細は
+`CLAUDE.md`のHANDOFF(2026-09-01)を必ず読むこと——移植先で同じ質問
+(「DeepSeekの折りたたみを実装して」)を受けた場合、同じ調査を
+繰り返す前にまずこの記録を参照すること。
+
 ## 0. Google検索APIキーのリクエスト単位オーバーライド(2026-08-25新設)
 
 `POST /v1/generate-with-search`は任意フィールド`google_search_api_key`/
