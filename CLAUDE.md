@@ -757,6 +757,110 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-09-01 Model Folding(層冗長性検出+実際の折りたたみ)を新設。
+  「DeepSeekの折りたたみ理論」は日英調査の結果、実在しないと判明
+  ——他アカウントでの再開用メモ、この記述は必ず読むこと**:
+
+  ユーザー指示「DeepSeekの折りたたみ理論(Model Folding)を実装して
+  ほしい」への対応として、まず日英2言語でGoogle/GitHub調査を行った。
+  結論: **「DeepSeekの折りたたみ理論」という技術は実在しない**
+  (DeepSeekの実際の効率化技術はMLA・FP8混合精度・DeepSeekMoEであり、
+  いずれも「折りたたみ」ではない)。混同の元と考えられるのは無関係の
+  ICLR 2025論文「Model Folding」(arXiv:2502.10216、ニューロン単位
+  k-meansクラスタリングを要する高度な手法)。このクレートの`GptModel`
+  重みには公開アクセサが無く忠実な再現は困難と判断し、代わりに
+  **より単純で実装・検証が現実的な代替手法群**を3段階で実装した
+  (いずれも実装は`open-cuda`側`open-cuda-llm`クレート、HTTP配線が
+  この`aruaru-llm`側)。
+
+  1. **層単位の独立閾値方式**(ShortGPT論文arXiv:2403.03853/
+     Gromov et al. arXiv:2403.17887方式): `GptModel::
+     analyze_layer_redundancy`(各層のBlock Influence=1-入力/出力
+     コサイン類似度を計算、読み取り専用)+`prune_redundant_layers`
+     (閾値未満の層を実際に除去)。`aruaru-llm`側
+     `generation::analyze_active_model_layer_redundancy`/
+     `fold_active_model`。**弱点(実測で発覚)**: 閾値0.99のような
+     極端な設定で6層中5層(層1〜5)が一度に削除され、"Theodoreodore
+     odoreodore..."という明確な破綻を招いた(独立した層を寄せ集める
+     設計のため、除去する層数が多い場合に非最適な組み合わせを
+     選びがち)。
+  2. **連続ブロック探索方式**(Gromov et al.論文の本来のアルゴリズム
+     に忠実化): `GptModel::find_best_layer_block_to_remove`(削除
+     したい層数を固定し、その本数の連続ブロックを総当たり比較、
+     除去による隠れ状態の変化が最小の1つを選ぶ)+`remove_layer_block`。
+     `aruaru-llm`側`generation::fold_active_model_by_block`。実測
+     (distilgpt2、6層): 1〜2層除去(`block_similarity`≈0.95〜0.98)→
+     出力は話題・文法とも維持、5層除去(6層中5層、`block_similarity`≈
+     0.82〈gpt2の場合〉/0.41〈distilgpt2の場合、候補が(start=0)か
+     (start=1)の2択しかないため〉)→依然破綻。**これはアルゴリズムの
+     不具合ではなく、その予算にはそもそも維持できる冗長性が実在
+     しないという根本的な限界**——`block_similarity`自体が実行前に
+     品質見込みを予測する正直な指標として機能することを実証した
+     (レスポンスの`quality_hint`フィールド)。
+  3. **線形アダプタ方式**(SHIFT-LLM arXiv:2608.25068/SlimLLM
+     arXiv:2505.22689のclosed-form線形置換手法に着想、**正直な開示:
+     これらは非常に新しい論文であり本実装は再現実装ではなく独自の
+     簡略版**): `GptModel::fold_block_with_linear_adapter`——除去
+     ブロックを跡形もなく消すのではなく、最小二乗法(閉形式のリッジ
+     回帰、勾配降下法は一切使わない)でフィットした1つの軽量な線形
+     アダプタ層(`DecoderLayer::linear_adapter`、Attentionサブ層は
+     ゼロに潰し残差のみ通過、FFNサブ層の`output`層だけをフィット)
+     へ置換する。`aruaru-llm`側
+     `generation::fold_active_model_with_linear_adapter`。**同じ
+     極端な予算(distilgpt2、6層中5層除去)での実測**: 旧方式2は
+     完全な劣化ループ("Theodoreodoreodoreodore...")に陥ったのに
+     対し、線形アダプタ版は劣化ループを回避し実在の英単語を使った
+     出力("I slowly, it the rainforest in a few one way with at
+     right outside to play.")を生成した。**正確に言うと**: これは
+     実測できる本物の改善だが完全な修正ではない——アダプタ版の
+     出力も文法的に一貫した文章にはならず、単語の羅列に近いまま。
+
+  ## HTTP API(`POST /v1/models/fold-layers`、3モード共存)
+  - 既定(独立閾値、方式1): `{"block_influence_threshold": 0.01}`
+  - ブロック探索(方式2): `{"num_layers_to_remove": 2}`
+  - 線形アダプタ(方式3): `{"num_layers_to_remove": 2,
+    "use_linear_adapter": true}`
+  - 読み取り専用の下調べ: `POST /v1/models/layer-redundancy`
+  詳細は`README.md`「API」節・`src/main.rs`の`FoldLayersRequest`/
+  `FoldLayersResponse`docコメント参照。
+
+  ## 検証状況(誇張しないこと)
+  - `open-cuda`側`open-cuda-llm`: `cargo test -p open-cuda-llm
+    --release -- --test-threads=1`で**32件全green**(新規6件+既存26件、
+    実GPU経路〈Vulkan/DirectX〉のregressionテスト含む)。実重み
+    (distilgpt2/gpt2)を使う`--ignored`テスト3件も実行し、上記の
+    実測結果を確認済み。
+  - `aruaru-llm`側: `cargo test --release -- --test-threads=1`で
+    **100件全green**(regressionなし)。実HTTP検証(3モードとも
+    実際にサーバーを起動しcurlで確認、`use_linear_adapter=true`の
+    出力が"Theodoreodore..."ではなく実在単語になることまで確認)済み。
+  - `open-english`側: `index.html`の該当箇所(GitHubトークンの
+    セットアップパネル内)に、この3段階の経緯・実測結果を日英併記で
+    追記・実ブラウザ検証済み。VPS(`easy-web.tokyo`)へもデプロイ済み。
+  - 3リポジトリともコミット・push済み(open-cuda: `3a887ad`、
+    aruaru-llm: `2413d46`、open-english: `998f678`、いずれも
+    `main`/`master`ブランチ)。
+
+  ## 未着手・次回検討候補(正直な開示)
+  - 線形アダプタ方式の`ridge_lambda`(既定`1e-2`固定)を呼び出し側
+    から調整可能にするか、較正サンプル数と連動して自動調整するか
+    の検討(現状は固定値のまま、大きな較正データセットでの挙動は
+    未検証)。
+  - Attentionサブ層をゼロに潰す設計は、QKV射影・softmax計算自体は
+    実行してしまう(出力だけが捨てられる)ため計算コストが完全には
+    削減されない——`DecoderLayer`に「Attention自体をスキップする」
+    専用の軽量パスを追加すれば、より高速化できる余地がある(今回は
+    既存の`DecoderLayer`インフラを100%再利用する設計を優先し、
+    新しいレイヤー型は追加しなかった)。
+  - `open-cpu`(CPU SIMD検出)・`open-cuda`内蔵Vulkan/DirectXは、
+    今回の新機能でも既存のデバイス抽象化(`device: &Arc<dyn
+    GpuDevice>`)経由でそのまま使われる設計にした(新規のGPU固有
+    コードは追加していない)——実際にGPU経路でこの3手法を検証する
+    (現状はCPU実行のみで実測)ことは次回の課題として残る。
+  - 較正データ(`sample_prompts`省略時の既定8文、`mla_calibration_
+    prompts()`を再利用)は英語の一般文のみ——日本語・他言語プロンプト
+    での較正・折りたたみ後品質の検証は未実施。
+
 - **2026-08-29 `POST /v1/transcribe`(whisper.cpp 音声認識)を新設
   (open-english の `docs/SPEECH_RECOGNITION_REDESIGN.md` P2-β、
   ブラウザ内 Whisper〈P2-α〉では端末性能が足りない利用者向けに、
