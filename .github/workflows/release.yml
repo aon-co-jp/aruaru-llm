@@ -87,17 +87,6 @@ jobs:
         run: |
           $env:CARGO_TARGET_DIR = "target-gpu"
           cargo build --release --bin aruaru-llm --features hw-detect-vulkan,real-vulkan,hw-detect-directx,real-dx12
-      - name: Package (zip, for manual install.ps1 users)
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path dist
-          Copy-Item target/release/aruaru-llm.exe dist/
-          Copy-Item install.ps1 dist/
-          Compress-Archive -Path dist/* -DestinationPath aruaru-llm-windows-x86_64.zip
-      - uses: actions/upload-artifact@v4
-        with:
-          name: aruaru-llm-windows-x86_64
-          path: aruaru-llm-windows-x86_64.zip
       - name: Install Inno Setup
         shell: pwsh
         run: choco install innosetup --no-progress -y
@@ -122,5 +111,4 @@ jobs:
         with:
           files: |
             aruaru-llm-linux-x86_64/aruaru-llm-linux-x86_64.tar.gz
-            aruaru-llm-windows-x86_64/aruaru-llm-windows-x86_64.zip
             aruaru-llm-installer/aruaru-llm-installer.exe
