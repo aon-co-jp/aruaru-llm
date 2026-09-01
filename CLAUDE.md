@@ -786,16 +786,27 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
        fold-layers開示文へ日英併記で追記、`app.js`の`foldLayersBtn`
        ハンドラが`attention_compute_skipped`をステータス欄へ表示。
      - **検証**: open-cuda `cargo test -p open-cuda-llm --release --
-       --test-threads=1` **35件全green**(新規bitwise等価テスト含む)。
-       aruaru-llm `cargo test --release -- --test-threads=1`
-       **101件全green**(regressionなし)。open-english `node --check
-       app.js` OK、静的配信で実ブラウザ表示確認(白画面・HTML崩れ・
-       コンソールエラー無し、既存の404〈whisper vendor・aruaru-llm
-       未起動〉のみ)。
-     - **残課題**: (a) skip版の実速度向上幅(CPU/GPU実測)は未取得
-       ——open-cuda側に`--ignored`ベンチ
-       `manual_bench_attention_skip_vs_computed_zeroed_attention`を
-       用意済み、次回開発機で実行。(b) `POST /v1/models/fold-layers`を
+       --test-threads=1` **35件全green**(新規bitwise等価テスト含む)、
+       `cargo clippy ... -- -D warnings` 警告0件。aruaru-llm
+       `cargo test --release -- --test-threads=1` **101件全green**
+       (regressionなし)。open-english `node --check app.js` OK、静的配信
+       で実ブラウザ表示確認。
+     - **CPU実測(開発機、open-cuda側`--ignored`ベンチ)**: 合成モデル
+       (12層中8層折りたたみ)で**約19%高速化**(731ms→899ms/gen)、
+       実GPT-2 124M(12層中6層折りたたみ)で**生成トークン列がskip有無で
+       バイト完全一致**を確認した上で**約9%高速化**(1.175s→1.289s/gen)。
+       実GPT-2ではFFN・lm_headの比重が大きく効果は相対的に小さいが、
+       折りたたむ層数に比例する。
+     - **実HTTP E2E検証(distilgpt2、実サーバー起動)**: `POST
+       /v1/models/fold-layers`(`use_linear_adapter:true`,
+       `num_layers_to_remove:2`, `ridge_lambda:0.5`)のレスポンスが
+       `attention_compute_skipped:true`・`ridge_lambda_used:0.5`を返し、
+       `completion_after_fold`が劣化ループではない実在英文
+       ("I'm going to be a bit of the day...")を生成、折りたたみ後も
+       `POST /v1/generate`が正常に動作、閾値方式(層を跡形もなく削除)
+       では`attention_compute_skipped`が`null`になることを確認。
+     - **残課題**: (a) 実GPU経路(Vulkan/DirectX)でのskip有無の速度比較
+       は未実施(CPU実測のみ)。(b) `POST /v1/models/fold-layers`を
        open-englishのUIボタンから呼ぶ導線は既存実装のまま(2026-09-02
        追加、`open-english/CLAUDE.md`参照)。
 
