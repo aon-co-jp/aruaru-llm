@@ -1536,6 +1536,118 @@ async fn select_model(req: Request) -> Response {
     }
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct LayerRedundancyRequest {
+    /// トピックを分散させた複数の文を推奨。省略・空配列なら
+    /// `mla_calibration_prompts()`(8文の一般英文)を既定として使う。
+    #[serde(default)]
+    sample_prompts: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct LayerRedundancyResponse {
+    layers: Vec<open_cuda_llm::LayerRedundancyReport>,
+    disclosure_ja: &'static str,
+    disclosure_en: &'static str,
+}
+
+const LAYER_REDUNDANCY_DISCLOSURE_JA: &str = "これはDeepSeek固有の技術ではありません(調査の結果、「DeepSeekの折りたたみ理論」は\
+    実在しないと判明しました)。ShortGPT(arXiv:2403.03853)/Gromov et al.(arXiv:2403.17887)方式の\
+    層単位Block Influence冗長性検出です。block_influenceが低いほどその層は入力≒出力の恒等写像に近く\
+    冗長と推定されます。これは少数のサンプル文からの推定であり、実際に層を除去する前の下調べです\
+    (この分析自体はモデルを一切変更しません)。";
+const LAYER_REDUNDANCY_DISCLOSURE_EN: &str = "This is NOT a DeepSeek-specific technique — our research found no such \
+    thing as a 'DeepSeek folding theory'. This follows ShortGPT (arXiv:2403.03853) / Gromov et al. (arXiv:2403.17887): \
+    layer-level Block Influence redundancy detection. A lower block_influence means that layer's output is closer to \
+    an identity mapping of its input, suggesting redundancy. This is only an estimate from a small sample of prompts, \
+    and a read-only preview before actually removing any layer (this analysis alone never modifies the model).";
+
+/// `POST /v1/models/layer-redundancy` — 現在アクティブなモデルの各層に
+/// ついて、Block Influence(層の入力≒出力ならほぼ0=冗長)を計算する
+/// **読み取り専用**の分析。モデルは一切変更されない(`POST /v1/models/
+/// fold-layers`とは異なる、実際に折りたたむ前の下調べ用エンドポイント)。
+async fn layer_redundancy_handler(req: Request, device: Arc<dyn GpuDevice>) -> Response {
+    let Json(body): Json<LayerRedundancyRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let result = tokio::task::spawn_blocking(move || generation::analyze_active_model_layer_redundancy(&device, &body.sample_prompts)).await;
+    match result {
+        Ok(Ok(layers)) => json_response(StatusCode::OK, &LayerRedundancyResponse { layers, disclosure_ja: LAYER_REDUNDANCY_DISCLOSURE_JA, disclosure_en: LAYER_REDUNDANCY_DISCLOSURE_EN }),
+        Ok(Err(e)) => json_response(StatusCode::SERVICE_UNAVAILABLE, &InstallModelErrorResponse { error: format!("{e:#}") }),
+        Err(e) => json_response(StatusCode::INTERNAL_SERVER_ERROR, &InstallModelErrorResponse { error: format!("layer_redundancy task panicked: {e}") }),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct FoldLayersRequest {
+    #[serde(default)]
+    sample_prompts: Vec<String>,
+    /// この値未満のBlock Influenceを持つ層を実際に除去する。既定
+    /// `0.01`(=入力と出力のコサイン類似度が99%以上一致=ほぼ恒等写像の
+    /// 層のみを対象、ShortGPT論文が報告する典型的な冗長層の水準より
+    /// 保守的な既定値——「まず控えめに試す」ことを優先した)。
+    #[serde(default = "default_block_influence_threshold")]
+    block_influence_threshold: f32,
+}
+
+fn default_block_influence_threshold() -> f32 {
+    0.01
+}
+
+#[derive(Debug, Serialize)]
+struct FoldLayersResponse {
+    redundancy: Vec<open_cuda_llm::LayerRedundancyReport>,
+    original_layer_count: usize,
+    pruned_layer_count: usize,
+    removed_layer_indices: Vec<usize>,
+    sample_prompt: String,
+    completion_before_fold: String,
+    completion_after_fold: String,
+    disclosure_ja: String,
+    disclosure_en: String,
+    /// `open-cuda-llm`側`GptModel::prune_redundant_layers`が返す、
+    /// アルゴリズム自体(Block Influence方式)の日英併記の開示文
+    /// (上のdisclosure_ja/enは「DeepSeekとの混同」に関する開示、こちらは
+    /// 「何のアルゴリズムを使ったか」の開示——別軸のため分けて返す)。
+    layer_removal_technique_disclosure: &'static str,
+}
+
+/// `POST /v1/models/fold-layers` — 実際にモデルの層を除去し、**現在
+/// アクティブなモデルを差し替える**(`generation::fold_active_model`参照)。
+/// 折りたたみ前後の同一プロンプトへの生成結果を両方返すので、呼び出し側
+/// (UI等)は品質劣化の有無を実際の出力で確認できる。
+async fn fold_layers_handler(req: Request, device: Arc<dyn GpuDevice>) -> Response {
+    let Json(body): Json<FoldLayersRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let threshold = body.block_influence_threshold;
+    let result = tokio::task::spawn_blocking(move || generation::fold_active_model(&device, &body.sample_prompts, threshold)).await;
+    match result {
+        Ok(Ok(r)) => json_response(
+            StatusCode::OK,
+            &FoldLayersResponse {
+                redundancy: r.redundancy,
+                original_layer_count: r.prune_report.original_layer_count,
+                pruned_layer_count: r.prune_report.pruned_layer_count,
+                removed_layer_indices: r.prune_report.removed_layer_indices,
+                sample_prompt: r.sample_prompt,
+                completion_before_fold: r.completion_before_fold,
+                completion_after_fold: r.completion_after_fold,
+                disclosure_ja: r.disclosure_ja.to_string(),
+                disclosure_en: r.disclosure_en.to_string(),
+                layer_removal_technique_disclosure: r.prune_report.disclosure,
+            },
+        ),
+        Ok(Err(e)) => {
+            tracing::warn!("fold_active_model failed: {e:#}");
+            json_response(StatusCode::BAD_REQUEST, &InstallModelErrorResponse { error: format!("{e:#}") })
+        }
+        Err(e) => json_response(StatusCode::INTERNAL_SERVER_ERROR, &InstallModelErrorResponse { error: format!("fold_layers task panicked: {e}") }),
+    }
+}
+
 /// `POST /v1/models/install` — カタログから選択したモデルをHugging Face
 /// からダウンロードし、`{ARUARU_LLM_MODELS_ROOT}/{id}/`へ配置する。
 /// ダウンロード自体は必ずこのエンドポイントへの明示的なリクエストからのみ
@@ -2372,6 +2484,8 @@ async fn main() -> anyhow::Result<()> {
     let generate_search_registry = Arc::clone(&registry);
     let translate_pool = Arc::clone(&device_pool);
     let translate_registry = Arc::clone(&registry);
+    let layer_redundancy_pool = Arc::clone(&device_pool);
+    let fold_layers_pool = Arc::clone(&device_pool);
     let transcribe_registry = Arc::clone(&registry);
     let admin_register_registry = Arc::clone(&registry);
     let admin_list_registry = Arc::clone(&registry);
@@ -2481,6 +2595,20 @@ async fn main() -> anyhow::Result<()> {
         )
         .at("/v1/models/install", post(handler_fn(|req, _p| Box::pin(install_model(req)))))
         .at("/v1/models/select", post(handler_fn(|req, _p| Box::pin(select_model(req)))))
+        .at(
+            "/v1/models/layer-redundancy",
+            post(handler_fn(move |req, _p| {
+                let device = layer_redundancy_pool.next_device();
+                async move { layer_redundancy_handler(req, device).await }
+            })),
+        )
+        .at(
+            "/v1/models/fold-layers",
+            post(handler_fn(move |req, _p| {
+                let device = fold_layers_pool.next_device();
+                async move { fold_layers_handler(req, device).await }
+            })),
+        )
         .at("/v1/recommend", get(plain(|| Box::pin(recommend_model()))))
         .at("/v1/recommend-and-download", post(plain(|| Box::pin(recommend_and_download()))))
         .at("/v1/download-larger", post(plain(|| Box::pin(download_larger_model()))))
