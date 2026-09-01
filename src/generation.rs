@@ -860,6 +860,108 @@ pub fn fold_active_model_by_block(device: &Arc<dyn GpuDevice>, sample_prompts: &
     })
 }
 
+/// **2026-09-01追加(さらに続き): 線形アダプタ版の折りたたみ**。
+///
+/// ユーザーからの追加指示「極端な予算(6層中5層除去)での明確な品質
+/// 劣化を、open-directx/open-cuda/aruaru-llm/open-cpuを駆使してもう一度
+/// 改善してほしい」への対応として、`open-cuda-llm`側に
+/// `fold_block_with_linear_adapter`(SHIFT-LLM/SlimLLM着想のclosed-form
+/// 線形置換、[arXiv:2608.25068](https://arxiv.org/abs/2608.25068)/
+/// [arXiv:2505.22689](https://arxiv.org/abs/2505.22689))を実装した
+/// (詳細・実測結果は`open-cuda-llm`側の同関数docコメント参照)。
+///
+/// # 正直な実測結果(誇張しないこと、最重要)
+/// 実GPT-2(distilgpt2、6層)で6層中5層を除去する極端な予算を比較:
+/// - **`fold_active_model_by_block`(跡形もなく削除)**: 完全な劣化ループ
+///   ("Theodoreodoreodoreodoreodore...")
+/// - **`fold_active_model_with_linear_adapter`(線形アダプタへ置換)**:
+///   劣化ループは回避され、実在の単語を使った出力
+///   ("I slowly, it the rainforest in a few one way with at right
+///   outside to play.")
+///
+/// **これは完全な修正ではない**——線形アダプタ版の出力も文法的に
+/// 一貫した文章ではない(単語の羅列に近い)。しかし「完全に破綻して
+/// 無意味な反復に陥る」ことは避けられており、部分的だが実測できる
+/// 改善である。誇張せず、この限界を`disclosure_ja`/`disclosure_en`へ
+/// 常に含める。
+pub fn fold_active_model_with_linear_adapter(device: &Arc<dyn GpuDevice>, sample_prompts: &[String], num_layers_to_remove: usize) -> Result<FoldResult> {
+    let before = active_or_load_default().map_err(|e| anyhow::anyhow!(e))?;
+    let mut fresh = load_from_dir(&before.dir).map_err(|e| anyhow::anyhow!(e)).context("failed to reload a fresh copy of the active model for folding")?;
+
+    let prompts: Vec<String> = if sample_prompts.is_empty() { mla_calibration_prompts() } else { sample_prompts.to_vec() };
+    let mut encoded = Vec::with_capacity(prompts.len());
+    for text in &prompts {
+        let ids = fresh.tokenizer.encode(text).with_context(|| format!("failed to tokenize sample prompt {text:?}"))?;
+        anyhow::ensure!(!ids.is_empty(), "sample prompt {text:?} encoded to zero tokens");
+        encoded.push(ids);
+    }
+    let candidate = fresh.model.find_best_layer_block_to_remove(device, &encoded, num_layers_to_remove).context("GptModel::find_best_layer_block_to_remove failed")?;
+    let block_similarity = candidate.block_similarity;
+    let adapter_report = fresh.model.fold_block_with_linear_adapter(device, &encoded, &candidate).context("GptModel::fold_block_with_linear_adapter failed")?;
+
+    let redundancy = vec![open_cuda_llm::LayerRedundancyReport { layer_index: candidate.start, block_influence: 1.0 - block_similarity, sample_count: adapter_report.fit_sample_rows }];
+    // 線形アダプタ版は「N層→1層」への置換のため、`LayerPruneReport`と
+    // 完全に同じ形状にはならない(`removed_layer_indices`は「跡形もなく
+    // 消えた層」ではなく「アダプタへ置き換わった層」を指す)——既存の
+    // レスポンス形状との互換のため、意味を変えずにそのまま詰め替える。
+    let prune_report = open_cuda_llm::LayerPruneReport {
+        original_layer_count: adapter_report.original_layer_count,
+        pruned_layer_count: adapter_report.layer_count_after,
+        removed_layer_indices: (candidate.start..candidate.start + candidate.len).collect(),
+        disclosure: adapter_report.disclosure,
+    };
+
+    let sample_prompt = prompts.first().cloned().unwrap_or_else(|| "The quick brown fox".to_string());
+    let sample_ids = before.tokenizer.encode(&sample_prompt).context("failed to tokenize sample_prompt for before/after comparison")?;
+    let completion_before_fold = before
+        .model
+        .generate_with_repetition_penalty(device, &sample_ids, 20, default_repetition_penalty())
+        .ok()
+        .and_then(|ids| before.tokenizer.decode(&ids).ok())
+        .unwrap_or_else(|| "(generation failed)".to_string());
+    let completion_after_fold = fresh
+        .model
+        .generate_with_repetition_penalty(device, &sample_ids, 20, default_repetition_penalty())
+        .ok()
+        .and_then(|ids| fresh.tokenizer.decode(&ids).ok())
+        .unwrap_or_else(|| "(generation failed)".to_string());
+
+    *ACTIVE.write().unwrap() = Some(Arc::new(fresh));
+
+    let quality_hint = if block_similarity >= 0.95 {
+        "block_similarity is high — this removal is likely to preserve quality well even with plain removal; the linear adapter's main benefit shows up at lower block_similarity."
+    } else if block_similarity >= 0.85 {
+        "block_similarity is moderate — quality change is likely either way; the linear adapter may or may not help noticeably here."
+    } else {
+        "block_similarity is low — plain removal is likely to collapse into degenerate repetition at this budget. The linear adapter tends to avoid that total collapse (our own measurement: real words instead of a repeated fake token), but does NOT restore fully coherent, grammatical output — compare completion_before_fold/completion_after_fold yourself."
+    };
+
+    Ok(FoldResult {
+        redundancy,
+        prune_report,
+        sample_prompt,
+        completion_before_fold,
+        completion_after_fold,
+        disclosure_ja: "これはDeepSeek固有の技術ではありません(調査の結果、「DeepSeekの折りたたみ理論」は実在しないと判明しました)。\
+            除去したブロックの代わりに、最小二乗法(閉形式のリッジ回帰)でフィットした軽量な線形アダプタ層を挿入します\
+            (SHIFT-LLM/SlimLLM着想、arXiv:2608.25068/arXiv:2505.22689——これらは非常に新しい論文であり本実装は\
+            再現実装ではなく独自の簡略版です)。実測(6層中5層除去という極端な予算)では、跡形もなく削除する旧方式が\
+            完全な劣化ループに陥ったのに対し、この方式は劣化ループを回避し実在の単語を使った出力を生成しました。\
+            正直な限界: これは完全な修正ではありません——出力は依然として文法的に一貫した文章にはならず、\
+            単語の羅列に近いままです。品質は保証されません——必ず前後の生成サンプルを見比べてください。",
+        disclosure_en: "This is NOT a DeepSeek-specific technique (our research found no such thing as a 'DeepSeek \
+            folding theory'). Instead of deleting the removed block outright, this inserts a lightweight linear \
+            adapter fit via closed-form ridge regression (no gradient descent) — inspired by SHIFT-LLM/SlimLLM \
+            (arXiv:2608.25068 / arXiv:2505.22689; these are very recent papers and this is our own simplified \
+            implementation, not a faithful reproduction). In our own measurement at an extreme budget (removing \
+            5 of 6 layers), plain deletion collapsed into a degenerate repetition loop, while this approach avoided \
+            that collapse and produced output using real words. Honest limitation: this is NOT a complete fix — \
+            the output is still not fully coherent, grammatical text, closer to a word salad. Quality is not \
+            guaranteed — always compare the before/after generation sample yourself.",
+        quality_hint: Some(quality_hint),
+    })
+}
+
 /// `open_cuda_llm::GptModel::generate_speculative`(DSpark/Leviathan et al.
 /// 方式のロスレス投機的デコード、2026-08-17新設)を、現在アクティブな
 /// モデルをターゲットとして呼ぶ薄いラッパー。`draft_id`は
