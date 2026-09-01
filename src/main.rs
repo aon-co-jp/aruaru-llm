@@ -1650,6 +1650,13 @@ struct FoldLayersResponse {
     /// `open-cuda-llm`側の既定値`0.01`が反映される——呼び出し側が
     /// パラメータが黙って無視されていないことを確認できるようにする。
     ridge_lambda_used: Option<f32>,
+    /// **2026-09-01追加**: `use_linear_adapter=true`のときのみ`true`。
+    /// 挿入したアダプタ層が推論時にAttentionサブ層(QKV射影・softmax・
+    /// P·V・KVキャッシュ)を丸ごとスキップし、除去したブロックぶんの
+    /// Attention計算コストが実際に削減されることを示す(旧設計は出力を
+    /// ゼロで捨てるだけで演算は残っていた)。閾値方式・ブロック探索方式
+    /// (層を跡形もなく削除する)では`null`。
+    attention_compute_skipped: Option<bool>,
 }
 
 /// `POST /v1/models/fold-layers` — 実際にモデルの層を除去し、**現在
@@ -1686,6 +1693,7 @@ async fn fold_layers_handler(req: Request, device: Arc<dyn GpuDevice>) -> Respon
                 layer_removal_technique_disclosure: r.prune_report.disclosure,
                 quality_hint: r.quality_hint,
                 ridge_lambda_used: r.ridge_lambda_used,
+                attention_compute_skipped: r.attention_compute_skipped,
             },
         ),
         Ok(Err(e)) => {

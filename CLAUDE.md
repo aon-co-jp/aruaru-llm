@@ -757,6 +757,69 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-09-01(続き2) Model Folding: Attentionサブ層を丸ごとスキップ
+  する軽量パスを実装(open-cuda + aruaru-llm + open-english の3リポジトリ
+  スライス)、および「open-cudaは必須の相方」を日英でREADMEへ明文化
+  ——他アカウントでの再開用メモ**:
+
+  1. **Attentionスキップ軽量パス(3リポジトリスライス)**: 前回の
+     「未着手・次回検討候補」に挙げていた
+     「`DecoderLayer`に『Attention自体をスキップする』専用の軽量パスを
+     追加すれば、より高速化できる余地がある」を実装した。
+     - **open-cuda側**(`crates/open-cuda-llm/src/lib.rs`、正本):
+       `DecoderLayer`へ`skip_attention: bool`を追加、`linear_adapter`
+       コンストラクタでのみ`true`。`forward_step`/`forward_prefill`が
+       `skip_attention`時にln_1・QKV射影・softmax・P·V・attn_out・
+       KVキャッシュpushを一切実行せず残差だけをFFNへ渡す。
+       `linear_adapter`の`qkv`/`attn_out`はゼロ出力なので**ビット単位で
+       数値等価**(生成トークン列が1トークンも変わらない)。詳細・
+       検証結果は`open-cuda/CLAUDE.md`の2026-09-01(続き2)エントリ。
+     - **このリポジトリ側**: `generation.rs`の`FoldResult`へ
+       `attention_compute_skipped: Option<bool>`(線形アダプタ版のみ
+       `Some(true)`、閾値方式・ブロック探索方式は`None`)、
+       `fold_active_model_with_linear_adapter`の`disclosure_ja`/
+       `disclosure_en`にAttention計算コストが実際に削減される旨を追記。
+       `main.rs`の`FoldLayersResponse`へ`attention_compute_skipped:
+       Option<bool>`を追加し`POST /v1/models/fold-layers`のレスポンスへ
+       反映。
+     - **open-english側**: `index.html`の「⚙ Setup aruaru-llm」パネル内
+       fold-layers開示文へ日英併記で追記、`app.js`の`foldLayersBtn`
+       ハンドラが`attention_compute_skipped`をステータス欄へ表示。
+     - **検証**: open-cuda `cargo test -p open-cuda-llm --release --
+       --test-threads=1` **35件全green**(新規bitwise等価テスト含む)。
+       aruaru-llm `cargo test --release -- --test-threads=1`
+       **101件全green**(regressionなし)。open-english `node --check
+       app.js` OK、静的配信で実ブラウザ表示確認(白画面・HTML崩れ・
+       コンソールエラー無し、既存の404〈whisper vendor・aruaru-llm
+       未起動〉のみ)。
+     - **残課題**: (a) skip版の実速度向上幅(CPU/GPU実測)は未取得
+       ——open-cuda側に`--ignored`ベンチ
+       `manual_bench_attention_skip_vs_computed_zeroed_attention`を
+       用意済み、次回開発機で実行。(b) `POST /v1/models/fold-layers`を
+       open-englishのUIボタンから呼ぶ導線は既存実装のまま(2026-09-02
+       追加、`open-english/CLAUDE.md`参照)。
+
+  2. **「open-cudaは必須の相方」をREADMEへ明文化(ユーザー指示、日英
+     併記)**: `README.md`・`README-English.md`の`open-cuda`SET節の前に
+     新セクションを追加。要点——`aruaru-llm`は単体では成立せず、推論
+     エンジンの本体は`open-cuda`の`opencuda-*`/`open-cuda-llm`/
+     `open-cuda-whisper`クレート(GEMM・Attention・埋め込み・GPT-2
+     デコーダ・音声認識)であり、`aruaru-llm`はそれらをCargoの**path
+     依存**として取り込みHTTPで公開する薄い層にすぎない。したがって
+     (a)ソースからビルドする側は隣に`open-cuda`をcloneする(CIは
+     `release.yml`が自動clone)、(b)`aruaru-llm`を組み込む側
+     (`open-english`等)も同じ前提を引き継ぐ——ただし`open-cuda`は
+     `aruaru-llm`バイナリへ**静的リンク**されるため、リリース済み
+     バイナリを使う限り別途インストールは不要、(c)Vulkan/DirectX GPU
+     バックエンドのみ`--features hw-detect-vulkan,real-vulkan,
+     hw-detect-directx,real-dx12`ビルド時に有効
+     (`aruaru-llm-installer.exe`の`installgpu`タスク、既定オフ)。
+     **インストーラーへの別途同梱は不要**という結論——open-cudaに
+     単体ランタイム成果物は存在せず、コンパイル済み`aruaru-llm.exe`に
+     `opencuda-*`コードが既に含まれる。`open-english`側の
+     `installer/windows/fetch-aruaru-llm.ps1`・`installer/unix/
+     fetch-aruaru-llm.sh`のコメントにもこの旨を日英併記で追記した。
+
 - **2026-09-01 Model Folding(層冗長性検出+実際の折りたたみ)を新設。
   「DeepSeekの折りたたみ理論」は日英調査の結果、実在しないと判明
   ——他アカウントでの再開用メモ、この記述は必ず読むこと**:
