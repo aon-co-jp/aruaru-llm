@@ -661,6 +661,113 @@ pub fn generate(device: &Arc<dyn GpuDevice>, prompt: &str, max_new_tokens: usize
     loaded.tokenizer.decode(&generated_ids).context("open-cuda-llm tokenizer decode failed")
 }
 
+/// **2026-09-01新設: レイヤー冗長性分析(読み取り専用)**。
+///
+/// ## 経緯・正直な開示
+/// ユーザーから「DeepSeekの折りたたみ理論(Model Folding)を実装して
+/// ほしい」との依頼を受け、日英2言語でGoogle/GitHub調査を行った結果、
+/// **「DeepSeekのfolding理論」という技術は実在しない**ことが判明した
+/// (DeepSeekの実際の効率化技術はMLA・FP8混合精度・DeepSeekMoE等であり、
+/// いずれも「折りたたみ」ではない)。混同の元と考えられるのは無関係の
+/// **ICLR 2025論文「Model Folding」**
+/// ([arXiv:2502.10216](https://arxiv.org/abs/2502.10216))——こちらは
+/// レイヤーをまたいだニューロン単位のk-meansクラスタリング+データ
+/// フリーな分散補正という高度な手法で、本クレートの`GptModel`は重みへの
+/// 公開アクセサを持たないため(意図的なカプセル化)、忠実な再現は
+/// 大規模なAPI拡張を要する。代わりに、より単純で実装・検証が現実的な
+/// **層単位のBlock Influence冗長性検出+実際の層除去**(ShortGPT論文
+/// [arXiv:2403.03853](https://arxiv.org/abs/2403.03853)/Gromov et al.
+/// [arXiv:2403.17887](https://arxiv.org/abs/2403.17887)方式)を実装した
+/// (詳細は`open-cuda-llm`側`GptModel::analyze_layer_redundancy`/
+/// `prune_redundant_layers`のdocコメント参照)。**これは本物のModel
+/// Folding論文の代替であり、DeepSeekとは無関係**——この事実を隠さず
+/// レスポンスの`disclosure`に常に含める。
+///
+/// `sample_prompts`が空なら、既存の`mla_calibration_prompts()`
+/// (トピックを分散させた8文の一般英文)を既定として使う。
+pub fn analyze_active_model_layer_redundancy(device: &Arc<dyn GpuDevice>, sample_prompts: &[String]) -> Result<Vec<open_cuda_llm::LayerRedundancyReport>> {
+    let loaded = active_or_load_default().map_err(|e| anyhow::anyhow!(e))?;
+    let prompts: Vec<String> = if sample_prompts.is_empty() { mla_calibration_prompts() } else { sample_prompts.to_vec() };
+    let mut encoded = Vec::with_capacity(prompts.len());
+    for text in &prompts {
+        let ids = loaded.tokenizer.encode(text).with_context(|| format!("failed to tokenize sample prompt {text:?}"))?;
+        anyhow::ensure!(!ids.is_empty(), "sample prompt {text:?} encoded to zero tokens");
+        encoded.push(ids);
+    }
+    loaded.model.analyze_layer_redundancy(device, &encoded).context("GptModel::analyze_layer_redundancy failed")
+}
+
+/// **2026-09-01新設**: 現在アクティブなモデルの**独立したコピー**を
+/// 同じディレクトリから読み直し、そのコピーに対してのみ冗長性分析+
+/// 層除去を行い、成功した場合のみアクティブモデルを差し替える
+/// (`select_model`と同じ「読み込み・変換に成功した場合のみ置き換える」
+/// 安全設計——現在サービス中のトラフィックが処理中の`Arc<LoadedGpt>`を
+/// 直接書き換えることは無い)。折りたたみ前後で同じサンプルプロンプトに
+/// 対する生成結果を1件添え、利用者が品質劣化の有無を自分の目で判断
+/// できるようにする(数値上の閾値だけで「安全」と主張しない)。
+///
+/// GPU配線(`matmul_spirv_wired`等)は`load_from_dir`と全く同じ手順で
+/// 再構築する(新しく読み込むモデルなので、削除されたレイヤーの旧配線を
+/// 引き継ぐ必要は無く、`load_from_dir`をそのまま呼べば足りる)。
+pub struct FoldResult {
+    pub redundancy: Vec<open_cuda_llm::LayerRedundancyReport>,
+    pub prune_report: open_cuda_llm::LayerPruneReport,
+    pub sample_prompt: String,
+    pub completion_before_fold: String,
+    pub completion_after_fold: String,
+    pub disclosure_ja: &'static str,
+    pub disclosure_en: &'static str,
+}
+
+pub fn fold_active_model(device: &Arc<dyn GpuDevice>, sample_prompts: &[String], block_influence_threshold: f32) -> Result<FoldResult> {
+    let before = active_or_load_default().map_err(|e| anyhow::anyhow!(e))?;
+    let mut fresh = load_from_dir(&before.dir).map_err(|e| anyhow::anyhow!(e)).context("failed to reload a fresh copy of the active model for folding")?;
+
+    let prompts: Vec<String> = if sample_prompts.is_empty() { mla_calibration_prompts() } else { sample_prompts.to_vec() };
+    let mut encoded = Vec::with_capacity(prompts.len());
+    for text in &prompts {
+        let ids = fresh.tokenizer.encode(text).with_context(|| format!("failed to tokenize sample prompt {text:?}"))?;
+        anyhow::ensure!(!ids.is_empty(), "sample prompt {text:?} encoded to zero tokens");
+        encoded.push(ids);
+    }
+    let redundancy = fresh.model.analyze_layer_redundancy(device, &encoded).context("GptModel::analyze_layer_redundancy failed")?;
+    let prune_report = fresh.model.prune_redundant_layers(&redundancy, block_influence_threshold).context("GptModel::prune_redundant_layers failed")?;
+
+    let sample_prompt = prompts.first().cloned().unwrap_or_else(|| "The quick brown fox".to_string());
+    let sample_ids = before.tokenizer.encode(&sample_prompt).context("failed to tokenize sample_prompt for before/after comparison")?;
+    let completion_before_fold = before
+        .model
+        .generate_with_repetition_penalty(device, &sample_ids, 20, default_repetition_penalty())
+        .ok()
+        .and_then(|ids| before.tokenizer.decode(&ids).ok())
+        .unwrap_or_else(|| "(generation failed)".to_string());
+    let completion_after_fold = fresh
+        .model
+        .generate_with_repetition_penalty(device, &sample_ids, 20, default_repetition_penalty())
+        .ok()
+        .and_then(|ids| fresh.tokenizer.decode(&ids).ok())
+        .unwrap_or_else(|| "(generation failed)".to_string());
+
+    // ここまで全部成功した場合のみ、実際に稼働中のモデルを差し替える。
+    *ACTIVE.write().unwrap() = Some(Arc::new(fresh));
+
+    Ok(FoldResult {
+        redundancy,
+        prune_report,
+        sample_prompt,
+        completion_before_fold,
+        completion_after_fold,
+        disclosure_ja: "これはDeepSeek固有の「折りたたみ理論」ではありません(調査の結果、そのような技術は実在しないと判明しました)。\
+            ShortGPT(arXiv:2403.03853)/Gromov et al.(arXiv:2403.17887)方式の層単位Block Influence冗長性検出に基づき、\
+            少数のサンプル文からの推定で層を実際に除去する処理です。除去後の生成品質は保証されません——\
+            completion_before_fold/completion_after_foldを実際に見比べて判断してください。",
+        disclosure_en: "This is NOT a DeepSeek-specific 'folding theory' (our research found no such technique exists). \
+            It follows ShortGPT (arXiv:2403.03853) / Gromov et al. (arXiv:2403.17887): layer-level Block Influence \
+            redundancy detection, with layers actually removed based on a small sample of prompts. Post-fold \
+            generation quality is NOT guaranteed — compare completion_before_fold/completion_after_fold yourself.",
+    })
+}
+
 /// `open_cuda_llm::GptModel::generate_speculative`(DSpark/Leviathan et al.
 /// 方式のロスレス投機的デコード、2026-08-17新設)を、現在アクティブな
 /// モデルをターゲットとして呼ぶ薄いラッパー。`draft_id`は
