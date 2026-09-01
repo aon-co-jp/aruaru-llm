@@ -3710,3 +3710,81 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
      密モデル(MoEでない)にどう適用できるか具体検討。(2) Model Folding
      実装に着手する場合は`GptModel`へ重み読み出し用の公開APIを追加
      するところから始める。
+
+- **2026-09-01 Model Folding残タスク4項目への対応(他アカウントでの
+  再開用メモ)**:
+
+  前回セッションで実装した3手法(独立閾値/連続ブロック探索/線形
+  アダプタ)について、ユーザーから明示された4つの残タスクに着手した。
+
+  1. **`ridge_lambda`の外部調整可能化(完了)**: `POST /v1/models/
+     fold-layers`リクエストに任意フィールド`ridge_lambda: Option<f32>`
+     を追加(`use_linear_adapter=true`のときのみ有効)。未指定なら
+     `open-cuda-llm`側の既定値`1e-2`を使う。レスポンスに実際に使われた
+     値`ridge_lambda_used`を含め、パラメータが黙って無視されていない
+     ことを呼び出し側が確認できるようにした。非有限・非正の値は
+     `open-cuda-llm`側`fold_block_with_linear_adapter`が`ensure!`で
+     正直に拒否する(サイレントに変な解を返さない)。テスト2件
+     (既定値フォールバック/明示指定の反映、非正値・NaN・infの拒否)を
+     `open-cuda-llm`側に追加、いずれも実行してpass確認済み
+     (`cargo test -p open-cuda-llm --lib fold_block_with_linear_adapter`、
+     4 passed)。`src/generation.rs`/`src/main.rs`変更、`cargo build`成功
+     確認済み。
+  2. **open-english側UIボタン(完了、他アカウント側の作業)**:
+     `open-english/index.html`/`app.js`に`fold-layers`実行フォーム
+     (除去層数・線形アダプタ使用・ridge_lambda入力欄)と結果表示を
+     実装済み(詳細は`open-english/CLAUDE.md`参照)。稼働中の
+     `aruaru-llm`サーバーへの実HTTPリクエストでの動作確認はまだ
+     (次回の課題)。
+  3. **多言語較正データの追加(未着手)**: 層冗長性検出/線形アダプタの
+     較正に使うサンプルプロンプトは現状英語のみ。日本語・他言語の
+     プロンプトを追加し、折りたたみ後の生成品質への影響を実測する
+     タスクは今回は着手できていない。次回の優先課題。
+  4. **GPU実測(Vulkan/DirectX経由、未着手・環境制約)**: この作業を
+     行ったサンドボックス環境にはGPUおよびGPUドライバが存在せず、
+     実ベンチマークを試みること自体ができなかった(誤魔化しではなく
+     実際にGPU検出を試みた上での結論)。開発機(NVIDIA GT 730搭載)
+     での実測は次回、GPUが使える環境で行う必要がある。
+
+  次回再開する場合: 上記1・2は完了、3・4が未着手。3から着手するのが
+  優先度として妥当(GPU実測は開発機側の環境が必要なため)。
+
+- **2026-09-01 Follow-up on the 4 remaining Model Folding tasks
+  (English summary for handoff)**:
+
+  Of the 4 tasks the user explicitly requested as follow-ups to the
+  previous Model Folding session (3 layer-reduction techniques already
+  implemented: independent threshold / contiguous block search / linear
+  adapter):
+
+  1. **`ridge_lambda` made externally configurable (done)**: `POST
+     /v1/models/fold-layers` now accepts an optional `ridge_lambda:
+     Option<f32>` field (only meaningful when `use_linear_adapter=true`).
+     Falls back to `open-cuda-llm`'s default `1e-2` when omitted. The
+     response now reports the value actually used as `ridge_lambda_used`
+     so callers can verify the parameter wasn't silently ignored.
+     Non-finite or non-positive values are rejected with an honest
+     `ensure!` in `fold_block_with_linear_adapter` rather than silently
+     producing a degenerate solution. Two new tests were added and pass
+     (`cargo test -p open-cuda-llm --lib fold_block_with_linear_adapter`,
+     4 passed): default fallback / explicit override is honored, and
+     invalid values (0, negative, NaN, inf) are rejected. `cargo build`
+     for `aruaru-llm` confirmed green after wiring `src/generation.rs`
+     and `src/main.rs`.
+  2. **open-english UI button (done, on the other account's side)**:
+     a form to call `fold-layers` (layers-to-remove, linear-adapter
+     toggle, ridge_lambda input) with result display was added to
+     `open-english/index.html`/`app.js` (see `open-english/CLAUDE.md`).
+     Not yet verified against a live `aruaru-llm` server over real HTTP
+     — next task.
+  3. **Multilingual calibration data (not started)**: calibration
+     prompts used for layer-redundancy detection / the linear adapter
+     are currently English-only. Adding Japanese and other-language
+     prompts and measuring the effect on post-fold generation quality
+     was not attempted this round — top priority for next time.
+  4. **Real GPU measurement via Vulkan/DirectX (not started, environment
+     constraint)**: the sandbox this work ran in has no GPU or GPU
+     driver, so an actual benchmark could not even be attempted (this
+     conclusion follows an actual attempt to detect a GPU, not a guess).
+     Real measurement on the dev machine (NVIDIA GT 730) needs to happen
+     in an environment with GPU access.
