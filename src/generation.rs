@@ -717,6 +717,10 @@ pub struct FoldResult {
     pub completion_after_fold: String,
     pub disclosure_ja: &'static str,
     pub disclosure_en: &'static str,
+    /// ブロック探索版(`fold_active_model_by_block`)のみ設定される、
+    /// `block_similarity`に基づく事前の品質見込み(英語のみ、機械的な
+    /// 目安であり保証ではない)。閾値版(`fold_active_model`)では`None`。
+    pub quality_hint: Option<&'static str>,
 }
 
 pub fn fold_active_model(device: &Arc<dyn GpuDevice>, sample_prompts: &[String], block_influence_threshold: f32) -> Result<FoldResult> {
@@ -765,6 +769,94 @@ pub fn fold_active_model(device: &Arc<dyn GpuDevice>, sample_prompts: &[String],
             It follows ShortGPT (arXiv:2403.03853) / Gromov et al. (arXiv:2403.17887): layer-level Block Influence \
             redundancy detection, with layers actually removed based on a small sample of prompts. Post-fold \
             generation quality is NOT guaranteed — compare completion_before_fold/completion_after_fold yourself.",
+        quality_hint: None,
+    })
+}
+
+/// **2026-09-01追加(続き): 連続ブロック探索版の折りたたみ**。
+///
+/// ユーザーから「極端な閾値での明確な品質劣化を改善してほしい」との
+/// 指示を受け、`open-cuda-llm`側に`find_best_layer_block_to_remove`/
+/// `remove_layer_block`(Gromov et al.方式、
+/// [arXiv:2403.17887](https://arxiv.org/abs/2403.17887))を実装した
+/// (詳細・実測結果は`open-cuda-llm`側の同関数docコメント参照)。
+///
+/// # 正直な実測結果(誇張しないこと)
+/// 実GPT-2(distilgpt2、6層)で1〜5層の削除を比較したところ:
+/// - **1層削除**(`block_similarity≈0.98`): 出力は話題・文法とも維持
+/// - **2層削除**(`block_similarity≈0.95`): 同様に良好
+/// - **5層削除**(6層中5層という極端な予算、`block_similarity≈0.82`):
+///   従来方式(独立閾値)と同じく明確に破綻した
+///
+/// つまりこの改良は「除去する層数が多い場合の**選び方**を最適化する」
+/// ものであり、「そもそも実在しない冗長性を魔法のように作り出す」もの
+/// ではない——`block_similarity`(除去前に得られる値)自体が品質の
+/// 見込みを予測する正直な指標として機能する(1.0に近いほど安全、
+/// 0.85を下回るような値は既に危険信号として扱うべき)。呼び出し側
+/// (`fold_active_model_by_block`)は`block_similarity`を常にレスポンスへ
+/// 含め、利用者が「この予算は危険かもしれない」と事前に判断できるように
+/// する。
+pub fn fold_active_model_by_block(device: &Arc<dyn GpuDevice>, sample_prompts: &[String], num_layers_to_remove: usize) -> Result<FoldResult> {
+    let before = active_or_load_default().map_err(|e| anyhow::anyhow!(e))?;
+    let mut fresh = load_from_dir(&before.dir).map_err(|e| anyhow::anyhow!(e)).context("failed to reload a fresh copy of the active model for folding")?;
+
+    let prompts: Vec<String> = if sample_prompts.is_empty() { mla_calibration_prompts() } else { sample_prompts.to_vec() };
+    let mut encoded = Vec::with_capacity(prompts.len());
+    for text in &prompts {
+        let ids = fresh.tokenizer.encode(text).with_context(|| format!("failed to tokenize sample prompt {text:?}"))?;
+        anyhow::ensure!(!ids.is_empty(), "sample prompt {text:?} encoded to zero tokens");
+        encoded.push(ids);
+    }
+    let candidate = fresh.model.find_best_layer_block_to_remove(device, &encoded, num_layers_to_remove).context("GptModel::find_best_layer_block_to_remove failed")?;
+    let block_similarity = candidate.block_similarity;
+    let prune_report = fresh.model.remove_layer_block(&candidate).context("GptModel::remove_layer_block failed")?;
+
+    // block_influenceは「入力→出力がどれだけ変わったか」なので、
+    // 連続ブロック版のBlockRemovalCandidateをLayerRedundancyReport形式
+    // (既存のレスポンス形状との互換のため)へそのまま1件だけ変換する。
+    let redundancy = vec![open_cuda_llm::LayerRedundancyReport { layer_index: candidate.start, block_influence: 1.0 - block_similarity, sample_count: candidate.sample_count }];
+
+    let sample_prompt = prompts.first().cloned().unwrap_or_else(|| "The quick brown fox".to_string());
+    let sample_ids = before.tokenizer.encode(&sample_prompt).context("failed to tokenize sample_prompt for before/after comparison")?;
+    let completion_before_fold = before
+        .model
+        .generate_with_repetition_penalty(device, &sample_ids, 20, default_repetition_penalty())
+        .ok()
+        .and_then(|ids| before.tokenizer.decode(&ids).ok())
+        .unwrap_or_else(|| "(generation failed)".to_string());
+    let completion_after_fold = fresh
+        .model
+        .generate_with_repetition_penalty(device, &sample_ids, 20, default_repetition_penalty())
+        .ok()
+        .and_then(|ids| fresh.tokenizer.decode(&ids).ok())
+        .unwrap_or_else(|| "(generation failed)".to_string());
+
+    *ACTIVE.write().unwrap() = Some(Arc::new(fresh));
+
+    let quality_hint = if block_similarity >= 0.95 {
+        "block_similarity is high — this removal is likely to preserve quality well."
+    } else if block_similarity >= 0.85 {
+        "block_similarity is moderate — some quality change is likely; check completion_before_fold/completion_after_fold."
+    } else {
+        "block_similarity is low — this removal is likely to noticeably degrade quality (see our own real-GPT-2 measurement in the docs: this happened when removing 5 of 6 layers)."
+    };
+
+    Ok(FoldResult {
+        redundancy,
+        prune_report,
+        sample_prompt,
+        completion_before_fold,
+        completion_after_fold,
+        disclosure_ja: "これはDeepSeek固有の技術ではありません(調査の結果、「DeepSeekの折りたたみ理論」は実在しないと判明しました)。\
+            Gromov et al.(arXiv:2403.17887)方式の連続ブロック探索です——独立した層を個別の閾値で寄せ集める旧方式より、\
+            複数層をまとめて除去する場合に品質を保ちやすい設計ですが、除去する層数が多すぎればそれでも品質は劣化します\
+            (block_similarityが低いほど危険、実測では6層中5層削除で明確な破綻を確認しています)。",
+        disclosure_en: "This is NOT a DeepSeek-specific technique (our research found no such thing as a 'DeepSeek \
+            folding theory'). This is Gromov et al.-style (arXiv:2403.17887) contiguous block search — more \
+            quality-preserving than the old independent-threshold approach when removing multiple layers, but \
+            removing too many layers still degrades quality regardless of algorithm (lower block_similarity = \
+            riskier; our own measurement showed clear breakdown when removing 5 of 6 layers).",
+        quality_hint: Some(quality_hint),
     })
 }
 

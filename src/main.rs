@@ -1587,8 +1587,17 @@ struct FoldLayersRequest {
     /// `0.01`(=入力と出力のコサイン類似度が99%以上一致=ほぼ恒等写像の
     /// 層のみを対象、ShortGPT論文が報告する典型的な冗長層の水準より
     /// 保守的な既定値——「まず控えめに試す」ことを優先した)。
+    /// **`num_layers_to_remove`が指定されている場合、この値は無視される**
+    /// (下記参照)。
     #[serde(default = "default_block_influence_threshold")]
     block_influence_threshold: f32,
+    /// **2026-09-01追加**: 指定した場合、独立閾値方式ではなく
+    /// Gromov et al.(arXiv:2403.17887)方式の連続ブロック探索
+    /// (`generation::fold_active_model_by_block`)を使う——複数層を
+    /// まとめて除去したい場合はこちらを推奨(実測で明確に品質保持が
+    /// 優れていることを確認済み、`aruaru-llm/CLAUDE.md`参照)。
+    #[serde(default)]
+    num_layers_to_remove: Option<usize>,
 }
 
 fn default_block_influence_threshold() -> f32 {
@@ -1611,19 +1620,28 @@ struct FoldLayersResponse {
     /// (上のdisclosure_ja/enは「DeepSeekとの混同」に関する開示、こちらは
     /// 「何のアルゴリズムを使ったか」の開示——別軸のため分けて返す)。
     layer_removal_technique_disclosure: &'static str,
+    /// ブロック探索モード(`num_layers_to_remove`指定時)のみ設定される、
+    /// `block_similarity`に基づく事前の品質見込み。閾値モードでは`null`。
+    quality_hint: Option<&'static str>,
 }
 
 /// `POST /v1/models/fold-layers` — 実際にモデルの層を除去し、**現在
-/// アクティブなモデルを差し替える**(`generation::fold_active_model`参照)。
-/// 折りたたみ前後の同一プロンプトへの生成結果を両方返すので、呼び出し側
-/// (UI等)は品質劣化の有無を実際の出力で確認できる。
+/// アクティブなモデルを差し替える**。`num_layers_to_remove`を指定すると
+/// Gromov et al.方式の連続ブロック探索(`generation::
+/// fold_active_model_by_block`、複数層除去時に推奨)、未指定なら従来の
+/// 独立閾値方式(`generation::fold_active_model`)を使う。折りたたみ前後の
+/// 同一プロンプトへの生成結果を両方返すので、呼び出し側(UI等)は品質劣化の
+/// 有無を実際の出力で確認できる。
 async fn fold_layers_handler(req: Request, device: Arc<dyn GpuDevice>) -> Response {
     let Json(body): Json<FoldLayersRequest> = match Json::from_body(req).await {
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    let threshold = body.block_influence_threshold;
-    let result = tokio::task::spawn_blocking(move || generation::fold_active_model(&device, &body.sample_prompts, threshold)).await;
+    let result = tokio::task::spawn_blocking(move || match body.num_layers_to_remove {
+        Some(n) => generation::fold_active_model_by_block(&device, &body.sample_prompts, n),
+        None => generation::fold_active_model(&device, &body.sample_prompts, body.block_influence_threshold),
+    })
+    .await;
     match result {
         Ok(Ok(r)) => json_response(
             StatusCode::OK,
@@ -1638,6 +1656,7 @@ async fn fold_layers_handler(req: Request, device: Arc<dyn GpuDevice>) -> Respon
                 disclosure_ja: r.disclosure_ja.to_string(),
                 disclosure_en: r.disclosure_en.to_string(),
                 layer_removal_technique_disclosure: r.prune_report.disclosure,
+                quality_hint: r.quality_hint,
             },
         ),
         Ok(Err(e)) => {
