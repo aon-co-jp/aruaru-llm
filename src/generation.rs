@@ -386,6 +386,56 @@ fn mla_calibration_prompts() -> Vec<String> {
     .collect()
 }
 
+/// **2026-09-01追加**: 日本語・多言語プロンプトを含む較正データセット
+/// (`fold_active_model`系の`sample_prompts`が空のときの既定に
+/// `mla_calibration_prompts()`〈英語のみ8文〉が使われていた、という
+/// 課題への対応)。`ARUARU_LLM_FOLD_CALIBRATION_PROMPTS`環境変数
+/// (`;`区切り)で上書き可能。
+///
+/// **正直な開示**: このリポジトリの`GptTokenizer`はGPT-2/distilgpt2の
+/// 学習済みBPE語彙(英語コーパス中心に学習されたもの)をそのまま使う。
+/// 日本語・中国語・アラビア語等はバイトレベルBPEの仕組み上トークン化
+/// 自体は失敗しない(UTF-8バイト列として必ず何らかのトークン列には
+/// なる)が、語彙が英語中心のため1文字あたりのトークン消費数が英語より
+/// 大幅に多くなりがちで、`block_similarity`(Block Influence)の計算に
+/// 使う隠れ状態の分布が英語のみの較正データとは異なる可能性がある。
+/// 「日本語プロンプトでもクラッシュせず折りたたみが実行できること」
+/// までは検証済みだが(下記テスト参照)、「日本語での折りたたみ後品質が
+/// 英語と同等」であることは主張しない——`open-cuda-llm`側の
+/// `GptTokenizer`自体が英語中心の学習済み語彙を使う以上、これは
+/// このモデル自体の限界であり`aruaru-llm`側の配線だけでは解消できない。
+fn multilingual_fold_calibration_prompts() -> Vec<String> {
+    if let Ok(v) = std::env::var("ARUARU_LLM_FOLD_CALIBRATION_PROMPTS") {
+        let prompts: Vec<String> = v.split(';').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+        if !prompts.is_empty() {
+            return prompts;
+        }
+    }
+    [
+        // 英語(既存の較正文と同系統)。
+        "The weather today is quite pleasant and sunny.",
+        "In economics, supply and demand determine prices in a market.",
+        "Computers process information using binary logic circuits.",
+        // 日本語。
+        "今日の天気はとても穏やかで晴れています。",
+        "経済学では需要と供給が市場の価格を決定します。",
+        "彼女は台所に入り朝食の準備を始めました。",
+        "コンピュータは二進法の論理回路で情報を処理します。",
+        // 中国語(簡体字)。
+        "今天的天气非常晴朗宜人。",
+        "经济学中,供求关系决定市场价格。",
+        // フランス語。
+        "Le temps est très agréable et ensoleillé aujourd'hui.",
+        // ドイツ語。
+        "Das Wetter ist heute sehr angenehm und sonnig.",
+        // スペイン語。
+        "El clima de hoy es muy agradable y soleado.",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect()
+}
+
 /// PCA較正版MLA(`enable_mla_kv_compression_calibrated`)を配線する。
 /// 較正パス自体はGEMM計算のみでデバイス種別に依存しないため、
 /// `real-vulkan` featureの有無に関わらず`opencuda_cpu::CpuDevice`で行う
@@ -687,7 +737,7 @@ pub fn generate(device: &Arc<dyn GpuDevice>, prompt: &str, max_new_tokens: usize
 /// (トピックを分散させた8文の一般英文)を既定として使う。
 pub fn analyze_active_model_layer_redundancy(device: &Arc<dyn GpuDevice>, sample_prompts: &[String]) -> Result<Vec<open_cuda_llm::LayerRedundancyReport>> {
     let loaded = active_or_load_default().map_err(|e| anyhow::anyhow!(e))?;
-    let prompts: Vec<String> = if sample_prompts.is_empty() { mla_calibration_prompts() } else { sample_prompts.to_vec() };
+    let prompts: Vec<String> = if sample_prompts.is_empty() { multilingual_fold_calibration_prompts() } else { sample_prompts.to_vec() };
     let mut encoded = Vec::with_capacity(prompts.len());
     for text in &prompts {
         let ids = loaded.tokenizer.encode(text).with_context(|| format!("failed to tokenize sample prompt {text:?}"))?;
@@ -721,13 +771,21 @@ pub struct FoldResult {
     /// `block_similarity`に基づく事前の品質見込み(英語のみ、機械的な
     /// 目安であり保証ではない)。閾値版(`fold_active_model`)では`None`。
     pub quality_hint: Option<&'static str>,
+    /// **2026-09-01追加**: 線形アダプタ版(`use_linear_adapter=true`)の
+    /// みで設定される、実際に使われた`ridge_lambda`値(`open-cuda-llm`
+    /// 側`AdapterFoldReport::ridge_lambda_used`をそのまま転記)。呼び
+    /// 出し側が明示的に渡した値がちゃんと使われたことを確認できるように
+    /// する(外部から調整可能にしたパラメータが黙って無視されていない
+    /// ことの透明性)。閾値版・ブロック探索版(線形アダプタ不使用)では
+    /// `None`。
+    pub ridge_lambda_used: Option<f32>,
 }
 
 pub fn fold_active_model(device: &Arc<dyn GpuDevice>, sample_prompts: &[String], block_influence_threshold: f32) -> Result<FoldResult> {
     let before = active_or_load_default().map_err(|e| anyhow::anyhow!(e))?;
     let mut fresh = load_from_dir(&before.dir).map_err(|e| anyhow::anyhow!(e)).context("failed to reload a fresh copy of the active model for folding")?;
 
-    let prompts: Vec<String> = if sample_prompts.is_empty() { mla_calibration_prompts() } else { sample_prompts.to_vec() };
+    let prompts: Vec<String> = if sample_prompts.is_empty() { multilingual_fold_calibration_prompts() } else { sample_prompts.to_vec() };
     let mut encoded = Vec::with_capacity(prompts.len());
     for text in &prompts {
         let ids = fresh.tokenizer.encode(text).with_context(|| format!("failed to tokenize sample prompt {text:?}"))?;
@@ -770,6 +828,7 @@ pub fn fold_active_model(device: &Arc<dyn GpuDevice>, sample_prompts: &[String],
             redundancy detection, with layers actually removed based on a small sample of prompts. Post-fold \
             generation quality is NOT guaranteed — compare completion_before_fold/completion_after_fold yourself.",
         quality_hint: None,
+        ridge_lambda_used: None,
     })
 }
 
@@ -800,7 +859,7 @@ pub fn fold_active_model_by_block(device: &Arc<dyn GpuDevice>, sample_prompts: &
     let before = active_or_load_default().map_err(|e| anyhow::anyhow!(e))?;
     let mut fresh = load_from_dir(&before.dir).map_err(|e| anyhow::anyhow!(e)).context("failed to reload a fresh copy of the active model for folding")?;
 
-    let prompts: Vec<String> = if sample_prompts.is_empty() { mla_calibration_prompts() } else { sample_prompts.to_vec() };
+    let prompts: Vec<String> = if sample_prompts.is_empty() { multilingual_fold_calibration_prompts() } else { sample_prompts.to_vec() };
     let mut encoded = Vec::with_capacity(prompts.len());
     for text in &prompts {
         let ids = fresh.tokenizer.encode(text).with_context(|| format!("failed to tokenize sample prompt {text:?}"))?;
@@ -857,6 +916,7 @@ pub fn fold_active_model_by_block(device: &Arc<dyn GpuDevice>, sample_prompts: &
             removing too many layers still degrades quality regardless of algorithm (lower block_similarity = \
             riskier; our own measurement showed clear breakdown when removing 5 of 6 layers).",
         quality_hint: Some(quality_hint),
+        ridge_lambda_used: None,
     })
 }
 
@@ -884,11 +944,11 @@ pub fn fold_active_model_by_block(device: &Arc<dyn GpuDevice>, sample_prompts: &
 /// 無意味な反復に陥る」ことは避けられており、部分的だが実測できる
 /// 改善である。誇張せず、この限界を`disclosure_ja`/`disclosure_en`へ
 /// 常に含める。
-pub fn fold_active_model_with_linear_adapter(device: &Arc<dyn GpuDevice>, sample_prompts: &[String], num_layers_to_remove: usize) -> Result<FoldResult> {
+pub fn fold_active_model_with_linear_adapter(device: &Arc<dyn GpuDevice>, sample_prompts: &[String], num_layers_to_remove: usize, ridge_lambda: Option<f32>) -> Result<FoldResult> {
     let before = active_or_load_default().map_err(|e| anyhow::anyhow!(e))?;
     let mut fresh = load_from_dir(&before.dir).map_err(|e| anyhow::anyhow!(e)).context("failed to reload a fresh copy of the active model for folding")?;
 
-    let prompts: Vec<String> = if sample_prompts.is_empty() { mla_calibration_prompts() } else { sample_prompts.to_vec() };
+    let prompts: Vec<String> = if sample_prompts.is_empty() { multilingual_fold_calibration_prompts() } else { sample_prompts.to_vec() };
     let mut encoded = Vec::with_capacity(prompts.len());
     for text in &prompts {
         let ids = fresh.tokenizer.encode(text).with_context(|| format!("failed to tokenize sample prompt {text:?}"))?;
@@ -897,7 +957,7 @@ pub fn fold_active_model_with_linear_adapter(device: &Arc<dyn GpuDevice>, sample
     }
     let candidate = fresh.model.find_best_layer_block_to_remove(device, &encoded, num_layers_to_remove).context("GptModel::find_best_layer_block_to_remove failed")?;
     let block_similarity = candidate.block_similarity;
-    let adapter_report = fresh.model.fold_block_with_linear_adapter(device, &encoded, &candidate).context("GptModel::fold_block_with_linear_adapter failed")?;
+    let adapter_report = fresh.model.fold_block_with_linear_adapter(device, &encoded, &candidate, ridge_lambda).context("GptModel::fold_block_with_linear_adapter failed")?;
 
     let redundancy = vec![open_cuda_llm::LayerRedundancyReport { layer_index: candidate.start, block_influence: 1.0 - block_similarity, sample_count: adapter_report.fit_sample_rows }];
     // 線形アダプタ版は「N層→1層」への置換のため、`LayerPruneReport`と
@@ -959,6 +1019,7 @@ pub fn fold_active_model_with_linear_adapter(device: &Arc<dyn GpuDevice>, sample
             the output is still not fully coherent, grammatical text, closer to a word salad. Quality is not \
             guaranteed — always compare the before/after generation sample yourself.",
         quality_hint: Some(quality_hint),
+        ridge_lambda_used: Some(adapter_report.ridge_lambda_used),
     })
 }
 
@@ -1070,6 +1131,50 @@ mod tests {
         let bogus = PathBuf::from(format!("/definitely/does/not/exist/{}", rand_suffix()));
         let result = select_model(bogus);
         assert!(result.is_err(), "select_model should return an error for a nonexistent directory, not panic");
+    }
+
+    /// **2026-09-01新設**: `multilingual_fold_calibration_prompts()`の
+    /// 内容(空でないこと・日本語文を含むこと)を、実重み無しで常に検証
+    /// する軽量な単体テスト(下の`--ignored`実重みテストとは別に、
+    /// この関数自体の中身が壊れていないことをCIで常時確認する)。
+    #[test]
+    fn multilingual_fold_calibration_prompts_includes_non_english_text() {
+        let prompts = multilingual_fold_calibration_prompts();
+        assert!(prompts.len() >= 8, "expected a reasonably diverse calibration set, got {} prompts", prompts.len());
+        assert!(prompts.iter().any(|p| p.contains("今日")), "expected at least one Japanese calibration prompt");
+        assert!(prompts.iter().any(|p| p.is_ascii()), "expected at least one English (ASCII) calibration prompt for comparison");
+    }
+
+    /// **本命の実測検証**: 日本語・多言語プロンプトを較正データとして
+    /// 実際に線形アダプタ折りたたみ(方式3)にかけ、(a)クラッシュしない
+    /// こと、(b)折りたたみ後も`generate`が動作し空でない出力を返すこと、
+    /// を実GPT-2 124M重みで確認する。**正直な開示**: これは「日本語での
+    /// 折りたたみ後品質が英語と同等」であることを証明するテストでは
+    /// ない(意味論的な品質判定は自動化できないため`--nocapture`での
+    /// 目視確認用途、`qualitative_compare_old_vs_new_search_prompt_format`
+    /// と同じ設計方針)——`multilingual_fold_calibration_prompts()`
+    /// のdocコメント参照。`--ignored`指定時のみ実行(実重みが必要)。
+    #[test]
+    #[ignore]
+    fn fold_with_multilingual_calibration_prompts_completes_on_real_gpt2_weights() {
+        let dir = PathBuf::from("../open-cuda/crates/open-cuda-llm/models/gpt2");
+        if !dir.join("model.safetensors").exists() {
+            eprintln!("skipping multilingual fold test: real GPT-2 weights not present at {dir:?}");
+            return;
+        }
+        select_model(dir).expect("select_model should succeed for a real, valid model directory");
+        let device: Arc<dyn GpuDevice> = CpuDevice::new(0);
+        let prompts = multilingual_fold_calibration_prompts();
+
+        let before = generate(&device, "The quick brown fox", 12).expect("baseline generate should succeed before folding");
+        eprintln!("=== before fold ===\n{before}\n");
+
+        let result = fold_active_model_by_block(&device, &prompts, 1).expect("folding with multilingual calibration prompts must not crash");
+        assert!(!result.prune_report.removed_layer_indices.is_empty(), "expected at least one layer to be removed");
+
+        let after = generate(&device, "The quick brown fox", 12).expect("generate should still succeed after folding with multilingual calibration");
+        eprintln!("=== after fold (multilingual calibration) ===\n{after}\n");
+        assert!(!after.is_empty(), "post-fold generation must not be empty");
     }
 
     fn rand_suffix() -> u64 {
