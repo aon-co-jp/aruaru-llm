@@ -1607,6 +1607,18 @@ struct FoldLayersRequest {
     /// ない、`aruaru-llm/CLAUDE.md`参照)。既定`false`(=跡形もなく削除)。
     #[serde(default)]
     use_linear_adapter: bool,
+    /// **2026-09-01追加(さらに続き2、ridge_lambdaの外部調整可能化)**:
+    /// `use_linear_adapter=true`のときのみ有効。線形アダプタのフィット
+    /// (最小二乗法の閉形式リッジ回帰)に使う正則化係数。未指定
+    /// (`null`)なら`open-cuda-llm`側の既定値`1e-2`を使う。値が非有限・
+    /// 0以下の場合は`open-cuda-llm`側が`400`相当のエラーを返す
+    /// (`fold_block_with_linear_adapter`のバリデーション)。較正データの
+    /// 分散が大きい(例: 日本語プロンプトを混在させた場合)ほど正規方程式
+    /// が悪条件になりやすく、`ridge_lambda`を大きくする必要が出ることが
+    /// ある——この値を外部から調整可能にすることで、呼び出し側が
+    /// 実測しながら最適値を探れるようにした。
+    #[serde(default)]
+    ridge_lambda: Option<f32>,
 }
 
 fn default_block_influence_threshold() -> f32 {
@@ -1632,6 +1644,12 @@ struct FoldLayersResponse {
     /// ブロック探索モード(`num_layers_to_remove`指定時)のみ設定される、
     /// `block_similarity`に基づく事前の品質見込み。閾値モードでは`null`。
     quality_hint: Option<&'static str>,
+    /// **2026-09-01追加**: `use_linear_adapter=true`のときのみ設定される、
+    /// 実際に使われた`ridge_lambda`値。リクエストで`ridge_lambda`を
+    /// 指定した場合はその値がそのまま反映され、未指定(`null`)の場合は
+    /// `open-cuda-llm`側の既定値`0.01`が反映される——呼び出し側が
+    /// パラメータが黙って無視されていないことを確認できるようにする。
+    ridge_lambda_used: Option<f32>,
 }
 
 /// `POST /v1/models/fold-layers` — 実際にモデルの層を除去し、**現在
@@ -1647,7 +1665,7 @@ async fn fold_layers_handler(req: Request, device: Arc<dyn GpuDevice>) -> Respon
         Err(resp) => return resp,
     };
     let result = tokio::task::spawn_blocking(move || match (body.num_layers_to_remove, body.use_linear_adapter) {
-        (Some(n), true) => generation::fold_active_model_with_linear_adapter(&device, &body.sample_prompts, n),
+        (Some(n), true) => generation::fold_active_model_with_linear_adapter(&device, &body.sample_prompts, n, body.ridge_lambda),
         (Some(n), false) => generation::fold_active_model_by_block(&device, &body.sample_prompts, n),
         (None, _) => generation::fold_active_model(&device, &body.sample_prompts, body.block_influence_threshold),
     })
@@ -1667,6 +1685,7 @@ async fn fold_layers_handler(req: Request, device: Arc<dyn GpuDevice>) -> Respon
                 disclosure_en: r.disclosure_en.to_string(),
                 layer_removal_technique_disclosure: r.prune_report.disclosure,
                 quality_hint: r.quality_hint,
+                ridge_lambda_used: r.ridge_lambda_used,
             },
         ),
         Ok(Err(e)) => {
