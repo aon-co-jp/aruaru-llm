@@ -40,6 +40,14 @@ pub struct CatalogEntry {
     pub display_name_en: &'static str,
     /// Hugging Faceのリポジトリパス(`{org}/{repo}`)。
     pub hf_repo: &'static str,
+    /// **2026-09-01追加**: `tokenizer.json`を`hf_repo`とは別のリポジトリ
+    /// から取得する場合に指定する(`None`なら`hf_repo`から)。
+    /// `microsoft/DialoGPT-small`のように`tokenizer.json`単体を公開して
+    /// いない(`vocab.json`+`merges.txt`のみ)が、GPT-2本体と全く同じ
+    /// BPE語彙(`vocab_size` 50257)を使うモデル向け——`openai-community/gpt2`
+    /// の`tokenizer.json`をそのまま流用できる。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tokenizer_hf_repo: Option<&'static str>,
     pub approx_size_mb: u32,
     /// ライセンスに関する正直な注記(再配布・商用利用可否をユーザー自身が
     /// 確認できるよう、モデルカードへの参照を促す文言に留める)。
@@ -56,6 +64,7 @@ pub const CATALOG: &[CatalogEntry] = &[
         display_name_ja: "GPT-2 (124M, 既定)",
         display_name_en: "GPT-2 (124M, default)",
         hf_repo: "openai-community/gpt2",
+        tokenizer_hf_repo: None,
         approx_size_mb: 548,
         license_note_ja: "Modified MIT License(OpenAIのモデルカード参照)。既定で使用中のモデルと同一。",
     },
@@ -64,6 +73,7 @@ pub const CATALOG: &[CatalogEntry] = &[
         display_name_ja: "DistilGPT-2 (82M、より軽量・高速)",
         display_name_en: "DistilGPT-2 (82M, lighter and faster)",
         hf_repo: "distilbert/distilgpt2",
+        tokenizer_hf_repo: None,
         approx_size_mb: 353,
         license_note_ja: "Apache License 2.0(モデルカード参照)。",
     },
@@ -72,6 +82,7 @@ pub const CATALOG: &[CatalogEntry] = &[
         display_name_ja: "GPT-2 Medium (355M、gpt2より高品質・低速)",
         display_name_en: "GPT-2 Medium (355M, higher quality, slower)",
         hf_repo: "openai-community/gpt2-medium",
+        tokenizer_hf_repo: None,
         approx_size_mb: 1520,
         license_note_ja: "Modified MIT License(OpenAIのモデルカード参照)。",
     },
@@ -80,6 +91,7 @@ pub const CATALOG: &[CatalogEntry] = &[
         display_name_ja: "GPT-2 Large (774M、CPU推論はかなり低速になる想定)",
         display_name_en: "GPT-2 Large (774M, expect much slower CPU inference)",
         hf_repo: "openai-community/gpt2-large",
+        tokenizer_hf_repo: None,
         approx_size_mb: 3250,
         license_note_ja: "Modified MIT License(OpenAIのモデルカード参照)。",
     },
@@ -92,8 +104,28 @@ pub const CATALOG: &[CatalogEntry] = &[
         display_name_ja: "GPT-2 XL (1.5B、VRAM 8GB以上推奨。CPU推論は非常に低速)",
         display_name_en: "GPT-2 XL (1.5B, recommended for 8GB+ VRAM. CPU inference will be very slow)",
         hf_repo: "openai-community/gpt2-xl",
+        tokenizer_hf_repo: None,
         approx_size_mb: 6430,
         license_note_ja: "Modified MIT License(OpenAIのモデルカード参照)。",
+    },
+    // 2026-09-01追加: 対話ファインチューニング済みのGPT-2互換モデル。
+    // `microsoft/DialoGPT-small`はGPT-2アーキテクチャそのまま(hidden 768/
+    // 12層/vocab 50257)で、Redditの1.47億対話でファインチューニングされて
+    // いるため、素のGPT-2より会話的な応答になりやすい。**F16(半精度)で
+    // 配布**されており、従来は`open-cuda-llm`ローダーがF32のみ対応だった
+    // ため追加を見送っていた(`CLAUDE.md` 2026-08-26エントリ)——2026-09-01に
+    // `tensor_f32`がF16/BF16/FP8→f32変換へ対応したため実重みでロード・
+    // 生成できることを実機E2Eで確認済み(`open-cuda/CLAUDE.md`同日エントリ)。
+    // `tokenizer.json`単体は公開していない(`vocab.json`+`merges.txt`のみ)
+    // が、GPT-2本体と同一のBPE語彙のため`openai-community/gpt2`のものを流用。
+    CatalogEntry {
+        id: "dialogpt-small",
+        display_name_ja: "DialoGPT-small (117M、GPT-2ベース・Reddit対話でFT済み。F16配布→ロード時にf32へ変換)",
+        display_name_en: "DialoGPT-small (117M, GPT-2-based, fine-tuned on Reddit dialogue. F16 weights, converted to f32 at load)",
+        hf_repo: "microsoft/DialoGPT-small",
+        tokenizer_hf_repo: Some("openai-community/gpt2"),
+        approx_size_mb: 335,
+        license_note_ja: "MIT License(Microsoftのモデルカード参照)。対話FT済みだが、指示追従(instruction following)まで学習したモデルではない点に注意。",
     },
 ];
 
@@ -163,7 +195,14 @@ async fn install_from_base_url(entry: &CatalogEntry, dest_dir: &Path, base_url: 
             tracing::info!(model = entry.id, file = filename, "already present, skipping download");
             continue;
         }
-        let url = resolve_url(base_url, entry.hf_repo, filename);
+        // `tokenizer.json`だけは`tokenizer_hf_repo`(指定時)から取得する。
+        // DialoGPT系のようにGPT-2と同一BPE語彙だが`tokenizer.json`単体を
+        // 公開していないモデル向け(2026-09-01追加)。
+        let source_repo = match (*filename, entry.tokenizer_hf_repo) {
+            ("tokenizer.json", Some(tok_repo)) => tok_repo,
+            _ => entry.hf_repo,
+        };
+        let url = resolve_url(base_url, source_repo, filename);
         tracing::info!(model = entry.id, file = filename, url = %url, "downloading");
 
         let response = client
@@ -231,11 +270,13 @@ mod tests {
         assert_eq!(e.hf_repo, "distilbert/distilgpt2");
     }
 
-    /// サイズ順(概算MB昇順)は distilgpt2 < gpt2 < gpt2-medium < gpt2-large
-    /// < gpt2-xl になるはず(2026-07-27追加の「大きい/小さいモデルへ切替」
-    /// ボタン機能向け)。
+    /// サイズ順(概算MB昇順)は dialogpt-small < distilgpt2 < gpt2 <
+    /// gpt2-medium < gpt2-large < gpt2-xl になるはず(2026-07-27追加の
+    /// 「大きい/小さいモデルへ切替」ボタン機能向け。2026-09-01に
+    /// `dialogpt-small`〈335MB〉を最小として追加)。
     #[test]
     fn next_larger_and_next_smaller_follow_approx_size_order() {
+        assert_eq!(next_larger("dialogpt-small").map(|e| e.id), Some("distilgpt2"));
         assert_eq!(next_larger("distilgpt2").map(|e| e.id), Some("gpt2"));
         assert_eq!(next_larger("gpt2").map(|e| e.id), Some("gpt2-medium"));
         assert_eq!(next_larger("gpt2-medium").map(|e| e.id), Some("gpt2-large"));
@@ -246,7 +287,8 @@ mod tests {
         assert_eq!(next_smaller("gpt2-large").map(|e| e.id), Some("gpt2-medium"));
         assert_eq!(next_smaller("gpt2-medium").map(|e| e.id), Some("gpt2"));
         assert_eq!(next_smaller("gpt2").map(|e| e.id), Some("distilgpt2"));
-        assert!(next_smaller("distilgpt2").is_none(), "distilgpt2 is already the smallest catalog entry");
+        assert_eq!(next_smaller("distilgpt2").map(|e| e.id), Some("dialogpt-small"));
+        assert!(next_smaller("dialogpt-small").is_none(), "dialogpt-small is now the smallest catalog entry");
     }
 
     #[test]
@@ -299,6 +341,7 @@ mod tests {
             display_name_ja: "テスト用モックモデル",
             display_name_en: "Mock model for testing",
             hf_repo: "mock-org/mock-repo",
+            tokenizer_hf_repo: None,
             approx_size_mb: 0,
             license_note_ja: "テスト専用、配布物ではない。",
         };
