@@ -757,6 +757,43 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-09-02(続き) FP8 重み量子化を opt-in 配線
+  (`ARUARU_LLM_ENABLE_FP8_WEIGHTS`)——open-cuda 側の FP8 演算カーネル
+  (`sgemm_fp8_weight`)と対になるスライス**:
+  1. **背景**: ユーザー要望「FP8 と F8 演算カーネルを実装開発対応して」
+     「対応外 dtype(INT8/INT4)のエラーを修正して」への対応。open-cuda
+     側で FP8(E4M3/E5M2)量子化 API + `sgemm_fp8_weight`(dequant-on-the-fly
+     GEMM)+ `GptModel::enable_fp8_weights` + 全数値 dtype ローダーを
+     実装(open-cuda コミット `b9fae40`、詳細は `open-cuda/CLAUDE.md`
+     2026-09-02(続き)エントリ)。
+  2. **`src/generation.rs`**: `wire_fp8_weights` を新設。
+     `ARUARU_LLM_ENABLE_FP8_WEIGHTS` の値 `e4m3`(別名 `fp8`/`hf8`)/
+     `e5m2`(別名 `bf8`)で `GptModel::enable_fp8_weights` を配線。
+     全 Linear の重みを FP8 化し `Linear::forward` が
+     `opencuda_blas::sgemm_fp8_weight` を通る。**既定 off**——MLA 配線と
+     同じ判断:GT730 に FP8 Tensor Core が無くソフトウェア実装で、
+     利益は重みメモリ 1/4 で速度ではない、かつ E4M3 の量子化誤差
+     (相対 ~2^-3)ぶん生成品質が劣化するため実ユーザー向け応答の
+     既定挙動にはしない。`wire_mla_kv_compression_any` の直後、
+     `real-vulkan`/`real-dx12` feature 配下ではない位置(GPU 非依存)で呼ぶ。
+  3. **検証**: `cargo test --release` **101 passed / 2 ignored**
+     (回帰なし)。実 HTTP E2E:
+     `ARUARU_LLM_ENABLE_FP8_WEIGHTS=e4m3` + `ARUARU_LLM_GPT2_DIR=...
+     models/distilgpt2` でサーバー起動 → 起動ログに
+     `quantized all Linear weights to FP8 (E4M3); Linear::forward now
+     runs opencuda_blas::sgemm_fp8_weight` が発火 → `POST /v1/generate`
+     が `"es are a common sight in the wild, and they can"` を生成
+     (f32 版 distilgpt2 の `"...and are often found in the wild."` と
+     僅かに異なる継続 = FP8 量子化が実際に効いている)。
+     **English**: `wire_fp8_weights` wires `GptModel::enable_fp8_weights`
+     via `ARUARU_LLM_ENABLE_FP8_WEIGHTS=e4m3|e5m2` (default off). All
+     Linear weights are FP8-quantized and `forward` runs
+     `sgemm_fp8_weight` (software dequant-on-the-fly GEMM — no FP8
+     Tensor Core on this box, benefit is ~4x smaller weight memory, not
+     speed; quality degrades by the FP8 quantization error). 101 tests
+     pass; real HTTP E2E verified the wiring log fires and `/v1/generate`
+     still produces coherent (slightly different) output.
+
 - **2026-09-02 model_catalog に DialoGPT-small(F16、対話FT済み)を追加
   ——open-cuda 側 safetensorsローダーの F16/BF16/FP8 対応と対になる
   スライス(open-cuda → aruaru-llm → open-english)**:
