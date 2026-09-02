@@ -311,6 +311,45 @@ fn mla_d_c(head_dim: usize) -> usize {
 /// ない**という可用性優先の理由からも既定offとした。読み込み失敗時
 /// (`d_c`不正等)はサービスを落とさず、フル精度KVキャッシュのまま
 /// 継続する。
+/// `ARUARU_LLM_ENABLE_FP8_WEIGHTS` を読み、`open-cuda-llm::GptModel::
+/// enable_fp8_weights` を配線する(2026-09-02追加、opt-in・GPU非依存)。
+/// 値 `e4m3` / `e5m2`(大文字小文字不問)。それ以外・未設定なら何もしない。
+fn wire_fp8_weights(model: &mut GptModel) -> bool {
+    let raw = match std::env::var("ARUARU_LLM_ENABLE_FP8_WEIGHTS") {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    let format = match raw.trim().to_ascii_lowercase().as_str() {
+        "e4m3" | "fp8" | "hf8" => opencuda_blas::Fp8Format::E4M3,
+        "e5m2" | "bf8" => opencuda_blas::Fp8Format::E5M2,
+        other => {
+            tracing::warn!(
+                "ARUARU_LLM_ENABLE_FP8_WEIGHTS={other:?} is not one of e4m3/e5m2; keeping f32 weights"
+            );
+            return false;
+        }
+    };
+    // 量子化はホスト側で完結する(GPU非依存)ため、専用の CpuDevice を
+    // その場で構築して渡す(`wire_mla_kv_compression_any` の較正パスと同じ発想)。
+    let device = opencuda_cpu::CpuDevice::new(0);
+    match model.enable_fp8_weights(device.as_ref(), format) {
+        Ok(()) => {
+            tracing::info!(
+                "ARUARU_LLM_ENABLE_FP8_WEIGHTS={raw:?}: quantized all Linear weights to FP8 ({format:?}); \
+                 Linear::forward now runs opencuda_blas::sgemm_fp8_weight (dequant-on-the-fly). \
+                 WARNING: no FP8 Tensor Core on this machine — this is a software path whose only \
+                 benefit is ~4x smaller weight memory, not speed, and generation quality degrades by \
+                 the FP8 quantization error."
+            );
+            true
+        }
+        Err(err) => {
+            tracing::warn!("ARUARU_LLM_ENABLE_FP8_WEIGHTS set but enable_fp8_weights failed ({err:#}); keeping f32 weights");
+            false
+        }
+    }
+}
+
 fn wire_mla_kv_compression(model: &mut GptModel) -> bool {
     if !mla_kv_compression_enabled() {
         return false;
@@ -523,6 +562,14 @@ fn load_from_dir(dir: &std::path::Path) -> Result<LoadedGpt, String> {
     // 2026-08-08: 乱数射影版/PCA較正版のどちらを使うかは
     // `wire_mla_kv_compression_any`が`ARUARU_LLM_MLA_CALIBRATED`で判定する。
     let _mla_wired = wire_mla_kv_compression_any(&mut model, &tokenizer);
+    // FP8 重み量子化(2026-09-02追加、opt-in・GPU非依存)。
+    // `ARUARU_LLM_ENABLE_FP8_WEIGHTS=e4m3` または `e5m2` で有効化。
+    // 全 Linear の重みを FP8 化し `sgemm_fp8_weight`(dequant-on-the-fly)を
+    // 通す。**既定off**——GT730 に FP8 Tensor Core が無いためソフトウェア
+    // 実装で、利益は重みメモリ 1/4 であり速度ではない。かつ E4M3 の
+    // 量子化誤差(相対 ~2^-3)ぶん生成品質が劣化するため、実ユーザー向け
+    // 応答の既定挙動にはしない(MLA 配線と同じ判断)。
+    let _fp8_wired = wire_fp8_weights(&mut model);
     // 階層的アクセラレーションの第2段(2026-08-23追加): SPIR-V(Vulkan)
     // 配線が成立しなかった場合に限り、D3D12 Compute(DXIL)への密GEMM
     // オフロードを試みる。Vulkanが使えているならそちらの方が対象範囲が
