@@ -757,6 +757,37 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-09-02 model_catalog に DialoGPT-small(F16、対話FT済み)を追加
+  ——open-cuda 側 safetensorsローダーの F16/BF16/FP8 対応と対になる
+  スライス(open-cuda → aruaru-llm → open-english)**:
+  1. **背景**: 2026-08-26 HANDOFF で「`microsoft/DialoGPT-small` は
+     F16 配布で `open-cuda-llm` ローダーが F32 のみ対応のためロード
+     不可、カタログ追加を見送り実装も元へ戻した」と記録していた。
+     今回、`open-cuda` 側 `tensor_f32` を F16/BF16/FP8(E4M3/E5M2)→f32
+     変換対応へ拡張した(`open-cuda` コミット `9c4ff39`、詳細は
+     `open-cuda/CLAUDE.md` 2026-09-02 エントリ)ため、この見送りを解消した。
+  2. **`src/model_catalog.rs`(コミット `ef4004f`、`Cargo.lock` 追跡込み)**:
+     `CatalogEntry` に `#[serde(skip_serializing_if = "Option::is_none")]
+     pub tokenizer_hf_repo: Option<&'static str>` を追加(既存5エントリは
+     `None`)。新エントリ `dialogpt-small`(`hf_repo:
+     "microsoft/DialoGPT-small"`、`tokenizer_hf_repo:
+     Some("openai-community/gpt2")` ——DialoGPT は gpt2 と同一の
+     50257 BPE 語彙のため `tokenizer.json` を流用、`approx_size_mb: 335`、
+     MIT License。対話FT済みだが instruction following まで学習した
+     モデルではない点を `license_note_ja` に明記)。`install_from_base_url`
+     が `("tokenizer.json", Some(tok_repo))` のときだけ tokenizer の
+     取得元を差し替える。`next_larger`/`next_smaller` のサイズ順テストも
+     更新(335MB で最小)。
+  3. **検証**: `cargo test --release`(model_catalog 9/9 含む)、実 HTTP
+     E2E:`POST /v1/models/select` が実際に `dialogpt-small` へ
+     ホットスワップ(以前 `unexpected dtype F16` で失敗していた操作)、
+     `POST /v1/generate` が会話調の出力を生成することを確認。
+     **English**: added `dialogpt-small` to the model catalog now that
+     `open-cuda`'s loader converts F16→f32 (was blocked / reverted on
+     2026-08-26). New `tokenizer_hf_repo` field lets DialoGPT reuse
+     gpt2's `tokenizer.json`. `/v1/models/select` hot-swap and
+     `/v1/generate` verified over real HTTP.
+
 - **2026-09-01(続き2) Model Folding: Attentionサブ層を丸ごとスキップ
   する軽量パスを実装(open-cuda + aruaru-llm + open-english の3リポジトリ
   スライス)、および「open-cudaは必須の相方」を日英でREADMEへ明文化
