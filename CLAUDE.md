@@ -757,6 +757,22 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-09-02(続き2) GPTQ(INT4/INT8)量子化モデルのロードに対応
+  (open-cuda 側 `4f27a41`、このリポジトリはコード変更なし)**:
+  ユーザー要望「対応外dtype(INT8/INT4)は正直なエラー。対応して」への
+  対応。GPTQ は単一 safetensors dtype ではなく「I32 ビットパックの
+  `qweight` + `scales` + `qzeros`(+ `desc_act` 時 `g_idx`)+
+  `config.json` の `quantization_config`」で表現されるため、
+  `open-cuda-llm::GptModel::load` がそれを自動検出して逆量子化する
+  (`w = (q - (zero+1)) * scale`、4bit=8値/i32・8bit=4値/i32)。
+  AWQ(interleave パック)は正直なエラーで拒否。**aruaru-llm 側は
+  `GptModel::load` を呼ぶだけなのでコード変更不要**——`config.json` に
+  `quantization_config` を持つ GPTQ モデルをカタログへ追加すれば
+  そのまま `/v1/models/select` でロードできる(カタログ追加自体は
+  未実施、GPTQ 版 GPT-2 互換モデルの実在確認が前提)。
+  `cargo test --release` **101 passed / 2 ignored**(新しい open-cuda
+  との path 依存ビルドで回帰なし)。
+
 - **2026-09-02(続き) FP8 重み量子化を opt-in 配線
   (`ARUARU_LLM_ENABLE_FP8_WEIGHTS`)——open-cuda 側の FP8 演算カーネル
   (`sgemm_fp8_weight`)と対になるスライス**:
