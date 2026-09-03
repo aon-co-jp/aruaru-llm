@@ -1949,6 +1949,10 @@ struct RuntimeInfoResponse {
     /// 階層的アクセラレーション(CUDA → Vulkan → DirectX → CPU SIMD)の
     /// うち、**実際に**どの段が有効になっているか(2026-08-23追加)。
     acceleration: AccelerationInfo,
+    /// llama.cpp 風のバックエンド行列(2026-09-03追加)。未実装の将来経路
+    /// (Metal / HIP / SYCL / WebGPU)も含めた全体像。**報告のみ**。
+    /// 正本: `open-cuda/OmniGPU-Design.md` §11.6 / §12.3。
+    backend_matrix: Vec<BackendMatrixRow>,
     /// `POST /v1/transcribe`(whisper.cpp 音声認識)の状態(2026-08-29追加、
     /// SPEECH_RECOGNITION_REDESIGN.md P2-β)。
     whisper: WhisperTierInfo,
@@ -2096,6 +2100,105 @@ fn acceleration_info(pool: &device_pool::DevicePool) -> AccelerationInfo {
     AccelerationInfo { tier, tier_label_en, tier_label_ja, cuda, vulkan, directx, cpu_simd }
 }
 
+/// llama.cpp 風のバックエンド行列 1 行(2026-09-03 新設、`open-cuda`
+/// `OmniGPU-Design.md` §12.3 の「バックエンド行列を llama.cpp に倣って
+/// 明示する」方針)。**報告のみ**——この行列は挙動を一切変えない。
+///
+/// `status`:
+/// - `"active"` = 今この経路で計算している
+/// - `"compiled-in"` = ビルドに含まれるが実行時には選ばれていない
+/// - `"not-compiled-in"` = feature を有効にすれば使える
+/// - `"planned"` = 設計方針として記録済み・未実装
+#[derive(Debug, Serialize)]
+struct BackendMatrixRow {
+    backend: &'static str,
+    status: &'static str,
+    note_en: &'static str,
+    note_ja: &'static str,
+}
+
+/// `GET /v1/runtime` が返すバックエンド行列。`acceleration`(実際にどの段が
+/// 効いているか)と重複するが、こちらは **未実装の将来経路(Metal / HIP /
+/// SYCL / WebGPU)も含めた全体像** を llama.cpp のバックエンド表と同じ粒度で
+/// 見せることが目的(正本: `open-cuda/OmniGPU-Design.md` §11.6 / §12.3)。
+fn backend_matrix(accel: &AccelerationInfo) -> Vec<BackendMatrixRow> {
+    let status = |compiled: bool, active: bool| -> &'static str {
+        if active {
+            "active"
+        } else if compiled {
+            "compiled-in"
+        } else {
+            "not-compiled-in"
+        }
+    };
+    vec![
+        BackendMatrixRow {
+            backend: "cpu-simd",
+            status: if accel.cpu_simd.active { "active" } else { "compiled-in" },
+            note_en: "open-cpu runtime dispatch (AVX2+FMA3 measured ~3.34x vs scalar). Always built in; \
+                      handles everything not offloaded to a GPU tier.",
+            note_ja: "open-cpu の実行時ディスパッチ(AVX2+FMA3 でスカラー比 実測 約3.34倍)。\
+                      常にビルドされ、GPU 段へオフロードされない全処理を担う。",
+        },
+        BackendMatrixRow {
+            backend: "vulkan-spirv",
+            status: status(accel.vulkan.compiled_in, accel.vulkan.active),
+            note_en: "open-cuda SPIR-V compute. The portability backbone (NVIDIA/AMD/Intel on \
+                      Linux/Windows, macOS via MoltenVK). Build with --features real-vulkan.",
+            note_ja: "open-cuda の SPIR-V compute。移植性の背骨(Linux/Windows の NVIDIA/AMD/Intel、\
+                      macOS は MoltenVK 経由)。--features real-vulkan でビルド。",
+        },
+        BackendMatrixRow {
+            backend: "directx-dxil",
+            status: status(accel.directx.compiled_in, accel.directx.active),
+            note_en: "open-cuda D3D12/DXIL, dense GEMM only. Fallback for Windows without Vulkan. \
+                      Build with --features real-dx12. Slower than CPU SIMD on this dev box (GT 730).",
+            note_ja: "open-cuda の D3D12/DXIL、密 GEMM のみ。Vulkan が無い Windows 向けフォールバック。\
+                      --features real-dx12 でビルド。この開発機(GT 730)では CPU SIMD より遅い。",
+        },
+        BackendMatrixRow {
+            backend: "cuda",
+            status: "not-compiled-in",
+            note_en: "No native CUDA/cuBLAS backend in open-cuda (GemmPath::CuBlas is a stub). \
+                      NVIDIA GPUs run through the Vulkan path.",
+            note_ja: "open-cuda にネイティブ CUDA/cuBLAS バックエンドは無い(GemmPath::CuBlas はスタブ)。\
+                      NVIDIA GPU も Vulkan 経路で動く。",
+        },
+        BackendMatrixRow {
+            backend: "metal",
+            status: "planned",
+            note_en: "Reach Apple GPUs via MoltenVK (Vulkan-subset-on-Metal) with the existing SPIR-V \
+                      kernels — no new backend. Real-machine verification pending. See OmniGPU-Design.md §11.3.",
+            note_ja: "Apple GPU は MoltenVK(Vulkan サブセット on Metal)経由で既存の SPIR-V カーネルの\
+                      まま到達する——新バックエンドは書かない。実機検証は保留。OmniGPU-Design.md §11.3。",
+        },
+        BackendMatrixRow {
+            backend: "hip-rocm",
+            status: "planned",
+            note_en: "AMD native path (hipBLASLt). Optional accelerated path only; the portable route \
+                      for AMD is Vulkan + VK_EXT_shader_float8 (shipping in Adrenalin 25.10.2+).",
+            note_ja: "AMD ネイティブ経路(hipBLASLt)。任意の高速化経路のみ。AMD の移植性経路は \
+                      Vulkan + VK_EXT_shader_float8(Adrenalin 25.10.2 以降で出荷)。",
+        },
+        BackendMatrixRow {
+            backend: "sycl-levelzero",
+            status: "planned",
+            note_en: "Intel Arc/Xe native path (oneAPI Level Zero). Optional; Intel GPUs are covered by \
+                      the Vulkan/SPIR-V path today.",
+            note_ja: "Intel Arc/Xe ネイティブ経路(oneAPI Level Zero)。任意。Intel GPU は現状 \
+                      Vulkan/SPIR-V 経路でカバーされる。",
+        },
+        BackendMatrixRow {
+            backend: "webgpu-wasm",
+            status: "planned",
+            note_en: "Browser inference via wgpu/WebGPU (W3C Candidate Recommendation Draft, 2026-05). \
+                      Future option; see the 2026-08-25 in-browser-AI plan and 'Llamas on the Web'.",
+            note_ja: "wgpu/WebGPU によるブラウザ推論(W3C Candidate Recommendation Draft、2026-05)。\
+                      将来オプション。2026-08-25 のブラウザ内 AI 構想・『Llamas on the Web』参照。",
+        },
+    ]
+}
+
 /// CPU 側 SIMD ディスパッチの状況(`open-cpu` + `opencuda-blas` の実測値)。
 #[derive(Debug, Serialize)]
 struct CpuSimdInfo {
@@ -2168,6 +2271,7 @@ async fn runtime_info(pool: Arc<device_pool::DevicePool>) -> Response {
     let active_model_dir = generation::active_model_dir().map(|p| p.to_string_lossy().to_string());
 
     let acceleration = acceleration_info(&pool);
+    let backend_matrix = backend_matrix(&acceleration);
     let names = devices.iter().map(|d| d.name.clone()).collect::<Vec<_>>().join(", ");
     let (summary_en, summary_ja) = if acceleration.tier == "directx-gemm" {
         (
@@ -2199,6 +2303,7 @@ async fn runtime_info(pool: Arc<device_pool::DevicePool>) -> Response {
             summary_ja,
             cpu_simd: cpu_simd_info(),
             acceleration,
+            backend_matrix,
             whisper: whisper_tier_info(),
             disclosure: "This endpoint only reports which open-cuda device backend is actually in use; \
                          it does not itself accelerate anything. The default build is CPU-only. \
@@ -2708,4 +2813,85 @@ async fn main() -> anyhow::Result<()> {
 
     let (_addr, handle) = Server::new(TcpListener::bind(bind_addr)).run(app).await?;
     handle.await.map_err(|e| anyhow::anyhow!("server task panicked: {e}"))
+}
+
+#[cfg(test)]
+mod runtime_backend_matrix_tests {
+    use super::*;
+
+    fn dummy_tier(compiled: bool, active: bool) -> TierStatus {
+        TierStatus { compiled_in: compiled, active, detail: String::new() }
+    }
+
+    fn dummy_accel(vulkan_active: bool, directx_compiled: bool) -> AccelerationInfo {
+        AccelerationInfo {
+            tier: if vulkan_active { "vulkan" } else { "cpu-simd" },
+            tier_label_en: String::new(),
+            tier_label_ja: String::new(),
+            cuda: dummy_tier(false, false),
+            vulkan: dummy_tier(vulkan_active, vulkan_active),
+            directx: dummy_tier(directx_compiled, false),
+            cpu_simd: dummy_tier(true, !vulkan_active),
+        }
+    }
+
+    #[test]
+    fn backend_matrix_covers_every_backend_with_a_valid_status() {
+        let rows = backend_matrix(&dummy_accel(false, false));
+        let names: Vec<&str> = rows.iter().map(|r| r.backend).collect();
+        assert_eq!(
+            names,
+            vec![
+                "cpu-simd",
+                "vulkan-spirv",
+                "directx-dxil",
+                "cuda",
+                "metal",
+                "hip-rocm",
+                "sycl-levelzero",
+                "webgpu-wasm",
+            ]
+        );
+        for r in &rows {
+            assert!(
+                matches!(r.status, "active" | "compiled-in" | "not-compiled-in" | "planned"),
+                "backend {} has an unexpected status {:?}",
+                r.backend,
+                r.status
+            );
+            assert!(!r.note_en.is_empty() && !r.note_ja.is_empty(), "backend {} missing a note", r.backend);
+        }
+    }
+
+    #[test]
+    fn cpu_simd_is_always_at_least_compiled_in_never_missing() {
+        for accel in [dummy_accel(false, false), dummy_accel(true, true)] {
+            let rows = backend_matrix(&accel);
+            let cpu = rows.iter().find(|r| r.backend == "cpu-simd").unwrap();
+            assert_ne!(cpu.status, "not-compiled-in", "cpu-simd is always built in");
+        }
+    }
+
+    #[test]
+    fn vulkan_row_reflects_the_acceleration_tier_state() {
+        let inactive = backend_matrix(&dummy_accel(false, false));
+        assert_eq!(inactive.iter().find(|r| r.backend == "vulkan-spirv").unwrap().status, "not-compiled-in");
+
+        let active = backend_matrix(&dummy_accel(true, false));
+        assert_eq!(active.iter().find(|r| r.backend == "vulkan-spirv").unwrap().status, "active");
+        // Vulkan が有効なら cpu-simd は "compiled-in"(active ではない)。
+        assert_eq!(active.iter().find(|r| r.backend == "cpu-simd").unwrap().status, "compiled-in");
+    }
+
+    #[test]
+    fn future_backends_are_marked_planned() {
+        let rows = backend_matrix(&dummy_accel(true, true));
+        for name in ["metal", "hip-rocm", "sycl-levelzero", "webgpu-wasm"] {
+            assert_eq!(
+                rows.iter().find(|r| r.backend == name).unwrap().status,
+                "planned",
+                "{name} should be reported as planned, not implemented"
+            );
+        }
+    }
 }
