@@ -74,13 +74,35 @@ pub struct HardwareSummary {
 /// [getdeploying.com](https://getdeploying.com/gpus/nvidia-rtx-5090-vs-nvidia-rtx-6000-ada))・
 /// **RTX PRO 6000 Blackwell**(96GB、ECC対応のワークステーション向け、
 /// [tech.sportskeeda.com](https://tech.sportskeeda.com/gaming-news/nvidia-rtx-pro-6000-vs-rtx-5090))。
+/// ## 2026-09-03追記: 高VRAM帯 GPU 3ベンダー分の実在確認(英日中 Web 検索)
+///
+/// ユーザーから「RTX 5900」「AMD/Intel 32GB」の言及があった。**「RTX 5900」は
+/// 現行 Blackwell 世代に実在しない**(2003 年の GeForceFX 5900 のみ。現行
+/// RTX 50 は 5090 / 5080 / 5070)。実在する 2026 年時点の高 VRAM 帯製品:
+/// - **NVIDIA**: RTX 5090(Blackwell、**32GB** GDDR7)/ RTX 5080(16GB、
+///   5080 Super は 24GB)/ RTX PRO 6000 Blackwell(**96GB**、ECC、
+///   24,064 CUDA コア)。全 Blackwell → FP8 Tensor Core あり
+///   ([NVIDIA RTX 5090](https://www.nvidia.com/en-us/geforce/graphics-cards/50-series/rtx-5090/))。
+/// - **AMD**: Radeon AI PRO R9700(RDNA4、**32GB** GDDR6、64 CU、128 個の
+///   第2世代 AI アクセラレータ、**FP8 matrix 383 TFLOPS dense / 766 sparse**、
+///   FP8/FP16/INT8 対応、$1,299、2025-07-23 発売
+///   ([ServeTheHome](https://www.servethehome.com/amd-takes-aim-for-workstation-ai-market-with-radeon-ai-pro-r9700/)))。
+/// - **Intel**: Arc Pro B60(Battlemage、**24GB** GDDR6。デュアル構成の
+///   サードパーティ製で 48GB もあり)。
+///
+/// **ベンダー非依存**: これら 3 ベンダーの GPU はいずれも `open-cuda` の
+/// **同一 Vulkan / SPIR-V 経路**で到達する(カード別コードは無い)。FP8 の
+/// 実行は移植性の高い `VK_EXT_shader_float8` + `VK_KHR_cooperative_matrix`
+/// 経路(NVIDIA は 2025-06、AMD は Adrenalin 25.10.2 以降の出荷ドライバで
+/// 対応)を第一実装先とする。正本: `open-cuda/OmniGPU-Design.md` §8.5 / §11.6。
+///
 /// **正直な開示**: 現在のモデルカタログ(`model_catalog.rs`)最大が
 /// `gpt2-xl`(1.5B、約6.43GB)に留まるため、これらの高VRAM帯GPUを
 /// 実際に検出しても、本ヒューリスティックはカタログ最大の`gpt2-xl`を
 /// 推奨するだけで、それ以上大きなモデルを新たに推奨することはない
 /// (VRAMが余っても実際に活用できるより大きなモデルがカタログに
 /// 存在しないため)——名前だけ挙げて実在しない性能向上を示唆しない
-/// ようにする。
+/// ようにする。カタログ拡張(より大きい実在モデルの追加)が先。
 fn recommend_id_for_vram(vram_bytes: Option<u64>) -> &'static str {
     const GB: u64 = 1024 * 1024 * 1024;
     match vram_bytes {
@@ -360,6 +382,16 @@ mod tests {
         assert_eq!(recommend_id_for_vram(Some(rtx_5090_vram)), "gpt2-xl");
         assert_eq!(recommend_id_for_vram(Some(rtx_6000_ada_vram)), "gpt2-xl");
         assert_eq!(recommend_id_for_vram(Some(rtx_pro_6000_blackwell_vram)), "gpt2-xl");
+
+        // 2026-09-03: 3ベンダー分(NVIDIA/AMD/Intel)の高VRAM帯 GPU も
+        // 同じ Vulkan/SPIR-V 経路で扱う。VRAM に応じた推奨は現行カタログ
+        // 上限(gpt2-xl)で頭打ちであることを、AMD/Intel でも確認する。
+        let amd_r9700_vram = 32 * 1024 * 1024 * 1024u64; // AMD Radeon AI PRO R9700: 32GB GDDR6
+        let intel_arc_pro_b60_vram = 24 * 1024 * 1024 * 1024u64; // Intel Arc Pro B60: 24GB
+        let intel_arc_pro_b60_dual_vram = 48 * 1024 * 1024 * 1024u64; // dual-B60 (3rd-party): 48GB
+        assert_eq!(recommend_id_for_vram(Some(amd_r9700_vram)), "gpt2-xl");
+        assert_eq!(recommend_id_for_vram(Some(intel_arc_pro_b60_vram)), "gpt2-xl");
+        assert_eq!(recommend_id_for_vram(Some(intel_arc_pro_b60_dual_vram)), "gpt2-xl");
     }
 
     #[test]
