@@ -4011,3 +4011,27 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
   **Bottom line**: all 4 user-requested follow-up tasks are now
   implemented and hardware-verified; none remain in a half-finished
   state.
+
+## HANDOFF追記(2026-09-03) エコシステム横断の GPU 移植性設計見直し(正本: open-cuda/OmniGPU-Design.md §11・§12)
+
+ユーザー指示「NVIDIA/AMD/Intel のどの GPU でも互換、Windows/macOS/Linux/Unix
+でも機能するよう最新理論を調査して 5 リポジトリ(dream-os / open-directx /
+open-cuda / aruaru-llm / aruaru-db)の新規設計へ活かす」への対応。
+**設計の正本は `open-cuda/OmniGPU-Design.md` の §11(クロスベンダー×クロスOS
+移植性設計)と §12(エコシステム横断の設計見直し)**。一次資料: rust-gpu
+「running on every GPU」/ CubeCL / MoltenVK / vkd3d-proton・DXVK 3.0
+(`dxil-spirv`)/ llama.cpp バックエンド行列 / 「Llamas on the Web」(WebGPU)。
+
+### aruaru-llm への波及方針(§12.3)
+1. **バックエンド行列を llama.cpp に倣って明示**: CPU-SIMD(AVX2+FMA3、
+   実測 3.34x)=済 / Vulkan=済 / DXIL=済 / Metal(MoltenVK 経由)=将来 /
+   HIP(AMD)・SYCL(Intel)=optional。README へ表で明記する。
+2. **`ARUARU_LLM_ENABLE_*` の opt-in 群を「起動時の能力交渉 → 自動選択」へ
+   寄せる**(env は override として残す)。現状は利用者が手動で FP8/MLA/
+   flash-attention 等を選んでいる。
+3. **int8 活性化量子化**(llama.cpp が CUDA/Vulkan で採用)を `opencuda-blas`
+   の `dot_i8`(VNNI 経路、実装済み・未配線)へ繋ぐ検討。
+4. **WebGPU/wasm 経路**は「Llamas on the Web」(arXiv:2605.20706)を裏付けに
+   将来オプションとして記録(2026-08-25 の「ブラウザ内 AI 実行」構想と接続)。
+
+いずれも**今回はコード未着手**。次の作業でこの方針に沿って進める。
