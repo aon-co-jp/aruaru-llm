@@ -4139,3 +4139,96 @@ Next slice (C): make `ARUARU_LLM_ENABLE_*` "auto via capability
 negotiation when unset, override when set", gated on `open-cuda`'s
 `supports_fp8_tensor_core` etc., verified not to change default
 generation.
+
+## HANDOFF追記(2026-09-03続き) `src/hardware.rs` に精度(F16/F32/F64/F128)を考慮したVRAM見積もりを追加
+
+ユーザー指示「open-directx・open-cuda・aruaru-llmで今後 **32GB VRAM級**の
+NVIDIA(RTX)/AMD/Intel GPUを前提に、**F16/F32/F64**で開発する」+ 追って
+「**F128まで見据えて**」への対応。companion agentが同時並行で
+`open-cuda`(`opencuda-core`/`opencuda-blas`へKernelArg F16/F32/F64/F128
+バリアント+GEMM実装)と`open-directx`(shader-translate-layerの精度範囲
+ドキュメント化)を担当、本リポジトリはモデル推奨・ハードウェア検出層
+(`src/hardware.rs`)を担当した(3リポジトリを跨いだ並行作業、
+`open-directx`/`open-cuda`自体には触れていない)。
+
+- **既存の`recommend_id_for_vram`**(VRAM容量→カタログモデルIDの単純
+  ヒューリスティック)は、モジュールdoc冒頭の「正直な開示」通り
+  「パラメータ数×4バイト(fp32換算)」固定で、精度の概念が一切無かった
+  ——これが今回の実質的なギャップだった。同じVRAM予算でもfp16推論なら
+  fp32の約2倍のパラメータ数のモデルが収まる、という実デプロイで広く
+  行われる最適化を反映できていなかった。
+- **`InferencePrecision`列挙型**(`F16`=2バイト/パラメータ・`F32`=4・
+  `F64`=8・`F128`=16)と`recommend_id_for_vram_at_precision(vram_bytes,
+  precision)`を新設。既存の`recommend_id_for_vram`は`F32`を既定として
+  この新関数へ委譲するだけの後方互換ラッパーに変更(シグネチャ不変、
+  既存呼び出し元・既存テストは無修正で通る)。
+- **F128についての正直な開示**: NVIDIA/AMD/Intelいずれも、GPU上で
+  F128(四倍精度)をネイティブ実行できるTensor Core/ALUは存在しない。
+  ソフトウェアエミュレーション(倍々精度合成等)でのみ実現可能で、
+  実用上のLLM推論速度としては非現実的。本関数へ含めているのは
+  `open-cuda`側のKernelArg型システムがF128を型として持つ設計方針
+  (companion agentが並行実装中)との**一貫性のためだけ**であり、
+  「F128でLLM推論するのが実用的」という主張は一切していない
+  (open-cudaのcompanion agentが記録する同旨の開示と揃えた)。
+- **テスト**: `hardware::tests`に6件追加(F16がF32以上のサイズを推奨
+  すること・F64/F128がF32以下のサイズしか推奨しないこと・
+  `recommend_id_for_vram`が`F32`委譲と一致すること・`None`(検出不能)
+  は精度に関わらず常に最小サイズへ固定フォールバックすること・
+  `bytes_per_param`の値そのもの)。`cargo test`(`src/`全体、release
+  ではなくdefault profile): **107 passed / 3 failed / 2 ignored**——
+  3件の失敗(`chat_providers::tests::configured_providers_reflects_
+  runtime_keys`のGemini鍵未設定起因・`cache_optimizer::tests::*`の
+  整数オーバーフロー2件)はいずれも`hardware.rs`と無関係な既存の
+  pre-existingな失敗であることを、同テストをHEAD(本変更コミット前)で
+  個別実行して確認済み(本変更由来の回帰ではない)。`hardware::`配下
+  9件は全通過。
+- **精度の実推論配線について(正直な開示)**: `open-cuda-llm::GptModel`
+  の重みロード自体は依然F32前提(一部F16/BF16/FP8→f32変換のみ対応、
+  2026-09-02 HANDOFF参照)であり、`open-cuda`側のFP8/F16/F64/F128
+  companion作業がまだ実装途上のため、本関数が選んだ精度を実際の
+  ロード時dtypeとして使う配線は**まだ存在しない**(推奨モデルサイズの
+  見積もり計算にのみ使う)。`open-cuda`側の型システム拡張が完了し次第の
+  次スライス課題として記録するに留める(誇張しない)。
+- **ビルド時の副次的な観測**: 本作業中、`open-cuda`companion agentの
+  作業がまだ途中(`opencuda-cpu`の`KernelArg`非網羅match)だった時間帯は
+  ワークスペース全体のビルドが一時失敗した(`opencuda-cpu`が
+  `KernelArg::F16/F64/F128`の新規バリアントを網羅していなかったため)。
+  数分後の再試行でcompanion側の作業が進み解消——3リポジトリを跨いだ
+  並行セッションでは、依存先リポジトリの一時的な未完了状態によるビルド
+  失敗が起こりうる旨を記録しておく(このリポジトリ側の実装に問題は
+  無かった)。
+
+**English**: Added precision-aware VRAM sizing to `src/hardware.rs`,
+following the user's instruction to target 32GB-class NVIDIA/AMD/Intel
+GPUs going forward with F16/F32/F64 (later extended to include F128) —
+a 3-repo parallel effort where companion agents handled `open-cuda`
+(KernelArg F16/F32/F64/F128 + GEMM) and `open-directx` (precision scope
+docs) while this repo covers model recommendation/hardware detection.
+The old `recommend_id_for_vram` only ever assumed fp32 (4 bytes/param,
+per its own "honest disclosure" doc comment) with no precision concept
+at all — the real gap. Added `InferencePrecision` (F16=2/F32=4/F64=8/
+F128=16 bytes-per-param) and `recommend_id_for_vram_at_precision`; the
+old function now delegates to it with F32 as the default (signature and
+behavior unchanged, fully backward compatible). Honest disclosure on
+F128: no GPU vendor (NVIDIA/AMD/Intel) has native quad-precision
+hardware — it's software-emulated only and impractical for real
+inference; it's included purely for type-system consistency with
+open-cuda's parallel KernelArg work, not as a real inference option.
+Added 6 new unit tests (F16 recommends >= F32's model size for the same
+VRAM, F64/F128 recommend <= F32's, the legacy function matches F32
+delegation, the `None`/undetected-GPU fallback stays precision-
+independent, byte-per-param values). `cargo test`: 107 passed / 3
+failed / 2 ignored — the 3 failures (`chat_providers`'s Gemini-key
+check, 2x `cache_optimizer` integer-overflow) are confirmed pre-existing
+and unrelated to this change (verified by running them individually
+against HEAD before this commit); all 9 `hardware::` tests pass. No
+wiring yet to actual inference dtype selection — `open-cuda-llm::
+GptModel`'s weight loading is still fp32-oriented and the sibling repo's
+precision work is still in progress, so this estimate feeds only the
+recommended-model-size calculation for now, honestly noted as a future
+slice once open-cuda's type-system work lands. Also noted for the
+record: mid-session, the shared cargo workspace failed to build for a
+few minutes because the open-cuda companion agent's work was mid-flight
+(`opencuda-cpu` had a non-exhaustive match on the new `KernelArg`
+variants) — resolved itself once that companion session progressed;
+this repo's own code was not at fault.
