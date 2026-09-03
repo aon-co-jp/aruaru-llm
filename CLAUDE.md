@@ -4035,3 +4035,55 @@ open-cuda / aruaru-llm / aruaru-db)の新規設計へ活かす」への対応。
    将来オプションとして記録(2026-08-25 の「ブラウザ内 AI 実行」構想と接続)。
 
 いずれも**今回はコード未着手**。次の作業でこの方針に沿って進める。
+
+### 2026-09-03(続き)世界中の言語で再調査 → 波及方針の裏付け更新(コード未着手)
+
+EN/JA/ZH + GitHub 中心で再調査(正本 `open-cuda/OmniGPU-Design.md`
+§11.6)。aruaru-llm の波及方針に効く更新点:
+- **`EmbarkStudios/rust-gpu` は 2025-10-31 アーカイブ**。aruaru-llm は
+  `rust-gpu` に依存していない(推論は open-cuda の SPIR-V/DXIL 経由)ため
+  影響なし。将来 WebGPU/wasm 経路を書く場合の「単一 Rust ソース」候補は
+  CubeCL / wgpu+naga。
+- **`VK_EXT_shader_float8` が出荷ドライバ入り**(NVIDIA 2025-06 / AMD
+  Adrenalin 25.10.2)。→ `ARUARU_LLM_ENABLE_FP8_WEIGHTS`(現状 GT 730 では
+  ソフトウェア dequant)は、FP8 対応 GPU + open-cuda 側の
+  `VK_EXT_shader_float8` + `VK_KHR_cooperative_matrix` 経路が実装されれば
+  そのまま実 tensor-core 実行へ切り替わる。能力交渉(方針 2)の判定条件は
+  「Vulkan がこの 2 拡張を報告するか」。
+- **llama.cpp は 2026-04 にバックエンド非依存のテンソル並列を導入**、
+  Vulkan バックエンドの拡張スタックは `VK_KHR_cooperative_matrix` +
+  `VK_NV_cooperative_matrix2` + `VK_KHR_shader_integer_dot_product` +
+  `VK_KHR_shader_bfloat16`(FOSDEM 2026)。→ 方針 3(int8 活性化量子化)は
+  `VK_KHR_shader_integer_dot_product` が open-cuda の Vulkan GEMM に入れば
+  `dot_i8` 配線と揃う。
+- **WebGPU は W3C Candidate Recommendation Draft(2026-05-21)**、WebLLM は
+  ネイティブ比 ~80%、埋め込みは WebGPU が WASM 比 40〜75×
+  ([arXiv:2412.15803](https://arxiv.org/html/2412.15803v2))。→ 方針 4
+  (WebGPU/wasm 将来オプション)の裏付けを更新。
+
+**次の実装スライス(この方針に沿った最初のコード)**:
+(A) `GET /v1/runtime` を「バックエンド行列 + 能力交渉の結果選ばれた経路」を
+返す形へ拡張(現状の `acceleration` / `cpu_simd` フィールドを整理)、
+(B) `README.md` / `README-English.md` に llama.cpp 風のバックエンド表
+(CPU-SIMD=済 / Vulkan=済 / DXIL=済 / Metal via MoltenVK=将来 /
+HIP・SYCL=optional / WebGPU=将来)を追加、
+(C) `ARUARU_LLM_ENABLE_*` を「未指定なら能力交渉で自動、指定なら override」
+へ(env の意味を変えない後方互換)。
+
+**English**: World-language + GitHub re-research (source of truth:
+`open-cuda/OmniGPU-Design.md` §11.6). `rust-gpu` archived 2025-10-31 (no
+impact — aruaru-llm uses open-cuda's SPIR-V/DXIL path). `VK_EXT_shader_
+float8` is now in shipping NVIDIA/AMD drivers, so
+`ARUARU_LLM_ENABLE_FP8_WEIGHTS` flips to real tensor-core execution once
+open-cuda gains the `VK_EXT_shader_float8` + `VK_KHR_cooperative_matrix`
+path; the capability-negotiation check (policy 2) is "does Vulkan report
+those two extensions". llama.cpp added backend-agnostic tensor
+parallelism (2026-04); its Vulkan ext stack includes
+`VK_KHR_shader_integer_dot_product`, which lines up with the `dot_i8`
+wiring (policy 3). WebGPU is a W3C Candidate Recommendation Draft
+(2026-05); WebLLM ~80% native, embeddings 40–75× WASM (policy 4). Next
+implementation slices: (A) extend `GET /v1/runtime` to report the
+backend matrix + the negotiated path, (B) add a llama.cpp-style backend
+table to the READMEs, (C) make `ARUARU_LLM_ENABLE_*` "auto via
+capability negotiation when unset, override when set". Still no code
+this pass.
