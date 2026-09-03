@@ -18,6 +18,17 @@
 [Українська](README-Ukrainian.md) · [עברית](README-Hebrew.md) ·
 [فارسی](README-Persian.md) · [العربية](README-Arabic.md)
 
+> 📌 **Recent update (2026-09-03)**: Per user instruction to target
+> 32GB-VRAM-class NVIDIA/AMD/Intel GPUs and support F16/F32/F64/F128
+> going forward, `src/hardware.rs`'s VRAM-recommendation heuristic now
+> takes an `InferencePrecision` (F16/F32/F64/F128, bytes/param) so the
+> same VRAM budget recommends a bigger model at fp16 than at fp32 (the
+> existing `recommend_id_for_vram` still delegates with F32 as default,
+> fully backward compatible). **Honest disclosure**: F128 has no native
+> GPU hardware support anywhere, so it's included only for type-system
+> consistency with open-cuda's `KernelArg`, not as a real inference
+> precision. 9/9 tests pass. See [CLAUDE.md](CLAUDE.md) for details.
+>
 > 📌 **Recent update (2026-08-26)**: Changed the `/v1/generate-with-search`
 > prompt assembly from plain concatenation to a QA-style format
 > (`web_search::build_search_augmented_prompt`: `"Search results:

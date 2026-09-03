@@ -7,6 +7,19 @@
 [Українська](README-Ukrainian.md) · [עברית](README-Hebrew.md) ·
 [فارسی](README-Persian.md) · [العربية](README-Arabic.md)
 
+> 📌 **最近の更新(2026-09-03)**: ユーザー指示「open-directx/open-cuda/
+> aruaru-llmで、今後32GB VRAM級のNVIDIA/AMD/Intel GPUを想定し、
+> F16/F32/F64、さらにF128まで見据えて開発する」への対応として、
+> `src/hardware.rs`のVRAM推奨ヒューリスティックへ`InferencePrecision`
+> (F16/F32/F64/F128、バイト/パラメータ)を導入。同じVRAM容量でも
+> fp16推論なら約2倍のパラメータ数のモデルが収まる、という実際の
+> デプロイ最適化を反映できるようにした(既存`recommend_id_for_vram`は
+> F32既定で委譲、後方互換)。**正直な開示**: F128はGPU上のネイティブ
+> 対応が存在しないためソフトウェアエミュレーション前提であり、
+> open-cuda側`KernelArg`型システムとの一貫性のためだけに用意した
+> 計算上の概念(実用的な推論精度ではない)。9/9テストgreen。詳細は
+> [CLAUDE.md](CLAUDE.md)参照。
+>
 > 📌 **最近の更新(2026-08-26続き)**: `/v1/generate-with-search`の
 > プロンプト組み立てを、検索結果を単純連結するだけの旧書式から
 > `"Search results: ...\nQuestion: {prompt}\nAnswer:"`というQA形式
