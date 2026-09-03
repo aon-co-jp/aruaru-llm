@@ -104,13 +104,100 @@ pub struct HardwareSummary {
 /// 存在しないため)——名前だけ挙げて実在しない性能向上を示唆しない
 /// ようにする。カタログ拡張(より大きい実在モデルの追加)が先。
 fn recommend_id_for_vram(vram_bytes: Option<u64>) -> &'static str {
+    recommend_id_for_vram_at_precision(vram_bytes, InferencePrecision::F32)
+}
+
+/// **2026-09-03追記: 精度(F16/F32/F64/F128)を考慮したVRAM見積もり
+/// (ユーザー指示「open-directx・open-cuda・aruaru-llmで今後32GB VRAM級の
+/// NVIDIA/AMD/Intel GPUを前提に、F16/F32/F64、さらにF128まで見据えて
+/// 開発する」への対応)**。
+///
+/// ## 何が変わるか
+/// 従来の`recommend_id_for_vram`(既定`F32`へ委譲、後方互換)は
+/// モジュールdoc冒頭で開示している通り「パラメータ数×4バイト
+/// (fp32換算)がVRAM容量に収まるか」という単純比較だった。しかし
+/// **同じVRAM予算でも推論精度がfp16ならパラメータあたり2バイト
+/// で済み、fp32の約2倍のパラメータ数のモデルが収まる**——これは
+/// 実際のデプロイで広く行われている最適化であり、無視すると
+/// 「32GB級GPUなのにfp32換算でしかモデルサイズを見積もらない」
+/// という過小評価になる。本関数はその精度依存性を明示的な
+/// `InferencePrecision`引数で表現する。
+///
+/// ## バイト/パラメータの根拠(誇張しない)
+/// - `F16`(半精度、2バイト/パラメータ): 実際に量子化/半精度推論で
+///   広く使われる形式(`open-cuda`側`tensor_f32`がF16→f32変換に既に
+///   対応済み、2026-09-02 HANDOFF参照)。
+/// - `F32`(単精度、4バイト/パラメータ): 従来の既定・唯一の想定
+///   だった精度。
+/// - `F64`(倍精度、8バイト/パラメータ): GPUの推論用途では通常
+///   使われない(学習の数値安定性検証等が主用途)が、`open-cuda`側の
+///   KernelArg型システムがF16/F32/F64/F128を型として揃える方針
+///   (companion agentが同時に`opencuda-core`/`opencuda-blas`へ実装中)
+///   に合わせ、一貫性のため見積もり側にも用意する。
+/// - `F128`(四倍精度、16バイト/パラメータ): **正直な開示(最重要)**
+///   ——GPU上でF128のネイティブTensor Core/ALUサポートを持つハード
+///   ウェアは(NVIDIA/AMD/Intel問わず)存在しない。ソフトウェア
+///   エミュレーション(倍々精度合成等)でのみ実現可能で、実用上の
+///   推論速度は壊滅的に遅くなる。この見積もり関数へ含めているのは
+///   `open-cuda`側の型システム(KernelArg)がF128をソフトウェア実装
+///   として持つことに合わせた**計算上の一貫性のためだけ**であり、
+///   「F128でLLM推論するのが実用的」という主張は一切していない。
+///
+/// ## 依然として正直な限界(モジュールdoc冒頭を参照、変わらない)
+/// パラメータ数×バイト/パラメータ、という単純比較のままであり、
+/// KVキャッシュ・アクティベーション・OS/ドライバオーバーヘッドは
+/// 考慮していない。精度が変わってもこの限界自体は変わらない。
+fn recommend_id_for_vram_at_precision(
+    vram_bytes: Option<u64>,
+    precision: InferencePrecision,
+) -> &'static str {
     const GB: u64 = 1024 * 1024 * 1024;
+    // F32(4バイト/パラメータ)を基準に、他精度はバイト比で
+    // 「見た目のVRAM容量」を換算する(容量を広げる/狭める側どちらも
+    // 同じ式で表現できる: 換算後の容量 = 実VRAM * (4 / bytes_per_param))。
+    let bytes_per_param = precision.bytes_per_param() as f64;
+    let scale = 4.0 / bytes_per_param;
+
     match vram_bytes {
-        None => "gpt2",                    // CPU実行のみ・検出不能 → 安全側の最小サイズ固定
-        Some(v) if v < 2 * GB => "gpt2",        // VRAM 2GB未満 → 124M
-        Some(v) if v < 4 * GB => "gpt2-medium",  // 2-4GB → 355M
-        Some(v) if v < 8 * GB => "gpt2-large",   // 4-8GB → 774M
-        Some(_) => "gpt2-xl",                    // 8GB以上(RTX 5090の32GB・RTX 6000 Adaの48GB・RTX PRO 6000 Blackwellの96GB等も含む) → カタログ最大の1.5B
+        None => "gpt2", // CPU実行のみ・検出不能 → 安全側の最小サイズ固定(精度に関わらず不変)
+        Some(v) => {
+            let scaled = (v as f64 * scale) as u64;
+            match scaled {
+                s if s < 2 * GB => "gpt2",
+                s if s < 4 * GB => "gpt2-medium",
+                s if s < 8 * GB => "gpt2-large",
+                _ => "gpt2-xl", // カタログ最大(2026-08-11/09-03 HANDOFF参照、これ以上大きい実在モデルは未追加)
+            }
+        }
+    }
+}
+
+/// 推論精度の想定(`recommend_id_for_vram_at_precision`向け)。
+/// `open-cuda`側`opencuda-core`/`opencuda-blas`のKernelArg型システムが
+/// 並行して同じ4種(F16/F32/F64/F128)を実装している(companion agent、
+/// 別リポジトリ)ことに合わせた型——このenum自体はVRAM見積もり計算にしか
+/// 使わず、実際の推論ディスパッチ(`generation.rs`)への配線は無い——
+/// `open-cuda-llm::GptModel`の重みロード自体は依然F32(一部F16/BF16/
+/// FP8→f32変換、2026-09-02 HANDOFF参照)前提で、この推奨サイズ計算が
+/// 選んだ精度をロード時のdtypeとして実際に使う経路は無い(誇張しない)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum InferencePrecision {
+    F16,
+    F32,
+    F64,
+    /// ソフトウェアエミュレーションのみ、GPU実行での実用性は無い
+    /// (正直な開示、上記doc参照)。
+    F128,
+}
+
+impl InferencePrecision {
+    fn bytes_per_param(self) -> u32 {
+        match self {
+            InferencePrecision::F16 => 2,
+            InferencePrecision::F32 => 4,
+            InferencePrecision::F64 => 8,
+            InferencePrecision::F128 => 16,
+        }
     }
 }
 
@@ -412,5 +499,107 @@ mod tests {
     fn recommend_always_resolves_to_a_real_catalog_entry() {
         let r = recommend();
         assert!(crate::model_catalog::find(r.recommended_model_id).is_some());
+    }
+
+    #[test]
+    fn recommend_at_precision_defaults_to_f32_matching_legacy_function() {
+        // 2026-09-03: recommend_id_for_vramはF32へ委譲するだけの後方互換
+        // ラッパーであることを確認(既存呼び出し元のシグネチャ・挙動を
+        // 一切変えない設計)。
+        for vram in [None, Some(1 * 1024 * 1024 * 1024), Some(3 * 1024 * 1024 * 1024),
+                     Some(6 * 1024 * 1024 * 1024), Some(32 * 1024 * 1024 * 1024)] {
+            assert_eq!(
+                recommend_id_for_vram(vram),
+                recommend_id_for_vram_at_precision(vram, InferencePrecision::F32)
+            );
+        }
+    }
+
+    #[test]
+    fn f16_precision_recommends_a_larger_model_than_f32_for_the_same_vram() {
+        // 2026-09-03: 32GB級カード(AMD R9700・RTX 5090等)を、fp32換算
+        // ではなくfp16推論で使う想定なら、同じVRAM予算で約2倍の
+        // パラメータ数のモデルが収まるはず——F16の方がF32以上のサイズを
+        // 推奨することを確認する(実際にはカタログ上限gpt2-xlで頭打ちに
+        // なるため、上限に達しない中間サイズの容量で比較する)。
+        let vram_4gb = 4 * 1024 * 1024 * 1024u64; // ちょうどF32ではgpt2-medium/gpt2-large境界
+        let f32_choice = recommend_id_for_vram_at_precision(Some(vram_4gb), InferencePrecision::F32);
+        let f16_choice = recommend_id_for_vram_at_precision(Some(vram_4gb), InferencePrecision::F16);
+        // F32: 4GB ちょうど → gpt2-large(4GB以上の枝)。
+        assert_eq!(f32_choice, "gpt2-large");
+        // F16: 換算後8GB相当 → gpt2-large(8GB未満)ではなくgpt2-xlへ進む
+        // (8GB以上の枝、カタログ最大)。
+        assert_eq!(f16_choice, "gpt2-xl");
+
+        // より小さい予算でも同じ傾向(F16が同容量でF32以上のサイズを選ぶ)
+        // であることを、複数のVRAM容量で確認する。
+        for vram in [
+            2 * 1024 * 1024 * 1024u64,
+            3 * 1024 * 1024 * 1024u64,
+            6 * 1024 * 1024 * 1024u64,
+        ] {
+            let f32_id = recommend_id_for_vram_at_precision(Some(vram), InferencePrecision::F32);
+            let f16_id = recommend_id_for_vram_at_precision(Some(vram), InferencePrecision::F16);
+            let rank = |id: &str| match id {
+                "gpt2" => 0,
+                "gpt2-medium" => 1,
+                "gpt2-large" => 2,
+                "gpt2-xl" => 3,
+                _ => panic!("unexpected catalog id in test: {id}"),
+            };
+            assert!(
+                rank(f16_id) >= rank(f32_id),
+                "F16 should never recommend a smaller model than F32 for the same VRAM (vram={vram}, f32={f32_id}, f16={f16_id})"
+            );
+        }
+    }
+
+    #[test]
+    fn f64_and_f128_precision_recommend_a_smaller_or_equal_model_than_f32() {
+        // 2026-09-03: F64(8バイト/パラメータ)・F128(16バイト/パラメータ、
+        // ソフトウェアエミュレーションのみ・実用性は無いと正直に開示済み)
+        // は、同じVRAM予算でF32よりパラメータ数の少ないモデルしか収まら
+        // ないはず——F32以下のサイズを推奨することを確認する。
+        for vram in [
+            2 * 1024 * 1024 * 1024u64,
+            4 * 1024 * 1024 * 1024u64,
+            8 * 1024 * 1024 * 1024u64,
+            32 * 1024 * 1024 * 1024u64,
+        ] {
+            let rank = |id: &str| match id {
+                "gpt2" => 0,
+                "gpt2-medium" => 1,
+                "gpt2-large" => 2,
+                "gpt2-xl" => 3,
+                _ => panic!("unexpected catalog id in test: {id}"),
+            };
+            let f32_id = recommend_id_for_vram_at_precision(Some(vram), InferencePrecision::F32);
+            let f64_id = recommend_id_for_vram_at_precision(Some(vram), InferencePrecision::F64);
+            let f128_id = recommend_id_for_vram_at_precision(Some(vram), InferencePrecision::F128);
+            assert!(rank(f64_id) <= rank(f32_id));
+            assert!(rank(f128_id) <= rank(f64_id));
+        }
+    }
+
+    #[test]
+    fn precision_choice_never_affects_the_none_vram_fallback() {
+        // GPU検出不能・CPU実行のみの場合は、精度に関わらず常に安全側
+        // (最小モデル)へ固定フォールバックすることを確認する。
+        for precision in [
+            InferencePrecision::F16,
+            InferencePrecision::F32,
+            InferencePrecision::F64,
+            InferencePrecision::F128,
+        ] {
+            assert_eq!(recommend_id_for_vram_at_precision(None, precision), "gpt2");
+        }
+    }
+
+    #[test]
+    fn bytes_per_param_matches_the_disclosed_precision_semantics() {
+        assert_eq!(InferencePrecision::F16.bytes_per_param(), 2);
+        assert_eq!(InferencePrecision::F32.bytes_per_param(), 4);
+        assert_eq!(InferencePrecision::F64.bytes_per_param(), 8);
+        assert_eq!(InferencePrecision::F128.bytes_per_param(), 16);
     }
 }
