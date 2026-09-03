@@ -4087,3 +4087,55 @@ backend matrix + the negotiated path, (B) add a llama.cpp-style backend
 table to the READMEs, (C) make `ARUARU_LLM_ENABLE_*` "auto via
 capability negotiation when unset, override when set". Still no code
 this pass.
+
+### 2026-09-03(続き2)スライス (A)(B) 実装: `GET /v1/runtime` バックエンド行列 + README 表
+
+上記「次の実装スライス」の (A)(B) を実装(コードあり)。(C)(能力交渉に
+よる `ARUARU_LLM_ENABLE_*` 自動選択)は挙動変更を伴うため次スライス。
+
+- **`src/main.rs`**: `BackendMatrixRow { backend, status, note_en, note_ja }`
+  + `fn backend_matrix(&AccelerationInfo) -> Vec<BackendMatrixRow>`(8 行:
+  cpu-simd / vulkan-spirv / directx-dxil / cuda / metal / hip-rocm /
+  sycl-levelzero / webgpu-wasm)。`status` は `active` / `compiled-in` /
+  `not-compiled-in` / `planned`。実装済み 3 経路は `AccelerationInfo` の
+  実行時状態から、未実装の将来経路(metal/hip/sycl/webgpu)は `planned`
+  固定。`RuntimeInfoResponse.backend_matrix` として `GET /v1/runtime` へ。
+  **報告のみ・挙動不変**(このエンドポイントの既存契約どおり)。
+- **テスト**: `runtime_backend_matrix_tests` 4 件(8 行の順序・status が
+  許可集合内・note 非空、cpu-simd は決して `not-compiled-in` にならない、
+  vulkan 行が `AccelerationInfo` の tier 状態を反映、将来経路は `planned`)。
+  `cargo test --release` **105 passed / 2 ignored**(既存 101 + 新規 4、
+  回帰なし)。
+- **README**: `README.md` / `README-English.md` に llama.cpp 風の
+  バックエンド表を追加(日英、正本 `open-cuda/OmniGPU-Design.md`
+  §11.6/§12.3 へのリンク付き)。
+- **実 HTTP E2E**(release、既定 CPU ビルド): `GET /v1/runtime` の
+  `backend_matrix` が 8 行を返し、`cpu-simd => active` /
+  `vulkan-spirv,directx-dxil,cuda => not-compiled-in` /
+  `metal,hip-rocm,sycl-levelzero,webgpu-wasm => planned` を確認。
+- clippy: `backend_matrix` / `BackendMatrixRow` に新規指摘なし
+  (既存の `ENGINE_GPT2_GREEDY` 未使用等のみ)。
+
+**次スライス (C)**: `ARUARU_LLM_ENABLE_FP8_WEIGHTS` / `_MLA_KV_COMPRESSION`
+/ `_FLASH_ATTENTION` を「未指定なら起動時の能力交渉で自動判定、指定なら
+override」へ。判定条件は open-cuda 側の `supports_fp8_tensor_core` 等の
+能力フラグ。挙動変更のため実 HTTP E2E で既定生成が変わらないことを確認
+してから入れる。
+
+**English**: Implemented slices (A)(B). `src/main.rs` adds
+`BackendMatrixRow` + `backend_matrix(&AccelerationInfo)` (8 rows:
+cpu-simd / vulkan-spirv / directx-dxil / cuda / metal / hip-rocm /
+sycl-levelzero / webgpu-wasm; status `active` / `compiled-in` /
+`not-compiled-in` / `planned`), surfaced as
+`RuntimeInfoResponse.backend_matrix` on `GET /v1/runtime` — reporting
+only, no behaviour change. 4 new unit tests
+(`runtime_backend_matrix_tests`); `cargo test --release` 105 passed / 2
+ignored (was 101 + 4, no regressions). Added a llama.cpp-style backend
+table to both READMEs (JA + EN, linking `OmniGPU-Design.md` §11.6/§12.3).
+Real HTTP E2E (release, default CPU build): `backend_matrix` returns 8
+rows with `cpu-simd => active`, the other implemented paths
+`not-compiled-in`, the future paths `planned`. clippy: no new findings.
+Next slice (C): make `ARUARU_LLM_ENABLE_*` "auto via capability
+negotiation when unset, override when set", gated on `open-cuda`'s
+`supports_fp8_tensor_core` etc., verified not to change default
+generation.

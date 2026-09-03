@@ -353,6 +353,29 @@ cargo run --release --features hw-detect-vulkan
 # または Windows専用: --features hw-detect-directx
 ```
 
+### バックエンド行列(llama.cpp に倣った正直な一覧、2026-09-03)
+
+`GET /v1/runtime` の `backend_matrix` フィールドがこの表を実行時の
+`status` 付きで返す(**報告のみ**、この行列は挙動を変えない)。正本は
+[`open-cuda/OmniGPU-Design.md`](https://github.com/aon-co-jp/open-cuda/blob/main/OmniGPU-Design.md)
+§11.6 / §12.3。
+
+| バックエンド | 状態 | 備考 |
+|---|---|---|
+| **cpu-simd** | 実装済み(常時ビルド) | `open-cpu` 実行時ディスパッチ。AVX2+FMA3 でスカラー比 実測 約3.34倍。GPU 段へオフロードされない全処理を担う |
+| **vulkan-spirv** | 実装済み(`--features real-vulkan`) | `open-cuda` の SPIR-V compute。**移植性の背骨**(Linux/Windows の NVIDIA/AMD/Intel、macOS は MoltenVK 経由)。既知課題は下記 |
+| **directx-dxil** | 実装済み(`--features real-dx12`) | `open-cuda` の D3D12/DXIL、密 GEMM のみ。Vulkan が無い Windows 向けフォールバック。GT 730 では CPU SIMD より遅い(実測) |
+| **cuda** | 非対応 | `open-cuda` にネイティブ CUDA/cuBLAS バックエンドは無い(`GemmPath::CuBlas` はスタブ)。NVIDIA GPU も Vulkan 経路で動く |
+| **metal** | 設計方針のみ | Apple GPU は MoltenVK(Vulkan サブセット on Metal)経由で既存 SPIR-V カーネルのまま到達。新バックエンドは書かない。実機検証保留 |
+| **hip-rocm** | 設計方針のみ | AMD ネイティブ(hipBLASLt)。任意の高速化経路。AMD の移植性経路は Vulkan + `VK_EXT_shader_float8`(Adrenalin 25.10.2 以降で出荷) |
+| **sycl-levelzero** | 設計方針のみ | Intel Arc/Xe ネイティブ(oneAPI Level Zero)。任意。Intel GPU は現状 Vulkan/SPIR-V 経路でカバー |
+| **webgpu-wasm** | 設計方針のみ | wgpu/WebGPU ブラウザ推論(W3C Candidate Recommendation Draft、2026-05)。将来オプション |
+
+**設計哲学**: Vulkan + SPIR-V を移植性の背骨とし、CUDA/HIP/SYCL/Metal は
+「任意の高速化経路」であって前提にしない。ベンダー ID で実行経路を
+分岐せず、能力交渉(`supports_spirv` / `supports_fp8_tensor_core` 等)で
+機能を選ぶ。
+
 ### 実推論ディスパッチ先としてのVulkan(`real-vulkan` feature、2026-08-04新設、既知の未解決課題あり)
 
 上記のハードウェア検出(`hw-detect-vulkan`)とは別軸で、`/v1/generate`の

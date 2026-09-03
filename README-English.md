@@ -239,6 +239,30 @@ reported `vram_bytes=2104819712` — exactly matching the value previously
 recorded via DXGI in `open-cuda`'s CLAUDE.md, confirming both detection
 paths agree on this GPU.
 
+### Backend matrix (a llama.cpp-style honest list, 2026-09-03)
+
+`GET /v1/runtime`'s `backend_matrix` field returns this table with a
+runtime `status` per row (**reporting only** — the matrix changes no
+behaviour). Source of truth:
+[`open-cuda/OmniGPU-Design.md`](https://github.com/aon-co-jp/open-cuda/blob/main/OmniGPU-Design.md)
+§11.6 / §12.3.
+
+| Backend | Status | Notes |
+|---|---|---|
+| **cpu-simd** | implemented (always built in) | `open-cpu` runtime dispatch; AVX2+FMA3 measured ~3.34× vs scalar. Handles everything not offloaded to a GPU tier |
+| **vulkan-spirv** | implemented (`--features real-vulkan`) | `open-cuda` SPIR-V compute. The **portability backbone** (NVIDIA/AMD/Intel on Linux/Windows, macOS via MoltenVK). Known issue below |
+| **directx-dxil** | implemented (`--features real-dx12`) | `open-cuda` D3D12/DXIL, dense GEMM only. Fallback for Windows without Vulkan. Slower than CPU SIMD on GT 730 (measured) |
+| **cuda** | not supported | No native CUDA/cuBLAS backend in `open-cuda` (`GemmPath::CuBlas` is a stub). NVIDIA GPUs run through the Vulkan path |
+| **metal** | design intent only | Apple GPUs reached via MoltenVK (Vulkan-subset-on-Metal) with the existing SPIR-V kernels — no new backend. Real-machine verification pending |
+| **hip-rocm** | design intent only | AMD native (hipBLASLt). Optional accelerated path only. The portable route for AMD is Vulkan + `VK_EXT_shader_float8` (shipping in Adrenalin 25.10.2+) |
+| **sycl-levelzero** | design intent only | Intel Arc/Xe native (oneAPI Level Zero). Optional. Intel GPUs are covered by the Vulkan/SPIR-V path today |
+| **webgpu-wasm** | design intent only | Browser inference via wgpu/WebGPU (W3C Candidate Recommendation Draft, 2026-05). Future option |
+
+**Design philosophy**: Vulkan + SPIR-V is the portability backbone;
+CUDA/HIP/SYCL/Metal are *optional* accelerated paths, never a
+prerequisite. No branching on vendor ID — capabilities
+(`supports_spirv` / `supports_fp8_tensor_core` / …) are negotiated.
+
 ### DeepSeek-"Engram"-style KV-cache/weight offload: investigated and declined (2026-08-08)
 
 We investigated whether DeepSeek's "Engram"-style technique — evicting
