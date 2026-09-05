@@ -1746,9 +1746,30 @@ async fn install_model(req: Request) -> Response {
 /// (ダウンロードは行わない、2026-07-27新設)。`hardware::recommend()`が
 /// `open-directx`(DXGI)/`open-cuda`(Vulkan)いずれかの実GPU検出を試み、
 /// VRAM容量から推奨モデルIDを算出する(正直な開示は`hardware.rs`
-/// モジュールdoc参照)。
-async fn recommend_model() -> Response {
-    json_response(StatusCode::OK, &hardware::recommend())
+/// モジュールdoc参照)。**2026-09-05追記**: 任意の`?precision=f16|f32|
+/// f64|f128`クエリパラメータで、`hardware::InferencePrecision`
+/// (2026-09-03新設だが`recommend()`からは呼び出せず「未接続」のまま
+/// 残っていたギャップ)を考慮したVRAM見積もりを要求できる。未指定時は
+/// 従来通りF32(後方互換)。不正な値は`400`で正直に拒否する。
+async fn recommend_model(req: Request) -> Response {
+    let precision = match req.uri().query().and_then(|q| {
+        q.split('&').find_map(|pair| {
+            let (k, v) = pair.split_once('=')?;
+            (k == "precision").then(|| v.to_string())
+        })
+    }) {
+        Some(raw) => match hardware::InferencePrecision::parse(&raw) {
+            Some(p) => p,
+            None => {
+                return json_response(
+                    StatusCode::BAD_REQUEST,
+                    &serde_json::json!({"error": format!("unknown precision '{raw}', expected one of: f16, f32, f64, f128")}),
+                );
+            }
+        },
+        None => hardware::InferencePrecision::F32,
+    };
+    json_response(StatusCode::OK, &hardware::recommend_at_precision(precision))
 }
 
 #[derive(Debug, Serialize)]
@@ -2770,7 +2791,7 @@ async fn main() -> anyhow::Result<()> {
                 async move { fold_layers_handler(req, device).await }
             })),
         )
-        .at("/v1/recommend", get(plain(|| Box::pin(recommend_model()))))
+        .at("/v1/recommend", get(handler_fn(|req, _p| Box::pin(recommend_model(req)))))
         .at("/v1/recommend-and-download", post(plain(|| Box::pin(recommend_and_download()))))
         .at("/v1/download-larger", post(plain(|| Box::pin(download_larger_model()))))
         .at("/v1/download-smaller", post(plain(|| Box::pin(download_smaller_model()))))

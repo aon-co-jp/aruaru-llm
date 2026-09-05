@@ -103,6 +103,7 @@ pub struct HardwareSummary {
 /// (VRAMが余っても実際に活用できるより大きなモデルがカタログに
 /// 存在しないため)——名前だけ挙げて実在しない性能向上を示唆しない
 /// ようにする。カタログ拡張(より大きい実在モデルの追加)が先。
+#[cfg_attr(not(test), allow(dead_code))] // 2026-09-05: recommend()がrecommend_at_precisionへ直接委譲するようになったため本体経路では未使用、テスト(F32委譲との一致確認)のためだけに残す
 fn recommend_id_for_vram(vram_bytes: Option<u64>) -> &'static str {
     recommend_id_for_vram_at_precision(vram_bytes, InferencePrecision::F32)
 }
@@ -197,6 +198,31 @@ impl InferencePrecision {
             InferencePrecision::F32 => 4,
             InferencePrecision::F64 => 8,
             InferencePrecision::F128 => 16,
+        }
+    }
+
+    /// `GET /v1/recommend?precision=f16`等のクエリ文字列から解釈する
+    /// (大小無視、`f16`/`fp16`/`half`等の別名も受け付ける)。未知の値は
+    /// `None`——呼び出し側が正直に`400`を返せるようにする(黙って
+    /// F32へフォールバックしない、既存の「サービスを壊さない」設計とは
+    /// 別の「入力ミスを隠さない」設計、2026-08-07の`/v1/generate`空入力
+    /// 400化と同じ思想)。
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "f16" | "fp16" | "half" => Some(InferencePrecision::F16),
+            "f32" | "fp32" | "float" | "single" => Some(InferencePrecision::F32),
+            "f64" | "fp64" | "double" => Some(InferencePrecision::F64),
+            "f128" | "fp128" | "quad" => Some(InferencePrecision::F128),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            InferencePrecision::F16 => "f16",
+            InferencePrecision::F32 => "f32",
+            InferencePrecision::F64 => "f64",
+            InferencePrecision::F128 => "f128",
         }
     }
 }
@@ -427,19 +453,35 @@ pub fn detect_accelerators() -> AcceleratorInventory {
 pub struct Recommendation {
     pub hardware: HardwareSummary,
     pub recommended_model_id: &'static str,
+    /// 見積もりに使った精度(2026-09-05新設、既定`f32`)。呼び出し側が
+    /// `?precision=f16`等を指定した場合はそれが反映される——`recommend()`
+    /// 経由(precision未指定)は常に`"f32"`。
+    pub precision_used: &'static str,
     /// 精度を誇張しない旨の開示文言(常にレスポンスへ含める)。
     pub disclosure_ja: &'static str,
 }
 
+/// 精度未指定の既定呼び出し(常にF32換算、後方互換)。
 pub fn recommend() -> Recommendation {
+    recommend_at_precision(InferencePrecision::F32)
+}
+
+/// 精度考慮版(2026-09-05新設)。`InferencePrecision`(F16/F32/F64/F128)を
+/// 指定してVRAM見積もりを行う——`recommend_id_for_vram_at_precision`
+/// (2026-09-03新設)を、これまで内部関数のまま外部から呼び出す経路が
+/// 存在しなかった不整合(READMEに書かれていた「未接続」ギャップ)を
+/// 解消するために追加した公開エントリポイント。
+pub fn recommend_at_precision(precision: InferencePrecision) -> Recommendation {
     let hardware = detect();
-    let recommended_model_id = recommend_id_for_vram(hardware.vram_bytes);
+    let recommended_model_id = recommend_id_for_vram_at_precision(hardware.vram_bytes, precision);
     Recommendation {
         hardware,
         recommended_model_id,
-        disclosure_ja: "これはモデルサイズ(パラメータ数×4バイトのfp32概算)とVRAM容量の単純な比較に\
-            基づく簡易的な目安であり、精密な性能予測ではありません。実際の必要メモリはKVキャッシュ・\
-            アクティベーション等で変動します。生成処理自体は現状CPUで実行されます\
+        precision_used: precision.as_str(),
+        disclosure_ja: "これはモデルサイズ(パラメータ数×精度ごとのバイト数概算)とVRAM容量の単純な\
+            比較に基づく簡易的な目安であり、精密な性能予測ではありません。実際の必要メモリはKVキャッシュ・\
+            アクティベーション等で変動します。生成処理自体は現状CPUで実行され、この見積もりが選んだ精度を\
+            実際のロード時dtypeとして使う配線もまだありません\
             (GPU推論配線は逐次デコードではオーバーヘッドが支配的になりうるため見送っています)。",
     }
 }
