@@ -757,6 +757,54 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 
 ## HANDOFF
 
+- **2026-09-05 `InferencePrecision`をpublic API(`GET /v1/recommend`)へ
+  接続——2026-09-03に追加されていたが「未接続」のまま残っていたギャップを
+  解消**:
+  再開用メッセージの残課題「精度考慮VRAM見積もり(InferencePrecision)は
+  追加したが、実際の推論dtype選択(open-cuda-llm側のモデルロード)へは
+  まだ未接続」を調査したところ、実際には**それ以前の段階のギャップ**が
+  あった——`recommend_id_for_vram_at_precision`(2026-09-03新設)を呼べる
+  経路が、公開エントリポイント`hardware::recommend()`にも
+  `GET /v1/recommend`ハンドラにも一切無く、この関数はテスト以外から
+  到達不能な内部専用コードのままだった。
+  1. **`src/hardware.rs`**: `InferencePrecision::parse(&str)`(クエリ
+     文字列からの解釈、`f16`/`fp16`/`half`等の別名対応、不明値は`None`)・
+     `as_str()`を追加。`Recommendation`に`precision_used: &'static str`
+     フィールドを追加。`recommend_at_precision(precision)`を新設し、
+     `recommend()`はこれへ`F32`を渡すだけの後方互換ラッパーへ変更
+     (シグネチャ・既定挙動は不変)。
+  2. **`src/main.rs`**: `GET /v1/recommend`ハンドラ(`recommend_model`)が
+     `()`から`Request`を受け取るよう変更し、`?precision=f16|f32|f64|f128`
+     クエリを手動パース(`url`クレート等の新規依存を追加せず、単純な
+     `split('&')`/`split_once('=')`で十分なため)。不明な値は`400`
+     `{"error": "unknown precision '...'"}`(既存の`/v1/generate`空入力
+     400化と同じ「入力ミスを隠さない」設計)。ルート登録を
+     `plain(...)`から`handler_fn(...)`へ変更(クエリへアクセスするため
+     `Request`が必要)。
+  3. **正直な開示・残る配線ギャップ(未解消、次の課題)**: この変更は
+     「VRAM見積もり計算に使う精度を外部から選べるようにする」ところ
+     までであり、選んだ精度を実際のモデルロード時dtype(`open-cuda-llm::
+     GptModel::load`)へ反映する配線は**まだ存在しない**——
+     `open-cuda-llm`は依然F32中心のロード実装(一部F16/BF16/FP8→f32
+     変換のみ対応、2026-09-02 HANDOFF参照)であり、これは`open-cuda`側の
+     対応が前提となる別のスライスとして残す(誇張しない)。
+  4. **検証**: `cargo build --release`成功(新規警告なし、
+     `recommend_id_for_vram`の未使用警告は`#[cfg_attr(not(test),
+     allow(dead_code))]`で解消)。`cargo test --release`
+     **110 passed / 0 failed / 2 ignored**(既存105+新規5、回帰なし)。
+     実際にサーバーを起動し、`GET /v1/recommend`(精度未指定)→
+     `precision_used:"f32"`、`GET /v1/recommend?precision=f16`→
+     `precision_used:"f16"`(このマシンはGPU非搭載のためどちらも
+     `recommended_model_id:"gpt2"`〈最小サイズ〉に留まる、精度による
+     差はGPU検出済み環境でのみ現れる設計通り)、
+     `GET /v1/recommend?precision=bogus`→`400`
+     `{"error":"unknown precision 'bogus', ..."}`を実HTTPで確認済み。
+  - 次にすべきこと: (1) 上記3番のGPUロード時dtype配線(`open-cuda`側の
+    対応待ち、ブロック要因として正直に記録する)、(2) より高VRAM級の
+    実GPU環境が得られた場合、`?precision=f16`等が実際に異なる
+    `recommended_model_id`を返すこと(このマシンでは検出不能なため
+    確認できていない)の実機再検証。
+
 - **2026-09-02(続き2) GPTQ(INT4/INT8)量子化モデルのロードに対応
   (open-cuda 側 `4f27a41`、このリポジトリはコード変更なし)**:
   ユーザー要望「対応外dtype(INT8/INT4)は正直なエラー。対応して」への

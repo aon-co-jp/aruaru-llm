@@ -288,12 +288,19 @@ Vulkan汎用パスは実装済み)。詳細はopen-cuda側の`CLAUDE.md`のHANDO
   入手先(whisper.cpp releases)を案内するエラーを返す。詳細は下記
   「音声認識」節参照。`sample_rate`が16000以外・base64不正・10分超の音声は
   いずれも`400`。
-- `GET /v1/recommend`（2026-07-27追加） — `open-cuda`(Vulkan)/`open-directx`
-  (DXGI)経由のハードウェア検出(VRAM容量)から推奨モデルサイズを算出する
-  (ダウンロードは行わない)。`{"hardware": {"gpu_detected":bool,
+- `GET /v1/recommend`（2026-07-27追加、精度パラメータは2026-09-05追加） —
+  `open-cuda`(Vulkan)/`open-directx`(DXGI)経由のハードウェア検出
+  (VRAM容量)から推奨モデルサイズを算出する(ダウンロードは行わない)。
+  任意の`?precision=f16|f32|f64|f128`クエリで、パラメータあたりの
+  バイト数を変えた見積もり(F16なら同じVRAMでF32の約2倍のパラメータ数
+  まで許容)を要求できる(未指定時は`f32`、後方互換)。不正な値は`400`。
+  `{"hardware": {"gpu_detected":bool,
   "detection_path":"vulkan"|"directx"|"cpu-only-fallback",
   "gpu_name":"...","vram_bytes":...,"cross_check_agreement":bool|null},
-  "recommended_model_id":"gpt2-medium","disclosure_ja":"..."}`のような形。
+  "recommended_model_id":"gpt2-medium","precision_used":"f32",
+  "disclosure_ja":"..."}`のような形。**正直な開示**: この精度は見積もり
+  計算にのみ使われ、実際のモデルロード時dtype選択(`open-cuda-llm`側)へは
+  まだ配線されていない(`open-cuda-llm`は依然F32中心のロード実装のため)。
 - `POST /v1/recommend-and-download`（2026-07-27追加、「お勧めLLMを
   ダウンロード」ボタンの受け口） — ハードウェア検出→推奨サイズ算出→
   未ダウンロードならHugging Faceから取得(既にあれば再取得しない)→

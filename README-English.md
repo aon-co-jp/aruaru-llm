@@ -200,9 +200,17 @@ understanding).
 - `POST /v1/models/install` / `POST /v1/models/select` — download a catalog
   model from Hugging Face, and hot-swap the active model without a process
   restart.
-- `GET /v1/recommend` (added 2026-07-27) — detects hardware (VRAM) via
-  `open-cuda` (Vulkan) or `open-directx` (DXGI) and returns a recommended
-  GPT-2-family model size, without downloading anything.
+- `GET /v1/recommend` (added 2026-07-27; precision parameter added
+  2026-09-05) — detects hardware (VRAM) via `open-cuda` (Vulkan) or
+  `open-directx` (DXGI) and returns a recommended GPT-2-family model size,
+  without downloading anything. Accepts an optional `?precision=f16|f32|
+  f64|f128` query param that scales the bytes-per-parameter estimate
+  (F16 lets roughly 2x the parameter count fit the same VRAM as F32);
+  defaults to `f32` when omitted (backward compatible), rejects unknown
+  values with `400`. Response includes `precision_used`. **Honest
+  disclosure**: this precision only affects the size estimate — it is not
+  yet wired into the actual model-load dtype (`open-cuda-llm` is still
+  fp32-oriented).
 - `POST /v1/recommend-and-download` (added 2026-07-27, backs the
   "Download recommended LLM" button) — detects hardware → picks a
   recommended size → downloads it from Hugging Face if not already present
