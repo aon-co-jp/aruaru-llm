@@ -1,0 +1,111 @@
+name: Keep committed Windows installer up to date
+
+# installer/windows/aruaru-llm-installer.exe is committed directly into
+# the repo (not a GitHub Release asset) so it has a stable URL:
+#   https://github.com/aon-co-jp/aruaru-llm/blob/main/installer/windows/aruaru-llm-installer.exe
+#
+# 正直な開示(2026-09-06、ユーザー指摘への対応): このファイルは
+# 2026-08-26に1回だけ手動コミットされて以来、その後のmain更新に
+# 追従していなかった(ProductVersion 0.2.3のまま固定)。このワークフローは
+# main へのpush(このファイルのビルドに影響するパスのみ)のたびに
+# CPU版installerを再ビルドし、内容が変わっていれば自動でコミットし直す
+# ——これで上記URLが「常に最新のmainからビルドしたもの」であり続ける。
+# GitHub Releases(タグ付き、release.ymlが担当)とは独立した仕組み。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "installer/windows/aruaru-llm.iss"
+      - ".github/workflows/main-installer.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-commit-windows:
+    name: Build Windows installer and commit if changed
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout sibling path dependencies (open-cuda, RPoem, RS-JSON, open-web-server, RS-SmartTCP, open-raid-z)
+        run: |
+          git clone --depth=1 https://github.com/aon-co-jp/open-cuda.git ../open-cuda
+          git clone --depth=1 https://github.com/aon-co-jp/RPoem.git ../RPoem
+          git clone --depth=1 https://github.com/aon-co-jp/RS-JSON.git ../RS-JSON
+          git clone --depth=1 https://github.com/aon-co-jp/open-web-server.git ../open-web-server
+          git clone --depth=1 https://github.com/aon-co-jp/RS-SmartTCP.git ../RS-SmartTCP
+          git clone --depth=1 https://github.com/aon-co-jp/open-raid-z.git ../open-raid-z
+      - name: Build (default, CPU-only)
+        run: cargo build --release --bin aruaru-llm
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+      - name: Build aruaru-llm-installer.exe (version = short commit SHA, dev build)
+        shell: pwsh
+        run: |
+          $version = "0.0.0-$("${{ github.sha }}".Substring(0,7))"
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=$version installer\windows\aruaru-llm.iss
+      - name: Replace committed installer if it changed
+        shell: pwsh
+        run: |
+          Copy-Item -Force installer\windows\dist\aruaru-llm-installer.exe installer\windows\aruaru-llm-installer.exe
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add installer/windows/aruaru-llm-installer.exe
+          git diff --cached --quiet && echo "No change, skipping commit" || git commit -m "chore: update committed Windows installer (auto, main@${{ github.sha }})"
+          git pull --rebase
+          git push
+
+  build-and-commit-linux:
+    name: Build Linux tarball and commit if changed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout sibling path dependencies (open-cuda, RPoem, RS-JSON, open-web-server, RS-SmartTCP, open-raid-z)
+        run: |
+          git clone --depth=1 https://github.com/aon-co-jp/open-cuda.git ../open-cuda
+          git clone --depth=1 https://github.com/aon-co-jp/RPoem.git ../RPoem
+          git clone --depth=1 https://github.com/aon-co-jp/RS-JSON.git ../RS-JSON
+          git clone --depth=1 https://github.com/aon-co-jp/open-web-server.git ../open-web-server
+          git clone --depth=1 https://github.com/aon-co-jp/RS-SmartTCP.git ../RS-SmartTCP
+          git clone --depth=1 https://github.com/aon-co-jp/open-raid-z.git ../open-raid-z
+      - name: Build
+        run: cargo build --release --bin aruaru-llm
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp target/release/aruaru-llm dist/aruaru-llm
+          cp install.sh dist/install.sh
+          mkdir -p installer/linux
+          tar -czf installer/linux/aruaru-llm-linux-x86_64.tar.gz -C dist aruaru-llm install.sh
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add installer/linux/aruaru-llm-linux-x86_64.tar.gz
+          git diff --cached --quiet && echo "No change, skipping commit" || git commit -m "chore: update committed Linux tarball (auto, main@${{ github.sha }})"
+          git pull --rebase
+          git push
+
+# 正直な開示(2026-09-06、ユーザー「Windows Mac Linux Android iPhone」への
+# 回答): 同じ「mainに常時追従するコミット済みバイナリ」方式を拡張できた
+# のは上記Windows/Linuxの2つのみ。
+# - **macOS**: このリポジトリはビルド済みバイナリを一度も公開していない
+#   (README/CLAUDE.mdに既存の正直な開示あり、ビルドから行う手順のみ案内)。
+#   ここへ追加するには、まずGitHub Actionsの`macos-latest`ランナーで
+#   実際にビルドが通ることを検証してから同型のジョブを追加する必要がある
+#   (未着手)。
+# - **Android**: aruaru-llm自体のAPK/ネイティブビルドは本リポジトリの
+#   スコープ外——Androidクライアントは`open-english`リポジトリ側の
+#   `android/`(WebViewラッパー)が担当しており、aruaru-llm自体は
+#   Androidバイナリを配布していない。
+# - **iPhone**: このエコシステムにiOSネイティブアプリは現時点で
+#   1つも存在しない(2026-08-19付open-english側CLAUDE.mdで確認済み)。
+#   存在しないものを「常に最新化」する仕組みは作りようがない。
