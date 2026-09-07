@@ -26,6 +26,7 @@ mod bow_fallback;
 mod cache_optimizer;
 mod chat_providers;
 mod device_pool;
+mod generic_classify;
 mod geo_content;
 mod github_search;
 mod referrals;
@@ -156,6 +157,57 @@ async fn chat(req: Request, device: Arc<dyn GpuDevice>, registry: Arc<TenantRegi
             let (reply, reply_lang, lang_fallback) = scoring::fallback_reply_for(&req.lang);
             json_response(StatusCode::OK, &ChatResponse { reply: reply.to_string(), engine: result.engine, matched_intent: None, reply_lang, lang_fallback })
         }
+    }
+}
+
+/// 汎用分類(`/v1/classify`)のリクエスト/レスポンス。呼び出し側が
+/// カテゴリ一覧そのものを自由に指定できる(2026-09-07新設、
+/// `generic_classify.rs`参照)。
+#[derive(Debug, Deserialize)]
+struct ClassifyRequest {
+    /// 分類したいテキストの一覧。
+    items: Vec<String>,
+    /// 分類先カテゴリ名の一覧(1件以上必須)。
+    categories: Vec<String>,
+    #[serde(default)]
+    tenant: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ClassifiedItemDto {
+    item: String,
+    category: String,
+    score: f32,
+}
+
+#[derive(Debug, Serialize)]
+struct ClassifyResponse {
+    results: Vec<ClassifiedItemDto>,
+    engine: String,
+}
+
+/// 汎用テキスト分類エンドポイント(`generic_classify::classify_many`)。
+/// `security.rs`/`scoring.rs`のような固定カテゴリではなく、呼び出し側が
+/// 渡した任意のカテゴリ一覧の中から最も近いものを選ぶ(embedding
+/// コサイン類似度)。**正直な開示**: 訓練済み分類器ではなく汎用文埋め込み
+/// モデルによる意味的類似度のヒューリスティック(他の分類エンドポイント
+/// と同じ限界)。
+async fn classify_generic(req: Request, device: Arc<dyn GpuDevice>, registry: Arc<TenantRegistry>) -> Response {
+    let Json(req): Json<ClassifyRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    log_tenant_usage("classify", &req.tenant, &registry);
+    let suffix = scoring::dispatch_suffix(&device);
+    match generic_classify::classify_many(&device, &req.items, &req.categories) {
+        Ok(results) => json_response(
+            StatusCode::OK,
+            &ClassifyResponse {
+                results: results.into_iter().map(|r| ClassifiedItemDto { item: r.item, category: r.category, score: r.score }).collect(),
+                engine: format!("embedding-cosine-v0-open-cuda-bert{suffix}"),
+            },
+        ),
+        Err(err) => text_response(StatusCode::BAD_REQUEST, format!("classification failed: {err}")),
     }
 }
 
@@ -2656,6 +2708,8 @@ async fn main() -> anyhow::Result<()> {
     let chat_registry = Arc::clone(&registry);
     let classify_pool = Arc::clone(&device_pool);
     let classify_registry = Arc::clone(&registry);
+    let classify_generic_pool = Arc::clone(&device_pool);
+    let classify_generic_registry = Arc::clone(&registry);
     let classify_traffic_pool = Arc::clone(&device_pool);
     let classify_traffic_registry = Arc::clone(&registry);
     let generate_pool = Arc::clone(&device_pool);
@@ -2681,6 +2735,14 @@ async fn main() -> anyhow::Result<()> {
                 let device = classify_pool.next_device();
                 let registry = Arc::clone(&classify_registry);
                 async move { classify_security(req, device, registry).await }
+            })),
+        )
+        .at(
+            "/v1/classify",
+            post(handler_fn(move |req, _p| {
+                let device = classify_generic_pool.next_device();
+                let registry = Arc::clone(&classify_generic_registry);
+                async move { classify_generic(req, device, registry).await }
             })),
         )
         .at(
