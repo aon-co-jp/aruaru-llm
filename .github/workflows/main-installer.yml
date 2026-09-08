@@ -32,9 +32,13 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Checkout sibling path dependencies (open-cuda, RPoem, RS-JSON, open-web-server, RS-SmartTCP, open-raid-z)
+      - name: Checkout sibling path dependencies (open-cuda, open-cpu, RPoem, RS-JSON, open-web-server, RS-SmartTCP, open-raid-z)
+        # 2026-09-08 BUG修正: open-cpuのcloneが欠けていたため、このジョブが
+        # 「failed to read open-cpu/Cargo.toml」で常に失敗していた
+        # (release.ymlの同種修正コメント参照)。
         run: |
           git clone --depth=1 https://github.com/aon-co-jp/open-cuda.git ../open-cuda
+          git clone --depth=1 https://github.com/aon-co-jp/open-cpu.git ../open-cpu
           git clone --depth=1 https://github.com/aon-co-jp/RPoem.git ../RPoem
           git clone --depth=1 https://github.com/aon-co-jp/RS-JSON.git ../RS-JSON
           git clone --depth=1 https://github.com/aon-co-jp/open-web-server.git ../open-web-server
@@ -68,9 +72,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Checkout sibling path dependencies (open-cuda, RPoem, RS-JSON, open-web-server, RS-SmartTCP, open-raid-z)
+      - name: Checkout sibling path dependencies (open-cuda, open-cpu, RPoem, RS-JSON, open-web-server, RS-SmartTCP, open-raid-z)
+        # 2026-09-08 BUG修正: open-cpuのcloneが欠けていた(上記Windows
+        # ジョブのコメント参照)。
         run: |
           git clone --depth=1 https://github.com/aon-co-jp/open-cuda.git ../open-cuda
+          git clone --depth=1 https://github.com/aon-co-jp/open-cpu.git ../open-cpu
           git clone --depth=1 https://github.com/aon-co-jp/RPoem.git ../RPoem
           git clone --depth=1 https://github.com/aon-co-jp/RS-JSON.git ../RS-JSON
           git clone --depth=1 https://github.com/aon-co-jp/open-web-server.git ../open-web-server
