@@ -46,6 +46,17 @@ jobs:
           git clone --depth=1 https://github.com/aon-co-jp/open-raid-z.git ../open-raid-z
       - name: Build (default, CPU-only)
         run: cargo build --release --bin aruaru-llm
+      - name: Build (GPU acceleration variant — open-cuda Vulkan+DirectX "SET")
+        # 2026-09-08 BUG修正: aruaru-llm.iss の[Files]は`installgpu`タスク
+        # 配下でも(実行時に選択されなかった場合でも)コンパイル時に
+        # `target-gpu\release\aruaru-llm.exe`の実在を要求するため、この
+        # ステップが無いと常に「Error on line 82: Source file ... does
+        # not exist」でISCC.exeが失敗していた(release.ymlには元々この
+        # ステップがあったが、このワークフローには無かった)。
+        shell: pwsh
+        run: |
+          $env:CARGO_TARGET_DIR = "target-gpu"
+          cargo build --release --bin aruaru-llm --features hw-detect-vulkan,real-vulkan,hw-detect-directx,real-dx12
       - name: Install Inno Setup
         shell: pwsh
         run: choco install innosetup --no-progress -y
