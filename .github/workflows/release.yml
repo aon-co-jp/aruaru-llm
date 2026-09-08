@@ -28,13 +28,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Checkout sibling path dependencies (open-cuda, RPoem, RS-JSON, open-web-server, RS-SmartTCP, open-raid-z)
+      - name: Checkout sibling path dependencies (open-cuda, open-cpu, RPoem, RS-JSON, open-web-server, RS-SmartTCP, open-raid-z)
         # RPoem(open-runo-poem-compat)はopen-runo-router経由でopen-web-server-wire/core/ledgerへ
         # path依存し、open-web-server-wireはさらにRS-SmartTCPへ、RS-SmartTCPは
         # open-raid-zへpath依存する(2026-08-17、実際にCIで踏んだ多段の
         # sibling path依存チェーン)。
+        #
+        # 2026-09-08 BUG修正: Cargo.tomlがopen-cpu(CPU命令セット検出/SIMD
+        # 加速)へもpath依存するようになったが、このcheckoutステップが
+        # open-cpuのcloneを欠いていたため、v0.2.3タグのリリースCIが
+        # 「failed to read open-cpu/Cargo.toml」で全面的に失敗し、
+        # Linux/Windowsとも成果物が一切公開されない状態になっていた
+        # (open-english側のインストーラーが「aruaru-llmも同時インストール」
+        # を選んでも実際には何も取得できない、という形で発覚した実バグ)。
         run: |
           git clone --depth=1 https://github.com/aon-co-jp/open-cuda.git ../open-cuda
+          git clone --depth=1 https://github.com/aon-co-jp/open-cpu.git ../open-cpu
           git clone --depth=1 https://github.com/aon-co-jp/RPoem.git ../RPoem
           git clone --depth=1 https://github.com/aon-co-jp/RS-JSON.git ../RS-JSON
           git clone --depth=1 https://github.com/aon-co-jp/open-web-server.git ../open-web-server
@@ -58,13 +67,17 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Checkout sibling path dependencies (open-cuda, RPoem, RS-JSON, open-web-server, RS-SmartTCP, open-raid-z)
+      - name: Checkout sibling path dependencies (open-cuda, open-cpu, RPoem, RS-JSON, open-web-server, RS-SmartTCP, open-raid-z)
         # RPoem(open-runo-poem-compat)はopen-runo-router経由でopen-web-server-wire/core/ledgerへ
         # path依存し、open-web-server-wireはさらにRS-SmartTCPへ、RS-SmartTCPは
         # open-raid-zへpath依存する(2026-08-17、実際にCIで踏んだ多段の
         # sibling path依存チェーン)。
+        #
+        # 2026-09-08 BUG修正: open-cpuのcloneが欠けていた(上記Linuxジョブの
+        # コメント参照)。
         run: |
           git clone --depth=1 https://github.com/aon-co-jp/open-cuda.git ../open-cuda
+          git clone --depth=1 https://github.com/aon-co-jp/open-cpu.git ../open-cpu
           git clone --depth=1 https://github.com/aon-co-jp/RPoem.git ../RPoem
           git clone --depth=1 https://github.com/aon-co-jp/RS-JSON.git ../RS-JSON
           git clone --depth=1 https://github.com/aon-co-jp/open-web-server.git ../open-web-server
