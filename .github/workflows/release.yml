@@ -85,6 +85,31 @@ jobs:
           git clone --depth=1 https://github.com/aon-co-jp/open-raid-z.git ../open-raid-z
       - name: Build (default, CPU-only)
         run: cargo build --release --bin aruaru-llm
+      - name: Package portable zip (aruaru-llm-windows-x86_64.zip)
+        # 2026-09-08新設(BUG修正): このWindowsジョブは以前、Inno Setup製の
+        # aruaru-llm-installer.exe(独自のProgram Files配置+アンインストーラー
+        # を持つ、単体利用者向け)しか出力していなかった。しかし
+        # open-english側の`fetch-aruaru-llm.ps1`・`server/src/main.rs`の
+        # `maybe_launch_aruaru_llm`は、実行ファイル1本を
+        # `{app}\aruaru-llm\aruaru-llm.exe`という相対配置に展開して
+        # 子プロセスとして直接起動する「ポータブルzip」を前提に設計されて
+        # おり(v0.1.0リリース当時は実際にzipを配布していた)、この
+        # 前提が途中でzip配布をやめた際に更新されないまま残っていた。
+        # 結果、open-englishインストーラーが「aruaru-llmも同時インストール」
+        # (現在は必須・常時実行)を行っても、最新リリースにzipアセットが
+        # 無いため何も取得できず、起動しても「⚙ Setup aruaru-llm.」画面の
+        # ままになるという実バグが発生していた。ここでzip配布を復活させ、
+        # 単体インストーラー(installer.exe)とポータブルzipの両方を
+        # 引き続き公開する。
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist-zip | Out-Null
+          Copy-Item target\release\aruaru-llm.exe dist-zip\aruaru-llm.exe
+          Compress-Archive -Path dist-zip\aruaru-llm.exe -DestinationPath aruaru-llm-windows-x86_64.zip -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aruaru-llm-windows-x86_64
+          path: aruaru-llm-windows-x86_64.zip
       - name: Build (GPU acceleration variant — open-cuda Vulkan+DirectX "SET")
         # ユーザー指示「aruaru-llmはopen-cudaとopen-directxと一緒に使用した
         # 方が本領を発揮するならSETでダウンロードしてインストールする
@@ -125,3 +150,4 @@ jobs:
           files: |
             aruaru-llm-linux-x86_64/aruaru-llm-linux-x86_64.tar.gz
             aruaru-llm-installer/aruaru-llm-installer.exe
+            aruaru-llm-windows-x86_64/aruaru-llm-windows-x86_64.zip
