@@ -73,9 +73,16 @@ jobs:
           $version = "0.0.0-$("${{ github.sha }}".Substring(0,7))"
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=$version installer\windows\aruaru-llm.iss
       - name: Replace committed installer if it changed
+        # 2026-09-08: ISCC.exeの出力ファイル名がaruaru-llm.issの
+        # OutputBaseFilename変更によりaruaru-llm-windows-x86_64-installer.exe
+        # へ変わったが、リポジトリへ直接コミットする安定URL用ファイル
+        # (installer/windows/aruaru-llm-installer.exe)自体の名前は
+        # 変更しない(open-english側のREADME/index.html等が
+        # このraw URLをそのまま参照しているため)。コピー元のパスのみ
+        # 追従させる。
         shell: pwsh
         run: |
-          Copy-Item -Force installer\windows\dist\aruaru-llm-installer.exe installer\windows\aruaru-llm-installer.exe
+          Copy-Item -Force installer\windows\dist\aruaru-llm-windows-x86_64-installer.exe installer\windows\aruaru-llm-installer.exe
       - name: Commit if changed
         run: |
           git config user.name "github-actions[bot]"
