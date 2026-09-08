@@ -135,15 +135,15 @@ jobs:
       - name: Install Inno Setup
         shell: pwsh
         run: choco install innosetup --no-progress -y
-      - name: Build aruaru-llm-installer.exe
+      - name: Build aruaru-llm-windows-x86_64-installer.exe
         shell: pwsh
         run: |
           $version = "${{ github.ref_name }}" -replace '^v', ''
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=$version installer\windows\aruaru-llm.iss
       - uses: actions/upload-artifact@v4
         with:
-          name: aruaru-llm-installer
-          path: installer/windows/dist/aruaru-llm-installer.exe
+          name: aruaru-llm-windows-x86_64-installer
+          path: installer/windows/dist/aruaru-llm-windows-x86_64-installer.exe
 
   release:
     name: GitHub Releaseへ添付
@@ -156,5 +156,5 @@ jobs:
         with:
           files: |
             aruaru-llm-linux-x86_64/aruaru-llm-linux-x86_64.tar.gz
-            aruaru-llm-installer/aruaru-llm-installer.exe
+            aruaru-llm-windows-x86_64-installer/aruaru-llm-windows-x86_64-installer.exe
             aruaru-llm-windows-x86_64/aruaru-llm-windows-x86_64.zip

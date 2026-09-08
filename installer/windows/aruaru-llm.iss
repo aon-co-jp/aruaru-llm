@@ -57,9 +57,15 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2
 SolidCompression=yes
 OutputDir=dist
-; エコシステム全体の命名規則: <リポジトリ名>-installer.exe
-; (バージョン番号なし、常に同じファイル名——open-englishと同じ方針)。
-OutputBaseFilename=aruaru-llm-installer
+; 2026-09-08変更(ユーザー指示): GitHub Releasesのポータブルzip
+; (aruaru-llm-windows-x86_64.zip)と命名を揃えるため
+; aruaru-llm-windows-x86_64-installerへ変更。この値はISCC.exeの
+; 出力ファイル名(dist配下)のみに影響する——main-installer.ymlが
+; リポジトリへ直接コミットする安定URL用ファイル
+; (installer/windows/aruaru-llm-installer.exe、バージョン番号なしの
+; 固定名)はコピー先ファイル名で別途指定しているため、この変更による
+; 影響を受けない。
+OutputBaseFilename=aruaru-llm-windows-x86_64-installer
 ArchitecturesInstallIn64BitMode=x64compatible
 DisableProgramGroupPage=yes
 
