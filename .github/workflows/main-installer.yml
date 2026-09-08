@@ -53,6 +53,13 @@ jobs:
         # ステップが無いと常に「Error on line 82: Source file ... does
         # not exist」でISCC.exeが失敗していた(release.ymlには元々この
         # ステップがあったが、このワークフローには無かった)。
+        #
+        # continue-on-error: このGPUビルドはopen-cudaのDirectXシェーダー
+        # 事前コンパイル(.dxil)がCI環境に無いため現状失敗する(別課題、
+        # 未調査・未修正)。aruaru-llm.iss側は`#ifexist`でGPUバイナリの
+        # 有無を見て条件分岐するよう対応済みのため、この段が失敗しても
+        # CPU版インストーラーのビルド・コミットは継続させる。
+        continue-on-error: true
         shell: pwsh
         run: |
           $env:CARGO_TARGET_DIR = "target-gpu"

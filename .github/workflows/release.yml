@@ -121,6 +121,13 @@ jobs:
         # README-INSTALLED.txt・aruaru-llm.iss参照、開発機での実測では
         # CPU版より遅かった)——インストーラー側で既定オフのオプトイン
         # タスクとして提供する。
+        #
+        # continue-on-error(2026-09-08): open-cudaのDirectXシェーダー
+        # 事前コンパイル(.dxil)がCI環境に無く現状失敗する(別課題、未調査)。
+        # aruaru-llm.issは`#ifexist`でGPUバイナリの有無を見て条件分岐する
+        # ため、この段が失敗してもCPU版インストーラー・Windows zipの
+        # ビルド・公開は継続させる。
+        continue-on-error: true
         shell: pwsh
         run: |
           $env:CARGO_TARGET_DIR = "target-gpu"
