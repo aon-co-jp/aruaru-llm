@@ -79,7 +79,19 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "..\..\target\release\{#MyAppExeName}"; DestDir: "{app}"; DestName: "{#MyAppExeName}"; Flags: ignoreversion
 ; GPU版が選ばれた場合、上記を同名で上書きする([Files]は上から順に
 ; 処理されるため、この行が後から実行され最終的にこちらが有効になる)。
+;
+; 2026-09-08 BUG修正: ISCC.exeはTasksで絞られたFiles行でも、コンパイル時
+; (実行時の選択とは無関係)にSource参照先の実在を要求する。GPUビルドは
+; open-cudaのDirectXシェーダー事前コンパイル(.dxil生成)がCI環境に
+; 無いため現状失敗することがあり(open-cuda側の別課題、この場では未修正)、
+; その場合target-gpu\release\配下が丸ごと存在せずコンパイル自体が
+; 落ちていた。`#ifexist`でガードし、GPU版バイナリが実際に存在する
+; 場合のみこの行を含める(無い場合はinstallgpuタスクを選んでも何も
+; 起きない——CPU版のまま、というだけで、少なくともインストーラー全体の
+; ビルドは止めない)。
+#ifexist "..\..\target-gpu\release\aruaru-llm.exe"
 Source: "..\..\target-gpu\release\{#MyAppExeName}"; DestDir: "{app}"; DestName: "{#MyAppExeName}"; Flags: ignoreversion; Tasks: installgpu
+#endif
 Source: "README-INSTALLED.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\install.ps1"; DestDir: "{app}"; Flags: ignoreversion; DestName: "install-service.ps1"
 Source: "recommend-model.ps1"; DestDir: "{app}"; Flags: ignoreversion
