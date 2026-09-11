@@ -37,6 +37,7 @@ mod hardware;
 mod idle_background_fold;
 mod intrusion_detection;
 mod model_catalog;
+mod qwen_generation;
 mod news_geo;
 mod nllb;
 mod phone_task;
@@ -1588,6 +1589,119 @@ async fn select_model(req: Request) -> Response {
     }
 }
 
+// ── Qwen2/Qwen2.5系(RoPE+GQA+RMSNorm+SwiGLU)カタログ・生成
+//    (2026-09-11新設、`qwen_generation.rs`参照) ──────────────────────
+
+/// `GET /v1/qwen/catalog` — [`list_model_catalog`]のQwenカタログ版。
+async fn list_qwen_catalog() -> Response {
+    let models_root = model_catalog::models_root();
+    json_response(
+        StatusCode::OK,
+        &CatalogResponse {
+            models: model_catalog::QWEN_CATALOG,
+            installed_ids: model_catalog::installed_qwen_ids(&models_root),
+            active_model_dir: qwen_generation::active_qwen_model_dir().map(|d| d.to_string_lossy().to_string()),
+            disclosure_ja: "このカタログは Qwen2/Qwen2.5 系(RoPE+GQA+RMSNorm+SwiGLU)アーキテクチャの\
+                モデルのみを対象としています。上の /v1/models/catalog (GPT-2系) とは別のエンジン\
+                (open_cuda_llm::QwenModel)で読み込まれ、/v1/generate ではなく /v1/generate-qwen で\
+                生成に使われます。qwen2.5-0.5b-instruct 以外は個別の実機ダウンロード検証をまだ行って\
+                いません(アーキテクチャ・ファイル構成は同一のはずですが、正直に開示します)。",
+        },
+    )
+}
+
+/// `POST /v1/qwen/install` — [`install_model`]のQwenカタログ版。
+async fn install_qwen_model(req: Request) -> Response {
+    let Json(req): Json<InstallModelRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let Some(entry) = model_catalog::find_qwen(&req.id) else {
+        return json_response(StatusCode::NOT_FOUND, &InstallModelErrorResponse { error: format!("unknown Qwen catalog id '{}': see GET /v1/qwen/catalog", req.id) });
+    };
+    let dest_dir = model_catalog::models_root().join(entry.id);
+    match model_catalog::install(entry, &dest_dir).await {
+        Ok(()) => json_response(
+            StatusCode::OK,
+            &InstallModelResponse {
+                id: entry.id.to_string(),
+                dir: dest_dir.to_string_lossy().to_string(),
+                message_ja: format!("{}のダウンロードが完了しました({}に保存)。", entry.display_name_ja, dest_dir.to_string_lossy()),
+            },
+        ),
+        Err(err) => {
+            tracing::warn!("install_qwen_model({}) failed: {err:#}", entry.id);
+            json_response(StatusCode::BAD_GATEWAY, &InstallModelErrorResponse { error: format!("{err:#}") })
+        }
+    }
+}
+
+/// `POST /v1/qwen/select` — [`select_model`]のQwenカタログ版
+/// (`qwen_generation::select_qwen_model`経由)。
+async fn select_qwen_model_http(req: Request) -> Response {
+    let Json(req): Json<SelectModelRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let dest_dir = model_catalog::models_root().join(&req.id);
+    let dir_for_task = dest_dir.clone();
+    let result = tokio::task::spawn_blocking(move || qwen_generation::select_qwen_model(dir_for_task)).await;
+    match result {
+        Ok(Ok(())) => json_response(
+            StatusCode::OK,
+            &SelectModelResponse {
+                id: req.id.clone(),
+                dir: dest_dir.to_string_lossy().to_string(),
+                message_ja: format!(
+                    "使用するQwenモデルを{}に切り替えました(プロセス再起動は不要です)。以降 /v1/generate-qwen で使用されます。 / \
+                     Switched the active Qwen model to {} — no process restart needed; it's now used by /v1/generate-qwen.",
+                    req.id, req.id
+                ),
+            },
+        ),
+        Ok(Err(e)) => {
+            tracing::warn!("select_qwen_model({}) failed: {e:#}", req.id);
+            json_response(StatusCode::BAD_REQUEST, &InstallModelErrorResponse { error: format!("{e:#}") })
+        }
+        Err(e) => json_response(StatusCode::INTERNAL_SERVER_ERROR, &InstallModelErrorResponse { error: format!("select_qwen_model task panicked: {e}") }),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct GenerateQwenRequest {
+    prompt: String,
+    #[serde(default = "default_max_new_tokens")]
+    max_new_tokens: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct GenerateQwenResponse {
+    text: String,
+    engine: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct GenerateQwenErrorResponse {
+    error: String,
+}
+
+/// `POST /v1/generate-qwen` — アクティブな`QwenModel`(`/v1/qwen/select`で
+/// 選択済みのもの)でテキスト生成する。既存`/v1/generate`(GPT-2系)とは
+/// 完全に別のエンドポイント・別のアクティブモデル状態(`qwen_generation.rs`
+/// モジュールdoc参照、既存エンドポイントの挙動は一切変えない設計)。
+async fn generate_qwen(req: Request, device: Arc<dyn GpuDevice>) -> Response {
+    let Json(body): Json<GenerateQwenRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let result = tokio::task::spawn_blocking(move || qwen_generation::generate(&device, &body.prompt, body.max_new_tokens)).await;
+    match result {
+        Ok(Ok(text)) => json_response(StatusCode::OK, &GenerateQwenResponse { text, engine: "qwen2-gqa-rope-rmsnorm-swiglu-greedy-decode-v0-open-cuda-llm-cpu" }),
+        Ok(Err(e)) => json_response(StatusCode::BAD_REQUEST, &GenerateQwenErrorResponse { error: format!("{e:#}") }),
+        Err(e) => json_response(StatusCode::INTERNAL_SERVER_ERROR, &GenerateQwenErrorResponse { error: format!("generate-qwen task panicked: {e}") }),
+    }
+}
+
 #[derive(Debug, Deserialize, Default)]
 struct LayerRedundancyRequest {
     /// トピックを分散させた複数の文を推奨。省略・空配列なら
@@ -2775,6 +2889,7 @@ async fn main() -> anyhow::Result<()> {
     let classify_traffic_pool = Arc::clone(&device_pool);
     let classify_traffic_registry = Arc::clone(&registry);
     let generate_pool = Arc::clone(&device_pool);
+    let generate_qwen_pool = Arc::clone(&device_pool);
     let generate_registry = Arc::clone(&registry);
     let generate_speculative_pool = Arc::clone(&device_pool);
     let generate_speculative_registry = Arc::clone(&registry);
@@ -2903,6 +3018,16 @@ async fn main() -> anyhow::Result<()> {
         )
         .at("/v1/models/install", post(handler_fn(|req, _p| Box::pin(install_model(req)))))
         .at("/v1/models/select", post(handler_fn(|req, _p| Box::pin(select_model(req)))))
+        .at("/v1/qwen/catalog", get(plain(|| Box::pin(list_qwen_catalog()))))
+        .at("/v1/qwen/install", post(handler_fn(|req, _p| Box::pin(install_qwen_model(req)))))
+        .at("/v1/qwen/select", post(handler_fn(|req, _p| Box::pin(select_qwen_model_http(req)))))
+        .at(
+            "/v1/generate-qwen",
+            post(handler_fn(move |req, _p| {
+                let device = generate_qwen_pool.next_device();
+                async move { generate_qwen(req, device).await }
+            })),
+        )
         .at(
             "/v1/models/layer-redundancy",
             post(handler_fn(move |req, _p| {
