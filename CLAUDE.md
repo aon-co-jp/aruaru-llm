@@ -4280,3 +4280,67 @@ few minutes because the open-cuda companion agent's work was mid-flight
 (`opencuda-cpu` had a non-exhaustive match on the new `KernelArg`
 variants) — resolved itself once that companion session progressed;
 this repo's own code was not at fault.
+
+## HANDOFF追記(2026-09-11) Qwen2/Qwen2.5系(open-cuda-llm::QwenModel)を実配線 + 推奨/サイズ切替メッセージ日英併記 + AI/LLMニュース4言語 / Follow-up: wired up open-cuda-llm::QwenModel + bilingual recommend/step messages + 4-language AI/LLM news
+
+2026年9月頭に話題になった中国発の小型高性能LLM(Qwen3.5系・
+DeepSeek-V4.1-Flash等)のニュースを受け、以下3点を実装した。
+
+1. **Qwen2/Qwen2.5系モデルの実配線**(`open-cuda-llm::QwenModel`、
+   正本は`open-cuda/CLAUDE.md`の2026-09-11 HANDOFF追記):
+   既存の`generation.rs`(`GptModel`、1246行・FP8/MLA/DXIL/層折りたたみ等
+   高度な配線多数)には一切手を触れず、完全に並行・独立した経路
+   `qwen_generation.rs`を新設。`model_catalog.rs`に`QWEN_CATALOG`
+   (qwen2.5-{0.5b,1.5b,3b}-instruct、既存`install()`をそのまま再利用)。
+   `GET /v1/qwen/catalog`・`POST /v1/qwen/install`・`POST /v1/qwen/select`・
+   `POST /v1/generate-qwen`を新設(既存`/v1/models/*`・`/v1/generate`は
+   無改修)。**実機E2E検証**(release build、実HTTPリクエスト):
+   qwen2.5-0.5b-instructを選択→"The capital of Germany is" ->
+   " Berlin. It was founded in 1870 and has a population of"という
+   一連の応答を確認。
+   - **正直な開示**: このQwen経路にはFP8/MLA(サービング層からは)/
+     DXILオフロード/層折りたたみ/投機的デコードはまだ配線されていない
+     (`open-cuda-llm`側の`QwenModel`自体はMLA圧縮に対応済みだが、
+     `qwen_generation.rs`からはまだ呼べない、次の増分)。
+2. **推奨/サイズ切替メッセージの日英併記**: `hardware::Recommendation::
+   disclosure_ja`・`/v1/recommend-and-download`・`/v1/download-larger`・
+   `/v1/download-smaller`の各メッセージへ英訳を追記(既存の「日本語 /
+   English」併記の慣例に合わせ、フィールドは増やさずJSON契約を維持)。
+   併せて「1段階小さいモデルへいつでも簡単に戻せる」旨(既存の
+   `download-smaller`機能が実質的なロールバック)を明記。
+3. **AI/LLMニュース4言語取得**(`news_geo.rs`拡張): 既存の
+   `refresh()`/`GET /v1/news/latest`(サーバー接続国の一般ニュース、
+   単一言語)とは別に、`refresh_ai_news()`/`GET /v1/news/ai-latest`/
+   `POST /v1/news/ai-refresh`を新設。英語・日本語・簡体字中国語・
+   繁体字中国語の4言語でAI/LLM関連ニュースを`web_search`
+   (Google Custom Search)経由取得しローカルDB
+   (`data/ai_news_db.json`)へ保存。1言語失敗でも他言語は継続。
+   **正直な開示**: これは表示専用の情報収集であり、取得内容を根拠に
+   使用中のLLMを自動で切り替えることはしない(モデル変更は既存の
+   ユーザー操作起点のエンドポイントのみが行う——起動時の無断自動採用は
+   既存のダウンロードポリシー・安全方針に反するため実装しない)。
+
+検証: `cargo build`成功。`cargo test`は95 passed(既存の16失敗は
+本変更と無関係の事前からの失敗、`git stash`で変更前後の同一集合を確認済み)。
+
+**保留中(要確認)**: デモ・本番環境それぞれでのメール通知(日英)。
+送信インフラ(SMTP)・宛先収集の仕組みがこのリポジトリ群に存在せず、
+自動送信ボットは安全方針上作らない。宛先=管理者本人(norukia.jp@gmail.com)
++ダウンロードユーザー、Slackは無し、LINE公式アカウント検討中——
+実装は次回以降。
+
+*English*: In response to the early-September-2026 news wave around
+small-but-strong Chinese open-weight LLMs (Qwen3.5 family,
+DeepSeek-V4.1-Flash), added three things: (1) wired
+`open-cuda-llm::QwenModel` into serving as a fully parallel path
+(`qwen_generation.rs`, new `/v1/qwen/*` and `/v1/generate-qwen`
+endpoints, existing `GptModel` path untouched) — verified end-to-end via
+real HTTP requests against a release build with Qwen2.5-0.5B-Instruct;
+(2) made the recommend/step-size messages bilingual (JA/EN in the same
+field, no API contract change) and documented that "download one size
+smaller" already serves as an easy rollback; (3) added a 4-language
+(EN/JA/zh-CN/zh-TW) AI/LLM news digest (`refresh_ai_news()` /
+`/v1/news/ai-refresh` / `/v1/news/ai-latest`), display-only — it never
+drives automatic model switching. Email notifications remain an open
+question pending SMTP/recipient-list infrastructure that doesn't exist
+yet in this repo group.

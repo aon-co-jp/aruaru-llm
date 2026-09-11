@@ -18,6 +18,16 @@
 [Українська](README-Ukrainian.md) · [עברית](README-Hebrew.md) ·
 [فارسی](README-Persian.md) · [العربية](README-Arabic.md)
 
+> 📌 **Recent update (2026-09-11)**: Wired up `open-cuda-llm::QwenModel`
+> (Qwen2/Qwen2.5 architecture: RoPE, Grouped Query Attention, RMSNorm,
+> SwiGLU) as `GET/POST /v1/qwen/*` and `POST /v1/generate-qwen` — the
+> existing `/v1/generate` (GPT-2 engine) path is untouched. Verified
+> end-to-end against real weights (Qwen2.5-0.5B-Instruct). Also made
+> the recommend/step-size messages bilingual, and added a 4-language
+> (EN/JA/zh-CN/zh-TW) AI/LLM news digest (`/v1/news/ai-refresh` /
+> `/v1/news/ai-latest`). See the 2026-09-11 HANDOFF entry in
+> [CLAUDE.md](CLAUDE.md).
+>
 > 📌 **Recent update (2026-09-03)**: Per user instruction to target
 > 32GB-VRAM-class NVIDIA/AMD/Intel GPUs and support F16/F32/F64/F128
 > going forward, `src/hardware.rs`'s VRAM-recommendation heuristic now
