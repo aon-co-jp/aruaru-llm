@@ -478,11 +478,26 @@ pub fn recommend_at_precision(precision: InferencePrecision) -> Recommendation {
         hardware,
         recommended_model_id,
         precision_used: precision.as_str(),
+        // 2026-09-11追記(ユーザー指示「そのようなメッセージも英語と日本語でも
+        // 提示して」への対応): 既存の`HardwareSummary::disclosure`と同じ
+        // 「日本語 / English」併記の慣例に合わせ、英訳をこの1フィールドに
+        // 追記した(新規フィールドを増やして呼び出し側のJSON契約を壊さない)。
         disclosure_ja: "これはモデルサイズ(パラメータ数×精度ごとのバイト数概算)とVRAM容量の単純な\
             比較に基づく簡易的な目安であり、精密な性能予測ではありません。実際の必要メモリはKVキャッシュ・\
             アクティベーション等で変動します。生成処理自体は現状CPUで実行され、この見積もりが選んだ精度を\
             実際のロード時dtypeとして使う配線もまだありません\
-            (GPU推論配線は逐次デコードではオーバーヘッドが支配的になりうるため見送っています)。",
+            (GPU推論配線は逐次デコードではオーバーヘッドが支配的になりうるため見送っています)。\
+            推奨より少し大きいモデルも「1段階大きいモデルをダウンロード」で試せます。動作が重い・遅いと\
+            感じたら「1段階小さいモデルをダウンロード」でいつでも簡単に元のサイズへ戻せます(ダウンロード\
+            済みのモデルは端末に残るため、再ダウンロードなしで即切り替わります)。 / This is a rough \
+            estimate based on a simple comparison of model size (parameter count times bytes-per-parameter \
+            for the chosen precision) against detected VRAM — not a precise performance prediction. Actual \
+            memory use varies with the KV cache, activations, etc. Generation currently always runs on CPU; \
+            this estimate's chosen precision is not yet wired to the actual load-time dtype (GPU inference \
+            wiring was skipped because overhead tends to dominate for single-sequence decoding). You can try \
+            a slightly larger model than recommended via \"download one size larger\" — and if it feels heavy \
+            or slow, \"download one size smaller\" switches back down just as easily (already-downloaded \
+            models stay on disk, so switching back doesn't need a re-download).",
     }
 }
 

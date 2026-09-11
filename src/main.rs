@@ -1863,13 +1863,34 @@ async fn recommend_and_download() -> Response {
 
     let dir_for_task = dest_dir.clone();
     let switch_result = tokio::task::spawn_blocking(move || generation::select_model(dir_for_task)).await;
+    // 2026-09-11追記: ユーザー指示「そのようなメッセージも英語と日本語でも
+    // 提示して」への対応で、日英併記( / 区切り)へ拡張。
     let (switched_to_recommended, message_ja) = match switch_result {
-        Ok(Ok(())) => (true, format!("推奨モデル{}({})のダウンロードと切り替えが完了しました。/v1/generateで使用中です。", entry.display_name_ja, entry.id)),
+        Ok(Ok(())) => (
+            true,
+            format!(
+                "推奨モデル{}({})のダウンロードと切り替えが完了しました。/v1/generateで使用中です。 / \
+                 Recommended model {} ({}) has been downloaded and switched in — it's now in use for /v1/generate.",
+                entry.display_name_ja, entry.id, entry.display_name_en, entry.id
+            ),
+        ),
         Ok(Err(e)) => {
             tracing::warn!("recommend_and_download: select_model({}) failed: {e:#}", entry.id);
-            (false, format!("ダウンロードは完了しましたが、切り替えに失敗しました({e:#})。現在動作中のモデルは維持されています。"))
+            (
+                false,
+                format!(
+                    "ダウンロードは完了しましたが、切り替えに失敗しました({e:#})。現在動作中のモデルは維持されています。 / \
+                     Download finished but switching to it failed ({e:#}); the currently running model was kept unchanged."
+                ),
+            )
         }
-        Err(e) => (false, format!("切り替え処理がパニックしました({e})。現在動作中のモデルは維持されています。")),
+        Err(e) => (
+            false,
+            format!(
+                "切り替え処理がパニックしました({e})。現在動作中のモデルは維持されています。 / \
+                 The switch operation panicked ({e}); the currently running model was kept unchanged."
+            ),
+        ),
     };
 
     json_response(StatusCode::OK, &RecommendAndDownloadResponse { recommendation: rec, already_installed, switched_to_recommended, message_ja })
@@ -1908,7 +1929,8 @@ async fn step_model_size(direction_larger: bool) -> Response {
     let next = if direction_larger { model_catalog::next_larger(&from_id) } else { model_catalog::next_smaller(&from_id) };
 
     let Some(entry) = next else {
-        let label = if direction_larger { "最大" } else { "最小" };
+        let label_ja = if direction_larger { "最大" } else { "最小" };
+        let label_en = if direction_larger { "largest" } else { "smallest" };
         return json_response(
             StatusCode::OK,
             &StepModelResponse {
@@ -1916,7 +1938,12 @@ async fn step_model_size(direction_larger: bool) -> Response {
                 to_id: None,
                 already_installed: true,
                 switched: false,
-                message_ja: format!("現在の{from_id}は既にカタログ内で{label}サイズです。これ以上{}できません。", if direction_larger { "大きくする" } else { "小さくする" }),
+                message_ja: format!(
+                    "現在の{from_id}は既にカタログ内で{label_ja}サイズです。これ以上{}できません。 / \
+                     {from_id} is already the {label_en} size in the catalog — it can't go any {}.",
+                    if direction_larger { "大きくする" } else { "小さくする" },
+                    if direction_larger { "larger" } else { "smaller" }
+                ),
             },
         );
     };
@@ -1935,12 +1962,31 @@ async fn step_model_size(direction_larger: bool) -> Response {
     let dir_for_task = dest_dir.clone();
     let switch_result = tokio::task::spawn_blocking(move || generation::select_model(dir_for_task)).await;
     let (switched, message_ja) = match switch_result {
-        Ok(Ok(())) => (true, format!("{from_id} から {}({}) へ切り替えました。/v1/generateで使用中です。", entry.display_name_ja, entry.id)),
+        Ok(Ok(())) => (
+            true,
+            format!(
+                "{from_id} から {}({}) へ切り替えました。/v1/generateで使用中です。 / \
+                 Switched from {from_id} to {} ({}) — it's now in use for /v1/generate.",
+                entry.display_name_ja, entry.id, entry.display_name_en, entry.id
+            ),
+        ),
         Ok(Err(e)) => {
             tracing::warn!("step_model_size: select_model({}) failed: {e:#}", entry.id);
-            (false, format!("ダウンロードは完了しましたが、切り替えに失敗しました({e:#})。現在動作中の{from_id}は維持されています。"))
+            (
+                false,
+                format!(
+                    "ダウンロードは完了しましたが、切り替えに失敗しました({e:#})。現在動作中の{from_id}は維持されています。 / \
+                     Download finished but switching to it failed ({e:#}); {from_id} is still running unchanged."
+                ),
+            )
         }
-        Err(e) => (false, format!("切り替え処理がパニックしました({e})。現在動作中の{from_id}は維持されています。")),
+        Err(e) => (
+            false,
+            format!(
+                "切り替え処理がパニックしました({e})。現在動作中の{from_id}は維持されています。 / \
+                 The switch operation panicked ({e}); {from_id} is still running unchanged."
+            ),
+        ),
     };
 
     json_response(StatusCode::OK, &StepModelResponse { from_id, to_id: Some(entry.id.to_string()), already_installed, switched, message_ja })
@@ -2519,6 +2565,22 @@ async fn news_latest() -> Response {
     json_response(StatusCode::OK, &db)
 }
 
+/// AI/LLM関連ニュースを英語・日本語・簡体字中国語・繁体字中国語の4言語で
+/// 取得しローカルDBへ保存する(`POST /v1/news/ai-refresh`、2026-09-11新設、
+/// `news_geo.rs`のモジュールdoc「AI/LLM ニュース」節参照)。open-englishの
+/// メンテナンスバナー表示中に叩かれる想定。
+async fn ai_news_refresh() -> Response {
+    let db = crate::news_geo::refresh_ai_news().await;
+    json_response(StatusCode::OK, &db)
+}
+
+/// 直近保存済みのAI/LLMニュースDBスナップショットを返す
+/// (`GET /v1/news/ai-latest`)。
+async fn ai_news_latest() -> Response {
+    let db = crate::news_geo::get_latest_ai_news();
+    json_response(StatusCode::OK, &db)
+}
+
 async fn referrals_check(req: Request) -> Response {
     let Json(body): Json<ReferralsCheckRequest> = match Json::from_body(req).await {
         Ok(v) => v,
@@ -2799,6 +2861,8 @@ async fn main() -> anyhow::Result<()> {
         .at("/v1/referrals/check", post(handler_fn(|req, _p| Box::pin(referrals_check(req)))))
         .at("/v1/news/refresh", post(plain(|| Box::pin(news_refresh()))))
         .at("/v1/news/latest", get(plain(|| Box::pin(news_latest()))))
+        .at("/v1/news/ai-refresh", post(plain(|| Box::pin(ai_news_refresh()))))
+        .at("/v1/news/ai-latest", get(plain(|| Box::pin(ai_news_latest()))))
         .at("/v1/geo/lookup", post(handler_fn(|req, _p| Box::pin(geo_lookup(req)))))
         .at(
             "/v1/settings/google-search",
