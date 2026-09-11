@@ -197,9 +197,129 @@ pub fn topic_context_line(db: &NewsDb) -> Option<String> {
     Some(format!("Recent news from {country}: {headlines}"))
 }
 
+// ── AI/LLM ニュース(多言語、2026-09-11新設) ─────────────────────────
+//
+// ユーザー指示「起動時のメンテナンス時に自動でインターネットニュースを
+// 英語と日本語と中国語と台湾語で読む機能」への対応。上の`refresh()`
+// (サーバー接続先国の一般ニュース、単一言語)とは別物として追加する
+// ——検索テーマを「AI/LLM関連」に固定し、言語は接続先国に関わらず常に
+// 4言語(英語・日本語・簡体字中国語・繁体字中国語)で取得する。
+//
+// **正直な開示**: これは表示専用の情報収集であり、取得した内容を根拠に
+// 使用モデルを自動で切り替えることは一切しない(モデル変更は既存の
+// `/v1/recommend-and-download`・`/v1/download-larger`・
+// `/v1/download-smaller`——いずれもユーザー操作起点——のみが行う)。
+// `web_search`(Google Custom Search)未設定なら、他の機能同様に正直に
+// 「未設定」を返し、ニュースを捏造しない。
+
+/// 言語コード(表示用)と検索クエリの組。
+const AI_NEWS_QUERIES: &[(&str, &str)] = &[
+    ("en", "latest open source LLM AI model news 2026"),
+    ("ja", "最新 オープンソース LLM AI モデル ニュース 2026"),
+    ("zh-CN", "最新 开源 LLM AI 模型 新闻 2026"),
+    ("zh-TW", "最新 開源 LLM AI 模型 新聞 2026"),
+];
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AiNewsItem {
+    pub lang: String,
+    pub title: String,
+    pub snippet: String,
+    pub link: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AiNewsDb {
+    pub items: Vec<AiNewsItem>,
+    pub fetched_at_unix: Option<u64>,
+    pub last_error: Option<String>,
+}
+
+fn ai_news_db_path() -> PathBuf {
+    std::env::var("ARUARU_LLM_AI_NEWS_DB_PATH").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("data/ai_news_db.json"))
+}
+
+static AI_NEWS_DB: RwLock<Option<AiNewsDb>> = RwLock::new(None);
+
+fn load_ai_news_from_disk() -> AiNewsDb {
+    let path = ai_news_db_path();
+    std::fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+}
+
+fn persist_ai_news_to_disk(db: &AiNewsDb) {
+    let path = ai_news_db_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(json) = serde_json::to_string_pretty(db) {
+        let _ = std::fs::write(&path, json);
+    }
+}
+
+/// 直近保存済みのAI/LLMニュースDBスナップショットを返す
+/// (`GET /v1/news/ai-latest`)。
+pub fn get_latest_ai_news() -> AiNewsDb {
+    {
+        let guard = AI_NEWS_DB.read().expect("ai news db lock poisoned");
+        if let Some(db) = guard.clone() {
+            return db;
+        }
+    }
+    let loaded = load_ai_news_from_disk();
+    *AI_NEWS_DB.write().expect("ai news db lock poisoned") = Some(loaded.clone());
+    loaded
+}
+
+/// 4言語でAI/LLM関連ニュースを取得しローカルDBへ保存する
+/// (`POST /v1/news/ai-refresh`)。open-englishのメンテナンスバナー表示中に
+/// 叩かれる想定(既存`refresh()`と同じ呼び出しタイミング)。1言語の検索が
+/// 失敗しても他の言語は継続する(部分的な結果を正直に返す、全滅時のみ
+/// `last_error`を設定)。
+pub async fn refresh_ai_news() -> AiNewsDb {
+    let mut db = AiNewsDb::default();
+
+    if !web_search::is_configured() {
+        db.last_error = Some(
+            "Google Custom Search is not configured (set ARUARU_LLM_GOOGLE_SEARCH_API_KEY / \
+             ARUARU_LLM_GOOGLE_SEARCH_CX) — no AI/LLM news fetched"
+                .to_string(),
+        );
+        persist_ai_news_to_disk(&db);
+        *AI_NEWS_DB.write().expect("ai news db lock poisoned") = Some(db.clone());
+        return db;
+    }
+
+    let mut errors = Vec::new();
+    for &(lang, query) in AI_NEWS_QUERIES {
+        match web_search::search(query, 4).await {
+            Ok(results) => {
+                db.items.extend(results.into_iter().map(|r: SearchResult| AiNewsItem { lang: lang.to_string(), title: r.title, snippet: r.snippet, link: r.link }));
+            }
+            Err(e) => errors.push(format!("{lang}: {e}")),
+        }
+    }
+    if db.items.is_empty() && !errors.is_empty() {
+        db.last_error = Some(format!("all AI/LLM news searches failed: {}", errors.join(" | ")));
+    } else if !errors.is_empty() {
+        db.last_error = Some(format!("some AI/LLM news searches failed (partial results kept): {}", errors.join(" | ")));
+    }
+
+    db.fetched_at_unix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs());
+
+    persist_ai_news_to_disk(&db);
+    *AI_NEWS_DB.write().expect("ai news db lock poisoned") = Some(db.clone());
+    db
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ai_news_queries_cover_english_japanese_simplified_and_traditional_chinese() {
+        let langs: Vec<&str> = AI_NEWS_QUERIES.iter().map(|(lang, _)| *lang).collect();
+        assert_eq!(langs, vec!["en", "ja", "zh-CN", "zh-TW"]);
+    }
 
     #[test]
     fn news_query_for_country_uses_japanese_for_japan() {
