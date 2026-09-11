@@ -39,11 +39,25 @@ pub enum PriorityService {
     Deepseek,
     Gemini,
     Claude,
+    /// Grok(xAI、2026-09-12追加)。
+    Grok,
 }
 
 impl PriorityService {
+    // 2026-09-12ユーザー指示「デフォルトでGoogle検索を無料の範囲を使い
+    // 終わったらChatGPTの次はGeminiの次は、DeepSeekの次はGrokの無料枠と
+    // 順番に一つずつ無料枠を毎日使い切っていって」への対応: 既定順序を
+    // Google検索→ChatGPT→Gemini→DeepSeek→Grokへ変更(Claudeは指示に
+    // 含まれていなかったため既定の並びの末尾に維持)。
     fn default_order() -> Vec<PriorityService> {
-        vec![PriorityService::GoogleSearch, PriorityService::Openai, PriorityService::Deepseek, PriorityService::Gemini, PriorityService::Claude]
+        vec![
+            PriorityService::GoogleSearch,
+            PriorityService::Openai,
+            PriorityService::Gemini,
+            PriorityService::Deepseek,
+            PriorityService::Grok,
+            PriorityService::Claude,
+        ]
     }
 }
 
@@ -128,7 +142,7 @@ mod tests {
         let order = current_order();
         assert_eq!(order[0], PriorityService::Claude);
         assert_eq!(order[1], PriorityService::GoogleSearch);
-        assert_eq!(order.len(), 5);
+        assert_eq!(order.len(), 6);
         reset_priority();
     }
 }

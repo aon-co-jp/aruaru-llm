@@ -40,6 +40,12 @@ pub enum Provider {
     Deepseek,
     Gemini,
     Claude,
+    /// Grok(xAI、2026-09-12追加、ユーザー指示「ChatGPTの次はGeminiの次は、
+    /// DeepSeekの次はGrokの無料枠と順番に」への対応)。xAIのChat
+    /// Completions APIはOpenAI互換のリクエスト/レスポンス形状のため、
+    /// DeepSeekと同様に`OpenAiRequest`/`OpenAiResponse`をそのまま
+    /// エンドポイントだけ変えて再利用する。
+    Grok,
 }
 
 impl Provider {
@@ -49,6 +55,7 @@ impl Provider {
             Provider::Deepseek => "ARUARU_LLM_DEEPSEEK_API_KEY",
             Provider::Gemini => "ARUARU_LLM_GEMINI_API_KEY",
             Provider::Claude => "ARUARU_LLM_ANTHROPIC_API_KEY",
+            Provider::Grok => "ARUARU_LLM_GROK_API_KEY",
         }
     }
 
@@ -58,11 +65,12 @@ impl Provider {
             Provider::Deepseek => "deepseek",
             Provider::Gemini => "gemini",
             Provider::Claude => "claude",
+            Provider::Grok => "grok",
         }
     }
 
-    fn all() -> [Provider; 4] {
-        [Provider::Openai, Provider::Deepseek, Provider::Gemini, Provider::Claude]
+    fn all() -> [Provider; 5] {
+        [Provider::Openai, Provider::Deepseek, Provider::Gemini, Provider::Claude, Provider::Grok]
     }
 
     /// `provider_priority::PriorityService`(Google検索を含む5サービス
@@ -75,6 +83,7 @@ impl Provider {
             PriorityService::Deepseek => Some(Provider::Deepseek),
             PriorityService::Gemini => Some(Provider::Gemini),
             PriorityService::Claude => Some(Provider::Claude),
+            PriorityService::Grok => Some(Provider::Grok),
         }
     }
 }
@@ -183,6 +192,7 @@ pub async fn complete_with_key(provider: Provider, api_key: &str, prompt: &str) 
         Provider::Deepseek => complete_deepseek(&client, api_key, prompt).await,
         Provider::Gemini => complete_gemini(&client, api_key, prompt).await,
         Provider::Claude => complete_claude(&client, api_key, prompt).await,
+        Provider::Grok => complete_grok(&client, api_key, prompt).await,
     }
 }
 
@@ -448,6 +458,24 @@ async fn complete_claude(client: &reqwest::Client, api_key: &str, prompt: &str) 
     }
     let parsed: ClaudeResponse = res.json().await.context("failed to parse Claude response")?;
     parsed.content.into_iter().next().map(|b| b.text).context("Claude response contained no content blocks")
+}
+
+// --- Grok (xAI, OpenAI-compatible API shape) ------------------------------
+
+async fn complete_grok(client: &reqwest::Client, api_key: &str, prompt: &str) -> Result<String> {
+    // xAIのChat Completions APIはOpenAI互換のリクエスト/レスポンス形状を
+    // 採用しているため、DeepSeekと同様に既存の`OpenAiRequest`/
+    // `OpenAiResponse`をそのままエンドポイントだけ変えて再利用する。
+    let body = OpenAiRequest { model: "grok-3-mini", messages: vec![OpenAiMessage { role: "user", content: prompt }] };
+    let res = client.post("https://api.x.ai/v1/chat/completions").bearer_auth(api_key).json(&body).send().await.context("Grok request failed")?;
+    if !res.status().is_success() {
+        let status = res.status();
+        let text = res.text().await.unwrap_or_else(|_| "(failed to read response body)".to_string());
+        let marker = if is_quota_exceeded_status(status) { QUOTA_EXCEEDED_MARKER } else { "" };
+        bail!("{marker}Grok returned HTTP {status}: {text}");
+    }
+    let parsed: OpenAiResponse = res.json().await.context("failed to parse Grok response")?;
+    parsed.choices.into_iter().next().map(|c| c.message.content).context("Grok response contained no choices")
 }
 
 #[cfg(test)]
