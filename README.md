@@ -7,6 +7,15 @@
 [Українська](README-Ukrainian.md) · [עברית](README-Hebrew.md) ·
 [فارسی](README-Persian.md) · [العربية](README-Arabic.md)
 
+> 📌 **最近の更新(2026-09-11)**: `open-cuda-llm::QwenModel`(Qwen2/
+> Qwen2.5系、RoPE+GQA+RMSNorm+SwiGLU)を`GET/POST /v1/qwen/*`・
+> `POST /v1/generate-qwen`として実配線した(既存の`/v1/generate`・
+> GPT-2系エンジンは無改修)。実機検証済み(Qwen2.5-0.5B-Instruct)。
+> 併せて推奨モデル・サイズ切替のメッセージを日英併記化、AI/LLM関連
+> ニュースを英語・日本語・簡体字中国語・繁体字中国語の4言語で取得する
+> `/v1/news/ai-refresh`・`/v1/news/ai-latest`を新設。詳細は
+> [CLAUDE.md](CLAUDE.md)の2026-09-11 HANDOFF追記参照。
+>
 > 📌 **最近の更新(2026-09-03)**: ユーザー指示「open-directx/open-cuda/
 > aruaru-llmで、今後32GB VRAM級のNVIDIA/AMD/Intel GPUを想定し、
 > F16/F32/F64、さらにF128まで見据えて開発する」への対応として、
