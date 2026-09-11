@@ -129,6 +129,89 @@ pub const CATALOG: &[CatalogEntry] = &[
     },
 ];
 
+/// Qwen2/Qwen2.5系(RoPE+GQA+RMSNorm+SwiGLU)アーキテクチャのカタログ
+/// (2026-09-11新設)。上の`CATALOG`(GPT-2アーキテクチャ専用、
+/// `open_cuda_llm::GptModel::load`が読む)とは**別のカタログ**——
+/// `open_cuda_llm::QwenModel::load`(`qwen_generation.rs`参照)でのみ
+/// ロードできる。ファイル構成(`config.json`/`model.safetensors`/
+/// `tokenizer.json`)は同じなので`install()`/`REQUIRED_FILES`はそのまま
+/// 再利用できる。
+///
+/// **実機検証状況(正直な開示)**: `qwen2.5-0.5b-instruct`は
+/// `open-cuda/crates/open-cuda-llm/examples/qwen_real_weights_demo.rs`で
+/// 実際にダウンロード・ロード・生成まで検証済み(2026-09-11、
+/// "The capital of France is" -> " Paris. It is the largest city in
+/// Europe..."という文法的に正しい応答を確認)。他のエントリは同じ
+/// Qwen2アーキテクチャ・同じファイル構成であることをHugging Face上の
+/// モデルカードで確認しただけで、個別の実機ダウンロード検証はまだ
+/// 行っていない(帯域・容量の都合、config.jsonの構造は0.5B版と同一の
+/// はず)。
+pub const QWEN_CATALOG: &[CatalogEntry] = &[
+    CatalogEntry {
+        id: "qwen2.5-0.5b-instruct",
+        display_name_ja: "Qwen2.5-0.5B-Instruct (494M、実機検証済み・低スペック機/VPS向け)",
+        display_name_en: "Qwen2.5-0.5B-Instruct (494M, verified end-to-end — good for low-spec machines/VPS)",
+        hf_repo: "Qwen/Qwen2.5-0.5B-Instruct",
+        tokenizer_hf_repo: None,
+        approx_size_mb: 942,
+        license_note_ja: "Apache License 2.0(モデルカード参照)。",
+    },
+    CatalogEntry {
+        id: "qwen2.5-1.5b-instruct",
+        display_name_ja: "Qwen2.5-1.5B-Instruct (1.5B、同アーキテクチャだが個別の実機DL検証は未実施)",
+        display_name_en: "Qwen2.5-1.5B-Instruct (1.5B, same architecture but not individually download-verified yet)",
+        hf_repo: "Qwen/Qwen2.5-1.5B-Instruct",
+        tokenizer_hf_repo: None,
+        approx_size_mb: 2900,
+        license_note_ja: "Apache License 2.0(モデルカード参照)。",
+    },
+    CatalogEntry {
+        id: "qwen2.5-3b-instruct",
+        display_name_ja: "Qwen2.5-3B-Instruct (3B、同アーキテクチャだが個別の実機DL検証は未実施。VRAM/RAM余裕が要る)",
+        display_name_en: "Qwen2.5-3B-Instruct (3B, same architecture but not individually download-verified yet — needs more VRAM/RAM headroom)",
+        hf_repo: "Qwen/Qwen2.5-3B-Instruct",
+        tokenizer_hf_repo: None,
+        approx_size_mb: 6200,
+        license_note_ja: "Qwen License(モデルカード参照、Apache-2.0ではない一部制限がある点に注意)。",
+    },
+];
+
+pub fn find_qwen(id: &str) -> Option<&'static CatalogEntry> {
+    QWEN_CATALOG.iter().find(|e| e.id == id)
+}
+
+fn size_ordered_qwen_catalog() -> Vec<&'static CatalogEntry> {
+    let mut v: Vec<&'static CatalogEntry> = QWEN_CATALOG.iter().collect();
+    v.sort_by_key(|e| e.approx_size_mb);
+    v
+}
+
+/// [`next_larger`]のQwenカタログ版。
+pub fn next_larger_qwen(current_id: &str) -> Option<&'static CatalogEntry> {
+    let ordered = size_ordered_qwen_catalog();
+    let idx = ordered.iter().position(|e| e.id == current_id)?;
+    ordered.get(idx + 1).copied()
+}
+
+/// [`next_smaller`]のQwenカタログ版。
+pub fn next_smaller_qwen(current_id: &str) -> Option<&'static CatalogEntry> {
+    let ordered = size_ordered_qwen_catalog();
+    let idx = ordered.iter().position(|e| e.id == current_id)?;
+    idx.checked_sub(1).and_then(|i| ordered.get(i)).copied()
+}
+
+/// [`installed_ids`]のQwenカタログ版。
+pub fn installed_qwen_ids(models_root: &Path) -> Vec<&'static str> {
+    QWEN_CATALOG
+        .iter()
+        .filter(|e| {
+            let dir = models_root.join(e.id);
+            REQUIRED_FILES.iter().all(|f| dir.join(f).exists())
+        })
+        .map(|e| e.id)
+        .collect()
+}
+
 pub fn find(id: &str) -> Option<&'static CatalogEntry> {
     CATALOG.iter().find(|e| e.id == id)
 }
