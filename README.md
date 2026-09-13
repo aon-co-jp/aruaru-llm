@@ -7,6 +7,15 @@
 [Українська](README-Ukrainian.md) · [עברית](README-Hebrew.md) ·
 [فارسی](README-Persian.md) · [العربية](README-Arabic.md)
 
+> 📌 **最近の更新(2026-09-13続き)**: `open-cuda`側の`DeepseekModel`へ
+> DeepSeekMoE(共有エキスパート+top-kルーティング)が実装され、理論上
+> `scoring_func="softmax"`構成(V2-Lite相当)ならMoE層も含めエンドツー
+> エンドでロードできる設計になった。**ただし正直な開示**: 実機
+> ダウンロード・ロード検証はまだ行っておらず(15.7Bパラメータ、この
+> 開発機では推論実行自体が非現実的)、そのため自動ダウンロードカタログ
+> (`DEEPSEEK_CATALOG`)はまだ追加していない——実機検証を終えてから
+> 追加する方針。詳細は[CLAUDE.md](CLAUDE.md)参照。
+>
 > 📌 **最近の更新(2026-09-13)**: `open-cuda`側に新設された本物の
 > DeepSeek-V2/V3 Multi-head Latent Attention (MLA) アーキテクチャ
 > (`open-cuda-llm::DeepseekModel`)を`qwen_generation.rs`と同じ設計で

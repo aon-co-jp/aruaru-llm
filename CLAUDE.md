@@ -4387,6 +4387,25 @@ DeepSeekMoE(共有エキスパート+ルーティングされたエキスパー�
 サービング層〈`deepseek_generation.rs`〉のみを担当するため、
 アーキテクチャ設計の詳細は`open-cuda`側が正本)。
 
+**2026-09-13(続き3)、open-cuda側でDeepSeekMoE実装完了**: `open-cuda`
+リポジトリ側で`DeepseekModel`へDeepSeekMoE(共有エキスパート+top-k
+ルーティング)が実装された(正本: `open-cuda/CLAUDE.md`・
+`open-cuda/PORTING.md`の該当エントリ、`deepseek_arch.rs`のモジュール
+doc参照)。これにより`scoring_func="softmax"`・`n_group=1`という
+V2-Lite相当の構成のチェックポイントは、理論上`first_k_dense_replace`
+以降のMoE層も含めてエンドツーエンドでロードできる設計になった。
+**ただし正直な開示**: (1) aux-loss-free補正・group-limited routing・
+sigmoidスコアリング(いずれもV3系)は`open-cuda`側で未対応のまま
+(`load()`が明示的に拒否)、(2) `deepseek-ai/DeepSeek-V2-Lite-Chat`
+(15.7Bパラメータ)を実際にダウンロード・ロードして動作確認する実機
+検証は**まだ行っていない**(この開発機のメモリ・実行時間の都合上、
+仮にロードできてもCPU推論は極めて低速になる見込み——`open-cuda`側の
+docにも同じ限界が明記されている)。したがってこのリポジトリの
+`model_catalog.rs`へ`DEEPSEEK_CATALOG`を追加するのは、実機ダウンロード
+検証(最低でもロードが成功し、1トークンでも生成できることの確認)を
+終えてからにすること——「MoE対応したから動くはず」という推測だけで
+カタログへ追加するのは、このリポジトリの「誇張しない」方針に反する。
+
 **次回への引き継ぎ**: MoE実装完了後、(1) `model_catalog.rs`へ
 `DEEPSEEK_CATALOG`(実在するMoE込みチェックポイント、例:
 `deepseek-ai/DeepSeek-V2-Lite-Chat`)を追加、(2) `GET /v1/deepseek/catalog`・
