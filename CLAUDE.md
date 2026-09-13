@@ -4344,3 +4344,52 @@ smaller" already serves as an easy rollback; (3) added a 4-language
 drives automatic model switching. Email notifications remain an open
 question pending SMTP/recipient-list infrastructure that doesn't exist
 yet in this repo group.
+
+## HANDOFF追記(2026-09-13) 本物のDeepSeek-V2/V3 MLAアーキテクチャを実配線(dense-onlyのため自動ダウンロードカタログは意図的に見送り) / Follow-up: wired the real DeepSeek-V2/V3 MLA architecture (no auto-download catalog yet — dense-only limitation)
+
+`open-cuda`側に新設された`open-cuda-llm::DeepseekModel`(本物の
+DeepSeek-V2/V3 Multi-head Latent Attention、`qwen_generation.rs`と
+同じ「事後retrofitではなく実チェックポイントの低ランク射影重みを
+そのまま読み込む」設計)を、`qwen_generation.rs`と同じパターンで
+`deepseek_generation.rs`として実配線した。
+
+追加したエンドポイント: `POST /v1/deepseek/select { "dir": "..." }`
+(ローカルディレクトリを直接指定)・`POST /v1/generate-deepseek`・
+`GET /v1/deepseek/status`(自動ダウンロードカタログが無い代わりに
+アクティブモデルの状態と制約開示だけを返す)。既存の`/v1/generate`
+(GPT-2系)・`/v1/generate-qwen`(Qwen系)は無改修。
+
+**なぜ`QWEN_CATALOG`のような自動ダウンロードカタログを設けなかったか
+(正直な開示)**: `DeepseekModel::load`(`open-cuda`側`deepseek_arch.rs`)は
+MLA部分(`self_attn.*`)は実チェックポイントのテンソル名で読めるが、
+MoE(DeepSeekMoE、`mlp.experts.*`)層は読めず、dense SwiGLU MLPのみ
+対応。実在するDeepSeek-V2/V2-Lite/V3の公開チェックポイントは
+`first_k_dense_replace`(通常1)以降のほぼ全層がMoEのため、**ダウンロード
+即動作するリポジトリを正直に提示できない**——Qwenのように
+「ダウンロードすればそのまま動く」カタログエントリを出すのは、
+このリポジトリ全体の「誇張しない」方針に反する。そのため`select`は
+`model_catalog`のカタログid方式ではなく、ユーザーが既に用意した
+(または将来ダウンロードした)チェックポイントディレクトリを直接
+指定する生パス方式にした。
+
+**2026-09-13(続き)、方針転換の指示を受けMoE対応の設計調査に着手**:
+ユーザーから「MoE未対応なのでMoE対応の為の設計と実装、開発の為に
+世界中の言語でGoogle検索とGithub調査して」との指示を受け、
+DeepSeekMoE(共有エキスパート+ルーティングされたエキスパート、
+`n_shared_experts`/`n_routed_experts`/`num_experts_per_tok`/
+`first_k_dense_replace`)の実チェックポイント構造・ルーティング計算・
+既存推論エンジン(vLLM/SGLang/llama.cpp等)の実装パターンを、英語・
+日本語・中国語で調査するタスクを開始した(`open-cuda`側の
+`open-cuda-llm::DeepseekModel`へMoE層を追加する設計のため——完了すれば
+初めて実在の公開チェックポイントがエンドツーエンドでロードでき、
+このリポジトリのカタログにも正直に追加できるようになる)。調査結果は
+`open-cuda`側のPORTING.md/CLAUDE.mdに記録する(このリポジトリ側は
+サービング層〈`deepseek_generation.rs`〉のみを担当するため、
+アーキテクチャ設計の詳細は`open-cuda`側が正本)。
+
+**次回への引き継ぎ**: MoE実装完了後、(1) `model_catalog.rs`へ
+`DEEPSEEK_CATALOG`(実在するMoE込みチェックポイント、例:
+`deepseek-ai/DeepSeek-V2-Lite-Chat`)を追加、(2) `GET /v1/deepseek/catalog`・
+`POST /v1/deepseek/install`をQwen版と同じ形で新設、(3) `select`を
+現在の生パス方式からカタログid方式へ統一するかは要検討(ローカル
+チェックポイント指定のユースケースも残したいため、両対応が妥当かもしれない)。

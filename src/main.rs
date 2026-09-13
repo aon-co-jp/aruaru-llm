@@ -38,6 +38,7 @@ mod idle_background_fold;
 mod intrusion_detection;
 mod model_catalog;
 mod qwen_generation;
+mod deepseek_generation;
 mod news_geo;
 mod nllb;
 mod phone_task;
@@ -1702,6 +1703,117 @@ async fn generate_qwen(req: Request, device: Arc<dyn GpuDevice>) -> Response {
     }
 }
 
+// ── DeepSeek-V2/V3系(Multi-head Latent Attention)生成
+//    (2026-09-13新設、`deepseek_generation.rs`参照) ──────────────────────
+//
+// **正直な開示**: Qwenと異なり、自動ダウンロード用カタログ
+// (`/v1/deepseek/catalog`・`/v1/deepseek/install`相当)は設けていない。
+// 実在するDeepSeek-V2/V2-Lite/V3の公開チェックポイントは
+// `first_k_dense_replace`以降がほぼ全層MoEで、`DeepseekModel::load`は
+// MoE層を読めない(`deepseek_arch.rs`参照)ため、「ダウンロードすれば
+// そのまま動く」実在リポジトリを正直に提示できない。かわりに、
+// 既にローカルにある(自前で用意した、または将来のMoE対応後に
+// ダウンロードした)`config.json`/`model.safetensors`/`tokenizer.json`一式
+// を任意のディレクトリパスから直接選択できるようにする
+// (`model_catalog`のid方式ではなく生パスを受け取る点がQwen版と異なる)。
+
+#[derive(Debug, Serialize)]
+struct DeepseekStatusResponse {
+    active_model_dir: Option<String>,
+    disclosure_ja: &'static str,
+}
+
+/// `GET /v1/deepseek/status` — 自動ダウンロードカタログが無い代わりに、
+/// 現在アクティブなDeepSeekモデルのディレクトリと制約の開示だけを返す
+/// (上の節のコメント参照)。
+async fn deepseek_status() -> Response {
+    json_response(
+        StatusCode::OK,
+        &DeepseekStatusResponse {
+            active_model_dir: deepseek_generation::active_deepseek_model_dir().map(|d| d.to_string_lossy().to_string()),
+            disclosure_ja: "自動ダウンロード用カタログはまだありません。実在のDeepSeek-V2/V2-Lite/V3公開\
+                チェックポイントはMoE層を含むため現行の open_cuda_llm::DeepseekModel::load ではロード\
+                できません(dense MLPのみ対応)。config.json/model.safetensors/tokenizer.json一式を\
+                ローカルディレクトリに用意した上で POST /v1/deepseek/select { \"dir\": \"...\" } を\
+                呼んでください。",
+        },
+    )
+}
+
+#[derive(Debug, Deserialize)]
+struct SelectDeepseekModelRequest {
+    /// `config.json`/`model.safetensors`/`tokenizer.json`を含むディレクトリの
+    /// 絶対または相対パス(`model_catalog`のカタログidではない——上の
+    /// 節のコメント参照)。
+    dir: String,
+}
+
+/// `POST /v1/deepseek/select` — `deepseek_generation::select_deepseek_model`
+/// 経由でDeepSeek MLAモデルを選択する(プロセス再起動不要)。
+async fn select_deepseek_model_http(req: Request) -> Response {
+    let Json(req): Json<SelectDeepseekModelRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let dest_dir = std::path::PathBuf::from(&req.dir);
+    let dir_for_task = dest_dir.clone();
+    let result = tokio::task::spawn_blocking(move || deepseek_generation::select_deepseek_model(dir_for_task)).await;
+    match result {
+        Ok(Ok(())) => json_response(
+            StatusCode::OK,
+            &SelectModelResponse {
+                id: req.dir.clone(),
+                dir: dest_dir.to_string_lossy().to_string(),
+                message_ja: format!(
+                    "使用するDeepSeekモデルを{}に切り替えました(プロセス再起動は不要です)。以降 /v1/generate-deepseek で使用されます。\
+                     MoE層を含むチェックポイントは現時点でロードできません(正直な開示、deepseek_arch.rs参照)。 / \
+                     Switched the active DeepSeek model to {} — no process restart needed; it's now used by /v1/generate-deepseek. \
+                     Checkpoints containing MoE layers cannot be loaded yet (see deepseek_arch.rs for the honest scope note).",
+                    req.dir, req.dir
+                ),
+            },
+        ),
+        Ok(Err(e)) => {
+            tracing::warn!("select_deepseek_model({}) failed: {e:#}", req.dir);
+            json_response(StatusCode::BAD_REQUEST, &InstallModelErrorResponse { error: format!("{e:#}") })
+        }
+        Err(e) => json_response(StatusCode::INTERNAL_SERVER_ERROR, &InstallModelErrorResponse { error: format!("select_deepseek_model task panicked: {e}") }),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct GenerateDeepseekRequest {
+    prompt: String,
+    #[serde(default = "default_max_new_tokens")]
+    max_new_tokens: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct GenerateDeepseekResponse {
+    text: String,
+    engine: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct GenerateDeepseekErrorResponse {
+    error: String,
+}
+
+/// `POST /v1/generate-deepseek` — アクティブな`DeepseekModel`
+/// (`/v1/deepseek/select`で選択済みのもの)でテキスト生成する。
+async fn generate_deepseek(req: Request, device: Arc<dyn GpuDevice>) -> Response {
+    let Json(body): Json<GenerateDeepseekRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let result = tokio::task::spawn_blocking(move || deepseek_generation::generate(&device, &body.prompt, body.max_new_tokens)).await;
+    match result {
+        Ok(Ok(text)) => json_response(StatusCode::OK, &GenerateDeepseekResponse { text, engine: "deepseek-mla-decoupled-rope-dense-mlp-greedy-decode-v0-open-cuda-llm-cpu" }),
+        Ok(Err(e)) => json_response(StatusCode::BAD_REQUEST, &GenerateDeepseekErrorResponse { error: format!("{e:#}") }),
+        Err(e) => json_response(StatusCode::INTERNAL_SERVER_ERROR, &GenerateDeepseekErrorResponse { error: format!("generate-deepseek task panicked: {e}") }),
+    }
+}
+
 #[derive(Debug, Deserialize, Default)]
 struct LayerRedundancyRequest {
     /// トピックを分散させた複数の文を推奨。省略・空配列なら
@@ -2890,6 +3002,7 @@ async fn main() -> anyhow::Result<()> {
     let classify_traffic_registry = Arc::clone(&registry);
     let generate_pool = Arc::clone(&device_pool);
     let generate_qwen_pool = Arc::clone(&device_pool);
+    let generate_deepseek_pool = Arc::clone(&device_pool);
     let generate_registry = Arc::clone(&registry);
     let generate_speculative_pool = Arc::clone(&device_pool);
     let generate_speculative_registry = Arc::clone(&registry);
@@ -3026,6 +3139,15 @@ async fn main() -> anyhow::Result<()> {
             post(handler_fn(move |req, _p| {
                 let device = generate_qwen_pool.next_device();
                 async move { generate_qwen(req, device).await }
+            })),
+        )
+        .at("/v1/deepseek/status", get(plain(|| Box::pin(deepseek_status()))))
+        .at("/v1/deepseek/select", post(handler_fn(|req, _p| Box::pin(select_deepseek_model_http(req)))))
+        .at(
+            "/v1/generate-deepseek",
+            post(handler_fn(move |req, _p| {
+                let device = generate_deepseek_pool.next_device();
+                async move { generate_deepseek(req, device).await }
             })),
         )
         .at(
