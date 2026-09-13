@@ -7,6 +7,21 @@
 [Українська](README-Ukrainian.md) · [עברית](README-Hebrew.md) ·
 [فارسی](README-Persian.md) · [العربية](README-Arabic.md)
 
+> 📌 **最近の更新(2026-09-13)**: `open-cuda`側に新設された本物の
+> DeepSeek-V2/V3 Multi-head Latent Attention (MLA) アーキテクチャ
+> (`open-cuda-llm::DeepseekModel`)を`qwen_generation.rs`と同じ設計で
+> `deepseek_generation.rs`として実配線した。`POST /v1/deepseek/select
+> { "dir": "..." }`・`POST /v1/generate-deepseek`・
+> `GET /v1/deepseek/status`を新設(既存エンドポイントは無改修)。
+> **正直な開示**: Qwenの`QWEN_CATALOG`のような自動ダウンロードカタログ
+> は意図的に設けていない——実在する公開DeepSeekチェックポイントは
+> ほぼ全層MoEで、現行の`DeepseekModel::load`はMoE層を読めないため、
+> ダウンロードすればそのまま動くリポジトリを正直に提示できない
+> (対応するにはMoE実装が別途必要、`open-cuda`のPORTING.md参照)。
+> `select`はローカルに用意した互換チェックポイントのディレクトリを
+> 直接指定する方式にした。詳細は[CLAUDE.md](CLAUDE.md)の2026-09-13
+> HANDOFF追記参照。
+>
 > 📌 **最近の更新(2026-09-11)**: `open-cuda-llm::QwenModel`(Qwen2/
 > Qwen2.5系、RoPE+GQA+RMSNorm+SwiGLU)を`GET/POST /v1/qwen/*`・
 > `POST /v1/generate-qwen`として実配線した(既存の`/v1/generate`・
