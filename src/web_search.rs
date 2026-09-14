@@ -24,12 +24,66 @@
 //!   転載せず、上位数件のタイトル・スニペット・URLのみをプロンプトへ
 //!   埋め込む(引用の範囲、既存の秋葉原メイドカフェ記事引用と同じ配慮)。
 
-use std::sync::RwLock;
+use std::sync::{Mutex, RwLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 const GOOGLE_CSE_ENDPOINT: &str = "https://www.googleapis.com/customsearch/v1";
+
+/// 共有(開発者設定)キー経由の検索1日あたりの上限(2026-09-15追加、
+/// ユーザー指示「開発者のGoogle検索API KEYの無料枠から公開してあるので
+/// だれでも利用出来ます。しかし一日に百回までしか利用出来ず、それが
+/// 終わったら…自動で移って下さい」への対応)。Google Custom Search JSON
+/// APIの無料枠自体が1日100件までのため、それに合わせた値。
+///
+/// **2026-08-25の既存方針との関係**: 従来は「開発者が設定したキーは
+/// アクセス者に一切消費させない」方針だった(`search_with_credentials`の
+/// doc参照)。今回はデモ環境(`easy-web.tokyo/open-english/demo`)限定で
+/// この方針を明示的に反転し、開発者の無料枠を来訪者へ公開した上で、
+/// 1日100件という上限を全訪問者合算でグローバルに強制する
+/// (訪問者ごとの個別カウントではなく、Google側の実際の無料枠と一致
+/// させるための単純化)。上限到達後は本関数がエラーを返し、
+/// 呼び出し元(`/v1/generate-with-search`・`/v1/chat-providers/
+/// complete-priority`)は既存の設計どおり検索無し(またはChatGPT/Gemini/
+/// DeepSeek/Grok/Claude優先順チェーン)へ自動的にフォールバックする。
+const SHARED_SEARCH_DAILY_LIMIT: u32 = 100;
+
+/// (該当日のUNIX日数, その日の使用回数)。プロセス再起動で0へ戻る
+/// (永続化しない——1日の境界をまたいで多少ずれても実害が小さい単純な
+/// カウンタで十分という判断、既存のチャットレート制限と同じ思想)。
+static SHARED_SEARCH_DAILY_COUNT: Mutex<(u64, u32)> = Mutex::new((0, 0));
+
+fn today_epoch_day() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() / 86_400).unwrap_or(0)
+}
+
+/// 共有キーの本日の残り利用可能回数を返す(UI表示用)。
+pub fn shared_search_quota_remaining() -> u32 {
+    let today = today_epoch_day();
+    let guard = SHARED_SEARCH_DAILY_COUNT.lock().expect("shared search counter lock poisoned");
+    if guard.0 == today {
+        SHARED_SEARCH_DAILY_LIMIT.saturating_sub(guard.1)
+    } else {
+        SHARED_SEARCH_DAILY_LIMIT
+    }
+}
+
+/// 共有キーを1回消費してよいか判定し、よければカウントを1増やす
+/// (日付が変わっていれば0から数え直す)。
+fn try_consume_shared_search_quota() -> bool {
+    let today = today_epoch_day();
+    let mut guard = SHARED_SEARCH_DAILY_COUNT.lock().expect("shared search counter lock poisoned");
+    if guard.0 != today {
+        *guard = (today, 0);
+    }
+    if guard.1 >= SHARED_SEARCH_DAILY_LIMIT {
+        return false;
+    }
+    guard.1 += 1;
+    true
+}
 
 /// 利用者がブラウザの設定パネルから入力したAPIキー/cxを、実行中の
 /// プロセスのメモリ上にのみ保持する(ユーザー指示「利用者がAPIキーの
@@ -107,6 +161,12 @@ fn read_credentials() -> Option<(String, String)> {
 /// `is_configured()`で事前に分岐する設計を前提とする)。
 pub async fn search(query: &str, max_results: u8) -> Result<Vec<SearchResult>> {
     let (api_key, cx) = read_credentials().context("Google Custom Search API is not configured (set ARUARU_LLM_GOOGLE_SEARCH_API_KEY and ARUARU_LLM_GOOGLE_SEARCH_CX)")?;
+    if !try_consume_shared_search_quota() {
+        bail!(
+            "shared Google Search quota exhausted for today ({SHARED_SEARCH_DAILY_LIMIT}/day) — \
+             falling back to other providers"
+        );
+    }
     search_with_credentials(query, max_results, &api_key, &cx).await
 }
 
