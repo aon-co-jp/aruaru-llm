@@ -4446,7 +4446,7 @@ docにも同じ限界が明記されている)。したがってこのリポジ�
   (統合に失敗したら先頭の生の回答)。群が全滅→`complete_in_priority_order_skipping`で残り
   (Cerebras→ChatGPT→DeepSeek→Claude)へ。`POST /v1/chat-providers/complete-priority`の応答に
   `hybrid_providers`と`synthesized`を追加。`ARUARU_LLM_HYBRID=off`で無効化。
-- 追加プロバイダ(OpenAI互換): Groq(`ARUARU_LLM_GROQ_API_KEY`、既定`llama-3.3-70b-versatile`)、
+- 追加プロバイダ(OpenAI互換): Groq(`ARUARU_LLM_GROQ_API_KEY`、既定`openai/gpt-oss-120b`(Llama 3.3 70Bは2026-09時点でGroqから提供終了))、
   Cerebras(`ARUARU_LLM_CEREBRAS_API_KEY`、既定`llama-3.3-70b`)、Mistral(`ARUARU_LLM_MISTRAL_API_KEY`、
   既定`mistral-small-latest`)。モデルは`ARUARU_LLM_GROQ_MODEL`等で差し替え可。
 - 既定の優先順: Google検索→Gemini→Groq→Grok→Mistral→Cerebras→ChatGPT→DeepSeek→Claude。
