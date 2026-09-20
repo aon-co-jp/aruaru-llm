@@ -4412,3 +4412,27 @@ docにも同じ限界が明記されている)。したがってこのリポジ�
 `POST /v1/deepseek/install`をQwen版と同じ形で新設、(3) `select`を
 現在の生パス方式からカタログid方式へ統一するかは要検討(ローカル
 チェックポイント指定のユースケースも残したいため、両対応が妥当かもしれない)。
+
+## HANDOFF 2026-09-20(検索・AI切替の実装状況)
+
+- **共有検索キー**: `web_search::search()`は共有(開発者)キー経由。全訪問者合算で**1日100回**の
+  上限(`SHARED_SEARCH_DAILY_LIMIT`、プロセス再起動で0に戻る)。上限到達・失敗時は検索無しで
+  優先順チェーンへ自動フォールバック。訪問者持参キー(`search_with_credentials`)は上限対象外。
+- **Google Custom Search JSON API**: VPSに`ARUARU_LLM_GOOGLE_SEARCH_API_KEY/_CX`を設定済み
+  (`/root/aruaru-llm/.env.google-search`、権限600、systemdの`EnvironmentFile=-`で読込)だが、
+  Google側が**403 "This project does not have the access to Custom Search JSON API"**を返し
+  **実際には使えない**(APIを「有効」にしても解消しない=新規プロジェクトへの提供終了。CXは正しい)。
+  古いプロジェクトで作ったキーなら通る可能性あり。2027年に終了予定。
+- **Brave Search API(将来の候補メモ)**: 検索の第一候補として実装済み
+  (`ARUARU_LLM_BRAVE_SEARCH_API_KEY`、`search_brave`)。ユーザーは申し込んだが**有料のみ**と
+  分かったため**今回は見送り**。「格安なので将来的には利用するかもしれない」(2026-09-20)。
+  再開時はキーを`/root/aruaru-llm/.env.providers`へ追記して`systemctl restart aruaru-llm`するだけ。
+  Bing Search APIは2025年に終了しているため候補外。
+- **Gemini**: `AQ.`で始まるVertex AI(express mode)形式のキーに対応
+  (`https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-2.5-flash:generateContent`、
+  リクエストに`role:"user"`必須)。`AIza`形式は従来のGenerative Language API。VPSの
+  `/root/aruaru-llm/.env.providers`に設定済み(`EnvironmentFile=-`)。優先順は
+  Google検索→**Gemini**→ChatGPT→DeepSeek→Grok→Claude(`provider_priority.rs`)。
+- 優先順チェーンは`enabled`フラグに関係なく常に有効(キー未設定のものは自動でスキップ)。
+- ⚠️VPSの`/root/repository/open-cuda`が古くて`DeepseekModel`未定義でビルドが落ちた
+  ことがあった(`git pull`で解消)。aruaru-llmをVPSでビルドする前に`open-cuda`もpullすること。
