@@ -4436,3 +4436,25 @@ docにも同じ限界が明記されている)。したがってこのリポジ�
 - 優先順チェーンは`enabled`フラグに関係なく常に有効(キー未設定のものは自動でスキップ)。
 - ⚠️VPSの`/root/repository/open-cuda`が古くて`DeepseekModel`未定義でビルドが落ちた
   ことがあった(`git pull`で解消)。aruaru-llmをVPSでビルドする前に`open-cuda`もpullすること。
+
+## HANDOFF 2026-09-21: ハイブリッド(良い所どり)とGroq/Cerebras/Mistral追加
+
+- ユーザー指示: **Gemini・Groq・Grok・Mistralの4つに同時に質問し、2つ以上から回答があれば1つのAIが
+  「良い所どり」の1回答にまとめる。1つしか使えなければそのまま返す**。上が全て使えなくなったら下を順番に。
+- 実装: `chat_providers::complete_hybrid`(`HYBRID_GROUP`)。設定済みの群を`complete_multi`で並列に呼び、
+  2つ以上→先頭のAI(Gemini→Groq→Grok→Mistral)へ統合プロンプトを渡して最良の1回答を作らせる
+  (統合に失敗したら先頭の生の回答)。群が全滅→`complete_in_priority_order_skipping`で残り
+  (Cerebras→ChatGPT→DeepSeek→Claude)へ。`POST /v1/chat-providers/complete-priority`の応答に
+  `hybrid_providers`と`synthesized`を追加。`ARUARU_LLM_HYBRID=off`で無効化。
+- 追加プロバイダ(OpenAI互換): Groq(`ARUARU_LLM_GROQ_API_KEY`、既定`llama-3.3-70b-versatile`)、
+  Cerebras(`ARUARU_LLM_CEREBRAS_API_KEY`、既定`llama-3.3-70b`)、Mistral(`ARUARU_LLM_MISTRAL_API_KEY`、
+  既定`mistral-small-latest`)。モデルは`ARUARU_LLM_GROQ_MODEL`等で差し替え可。
+- 既定の優先順: Google検索→Gemini→Groq→Grok→Mistral→Cerebras→ChatGPT→DeepSeek→Claude。
+- **VPSにキーが入っているのはGeminiのみ**(`/root/aruaru-llm/.env.providers`)。Groq/Cerebras/Mistral/Grokの
+  キーはユーザーがアカウントを作って`F:\`のtxtへ保存 → scpで`.env.providers`へ追記して再起動する。
+  Grok(xAI)のAPIは基本有料。ChatGPT/DeepSeekも有料。
+- ⚠️`chat_providers`のテストは共有の静的状態(実行時キー)を書き換えるため、並列実行で稀に失敗する
+  既存の不安定さがある(今回1回再現、再実行で通過)。
+- **未実装(ユーザー要望、方式は提案済み)**: 各社のモデル名が将来バージョンアップ/廃止されても追従する
+  自動更新(各社`/models`から最新の無料・安定版を選び、試験呼び出しに成功した時だけ切り替え、
+  今より小さい/古いモデルへは自動で下げない、1日1回)。ユーザーの承認待ち。
