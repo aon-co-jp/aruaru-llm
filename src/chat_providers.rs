@@ -218,7 +218,7 @@ pub async fn complete_with_key(provider: Provider, api_key: &str, prompt: &str) 
         Provider::Claude => complete_claude(&client, api_key, prompt).await,
         Provider::Grok => complete_grok(&client, api_key, prompt).await,
         Provider::Groq => {
-            let model = std::env::var("ARUARU_LLM_GROQ_MODEL").unwrap_or_else(|_| "llama-3.3-70b-versatile".to_string());
+            let model = std::env::var("ARUARU_LLM_GROQ_MODEL").unwrap_or_else(|_| "openai/gpt-oss-120b".to_string());
             complete_openai_compatible(&client, "Groq", "https://api.groq.com/openai/v1/chat/completions", &model, api_key, prompt).await
         }
         Provider::Cerebras => {
