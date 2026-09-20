@@ -396,7 +396,15 @@ struct GeminiResponsePart {
 
 async fn complete_gemini(client: &reqwest::Client, api_key: &str, prompt: &str) -> Result<String> {
     let body = GeminiRequest { contents: vec![GeminiContent { parts: vec![GeminiPart { text: prompt }] }] };
-    let url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
+    // 2026-09-20: Google AI Studioの通常キー(`AIza...`)はGenerative Language
+    // API、Vertex AI(express mode)の新形式キー(`AQ.`で始まる)はVertex AIの
+    // 窓口へ振り分ける(実機検証: `AQ.`キーは前者だと403
+    // API_KEY_SERVICE_BLOCKED、後者だと gemini-2.5-flash が応答した)。
+    let url = if api_key.starts_with("AQ.") {
+        "https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-2.5-flash:generateContent"
+    } else {
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+    };
     // APIキーはクエリ文字列(`?key=...`)ではなくヘッダー(`x-goog-api-key`)
     // で渡す(Google公式が推奨する方式、2026-08-26セキュリティ見直しで
     // 変更——クエリ文字列だとリバースプロキシ・アクセスログ・ブラウザ
