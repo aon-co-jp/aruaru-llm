@@ -49,11 +49,15 @@ impl PriorityService {
     // 順番に一つずつ無料枠を毎日使い切っていって」への対応: 既定順序を
     // Google検索→ChatGPT→Gemini→DeepSeek→Grokへ変更(Claudeは指示に
     // 含まれていなかったため既定の並びの末尾に維持)。
+    // 2026-09-20ユーザー指示「GEMINIを一番目にして」: Geminiのキーが先に
+    // 用意できたため、チャット補完の第1優先をGeminiへ(Google検索は
+    // チャット補完ではなく検索補強なので先頭のまま)。
+    // → Google検索→Gemini→ChatGPT→DeepSeek→Grok→Claude
     fn default_order() -> Vec<PriorityService> {
         vec![
             PriorityService::GoogleSearch,
-            PriorityService::Openai,
             PriorityService::Gemini,
+            PriorityService::Openai,
             PriorityService::Deepseek,
             PriorityService::Grok,
             PriorityService::Claude,
