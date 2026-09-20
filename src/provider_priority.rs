@@ -41,6 +41,12 @@ pub enum PriorityService {
     Claude,
     /// Grok(xAI、2026-09-12追加)。
     Grok,
+    /// Groq(2026-09-21追加、Llama 3.3 70B等を無料枠で高速に提供)。
+    Groq,
+    /// Cerebras(2026-09-21追加、Llama系が高速、無料枠あり)。
+    Cerebras,
+    /// Mistral(2026-09-21追加、無料のExperimentプランあり)。
+    Mistral,
 }
 
 impl PriorityService {
@@ -56,10 +62,15 @@ impl PriorityService {
     fn default_order() -> Vec<PriorityService> {
         vec![
             PriorityService::GoogleSearch,
+            // ハイブリッド群(同時に呼んで良い所どり、chat_providers::HYBRID_GROUP)
             PriorityService::Gemini,
+            PriorityService::Groq,
+            PriorityService::Grok,
+            PriorityService::Mistral,
+            // 上が全て使えなくなったら、下を順番に(無料枠のあるものから先に)
+            PriorityService::Cerebras,
             PriorityService::Openai,
             PriorityService::Deepseek,
-            PriorityService::Grok,
             PriorityService::Claude,
         ]
     }
@@ -146,7 +157,7 @@ mod tests {
         let order = current_order();
         assert_eq!(order[0], PriorityService::Claude);
         assert_eq!(order[1], PriorityService::GoogleSearch);
-        assert_eq!(order.len(), 6);
+        assert_eq!(order.len(), 9);
         reset_priority();
     }
 }

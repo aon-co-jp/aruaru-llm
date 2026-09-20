@@ -1078,6 +1078,11 @@ struct ChatProviderCompletePriorityResponse {
     all_quota_exceeded: bool,
     /// 実際に使われた検索コンテキスト(空なら検索無しでの応答)。
     search_notes: Vec<String>,
+    /// ハイブリッド(良い所どり)で回答を出したプロバイダ(1つだけなら統合なし、空なら
+    /// ハイブリッド群が使えず順次フォールバックした場合)。2026-09-21追加。
+    hybrid_providers: Vec<chat_providers::Provider>,
+    /// 複数AIの回答を統合して作った回答か。
+    synthesized: bool,
 }
 
 async fn chat_provider_complete_priority(req: Request) -> Response {
@@ -1153,10 +1158,17 @@ async fn chat_provider_complete_priority(req: Request) -> Response {
             &serde_json::json!({"error": format!("prompt (with search context) exceeds {CHAT_PROVIDER_PROMPT_CHAR_LIMIT} characters")}),
         );
     }
-    let result = chat_providers::complete_in_priority_order(&augmented_prompt).await;
+    let result = chat_providers::complete_hybrid(&augmented_prompt).await;
     json_response(
         StatusCode::OK,
-        &ChatProviderCompletePriorityResponse { reply: result.reply, attempted: result.attempted, all_quota_exceeded: result.all_quota_exceeded, search_notes },
+        &ChatProviderCompletePriorityResponse {
+            reply: result.reply,
+            attempted: result.attempted,
+            all_quota_exceeded: result.all_quota_exceeded,
+            search_notes,
+            hybrid_providers: result.hybrid_providers,
+            synthesized: result.synthesized,
+        },
     )
 }
 
