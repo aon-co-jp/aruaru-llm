@@ -46,6 +46,12 @@ pub enum Provider {
     /// DeepSeekと同様に`OpenAiRequest`/`OpenAiResponse`をそのまま
     /// エンドポイントだけ変えて再利用する。
     Grok,
+    /// Groq(2026-09-21追加)。OpenAI互換API(api.groq.com/openai/v1)。
+    Groq,
+    /// Cerebras(2026-09-21追加)。OpenAI互換API(api.cerebras.ai/v1)。
+    Cerebras,
+    /// Mistral(2026-09-21追加)。OpenAI互換API(api.mistral.ai/v1)。
+    Mistral,
 }
 
 impl Provider {
@@ -56,6 +62,9 @@ impl Provider {
             Provider::Gemini => "ARUARU_LLM_GEMINI_API_KEY",
             Provider::Claude => "ARUARU_LLM_ANTHROPIC_API_KEY",
             Provider::Grok => "ARUARU_LLM_GROK_API_KEY",
+            Provider::Groq => "ARUARU_LLM_GROQ_API_KEY",
+            Provider::Cerebras => "ARUARU_LLM_CEREBRAS_API_KEY",
+            Provider::Mistral => "ARUARU_LLM_MISTRAL_API_KEY",
         }
     }
 
@@ -66,11 +75,23 @@ impl Provider {
             Provider::Gemini => "gemini",
             Provider::Claude => "claude",
             Provider::Grok => "grok",
+            Provider::Groq => "groq",
+            Provider::Cerebras => "cerebras",
+            Provider::Mistral => "mistral",
         }
     }
 
-    fn all() -> [Provider; 5] {
-        [Provider::Openai, Provider::Deepseek, Provider::Gemini, Provider::Claude, Provider::Grok]
+    fn all() -> [Provider; 8] {
+        [
+            Provider::Openai,
+            Provider::Deepseek,
+            Provider::Gemini,
+            Provider::Claude,
+            Provider::Grok,
+            Provider::Groq,
+            Provider::Cerebras,
+            Provider::Mistral,
+        ]
     }
 
     /// `provider_priority::PriorityService`(Google検索を含む5サービス
@@ -84,6 +105,9 @@ impl Provider {
             PriorityService::Gemini => Some(Provider::Gemini),
             PriorityService::Claude => Some(Provider::Claude),
             PriorityService::Grok => Some(Provider::Grok),
+            PriorityService::Groq => Some(Provider::Groq),
+            PriorityService::Cerebras => Some(Provider::Cerebras),
+            PriorityService::Mistral => Some(Provider::Mistral),
         }
     }
 }
@@ -193,6 +217,18 @@ pub async fn complete_with_key(provider: Provider, api_key: &str, prompt: &str) 
         Provider::Gemini => complete_gemini(&client, api_key, prompt).await,
         Provider::Claude => complete_claude(&client, api_key, prompt).await,
         Provider::Grok => complete_grok(&client, api_key, prompt).await,
+        Provider::Groq => {
+            let model = std::env::var("ARUARU_LLM_GROQ_MODEL").unwrap_or_else(|_| "llama-3.3-70b-versatile".to_string());
+            complete_openai_compatible(&client, "Groq", "https://api.groq.com/openai/v1/chat/completions", &model, api_key, prompt).await
+        }
+        Provider::Cerebras => {
+            let model = std::env::var("ARUARU_LLM_CEREBRAS_MODEL").unwrap_or_else(|_| "llama-3.3-70b".to_string());
+            complete_openai_compatible(&client, "Cerebras", "https://api.cerebras.ai/v1/chat/completions", &model, api_key, prompt).await
+        }
+        Provider::Mistral => {
+            let model = std::env::var("ARUARU_LLM_MISTRAL_MODEL").unwrap_or_else(|_| "mistral-small-latest".to_string());
+            complete_openai_compatible(&client, "Mistral", "https://api.mistral.ai/v1/chat/completions", &model, api_key, prompt).await
+        }
     }
 }
 
@@ -272,13 +308,18 @@ pub struct PriorityCompleteResult {
 }
 
 pub async fn complete_in_priority_order(prompt: &str) -> PriorityCompleteResult {
+    complete_in_priority_order_skipping(prompt, &[]).await
+}
+
+/// skipに含まれるプロバイダを除いて、優先順に1つずつ試す。
+pub async fn complete_in_priority_order_skipping(prompt: &str, skip: &[Provider]) -> PriorityCompleteResult {
     let order = provider_priority::current_order();
     let mut attempted = Vec::new();
     for svc in order {
         let Some(provider) = Provider::from_priority_service(svc) else {
             continue;
         };
-        if !is_configured(provider) {
+        if skip.contains(&provider) || !is_configured(provider) {
             continue;
         }
         match complete(provider, prompt).await {
@@ -473,6 +514,22 @@ async fn complete_claude(client: &reqwest::Client, api_key: &str, prompt: &str) 
 
 // --- Grok (xAI, OpenAI-compatible API shape) ------------------------------
 
+/// OpenAI互換のChat Completions API(Groq/Cerebras/Mistral共通、2026-09-21新設)。
+/// モデル名は各社の提供状況が変わりやすいため、環境変数
+/// (ARUARU_LLM_GROQ_MODEL等)で差し替えられるようにしてある。
+async fn complete_openai_compatible(client: &reqwest::Client, name: &str, url: &str, model: &str, api_key: &str, prompt: &str) -> Result<String> {
+    let body = OpenAiRequest { model, messages: vec![OpenAiMessage { role: "user", content: prompt }] };
+    let res = client.post(url).bearer_auth(api_key).json(&body).send().await.with_context(|| format!("{name} request failed"))?;
+    if !res.status().is_success() {
+        let status = res.status();
+        let text = res.text().await.unwrap_or_else(|_| "(failed to read response body)".to_string());
+        let marker = if is_quota_exceeded_status(status) { QUOTA_EXCEEDED_MARKER } else { "" };
+        bail!("{marker}{name} returned HTTP {status}: {text}");
+    }
+    let parsed: OpenAiResponse = res.json().await.with_context(|| format!("failed to parse {name} response"))?;
+    parsed.choices.into_iter().next().map(|c| c.message.content).with_context(|| format!("{name} response contained no choices"))
+}
+
 async fn complete_grok(client: &reqwest::Client, api_key: &str, prompt: &str) -> Result<String> {
     // xAIのChat Completions APIはOpenAI互換のリクエスト/レスポンス形状を
     // 採用しているため、DeepSeekと同様に既存の`OpenAiRequest`/
@@ -487,6 +544,99 @@ async fn complete_grok(client: &reqwest::Client, api_key: &str, prompt: &str) ->
     }
     let parsed: OpenAiResponse = res.json().await.context("failed to parse Grok response")?;
     parsed.choices.into_iter().next().map(|c| c.message.content).context("Grok response contained no choices")
+}
+
+// --- ハイブリッド(良い所どり、2026-09-21新設) --------------------------
+//
+// ユーザー指示「Gemini2.5FlashとGroq(Llama 3.3 70B)とGrokを一緒に使用して(のちに
+// Mistralも加えた4つに同時に質問して、2つ以上から回答があれば統合、1つだけならそのまま)、
+// ハイブリッド使用で、良い所どりのAIの回答を目指して」。ハイブリッド群
+// (Gemini・Groq・Grok・Mistral)のうち**設定済みのもの全てへ同時に問い合わせ**、
+// 2つ以上から回答が得られたら、その回答群を1つのAIに渡して「正しい点を
+// 組み合わせ、誤りや矛盾を捨てた最良の1回答」へ統合させる。1つしか得られ
+// なければそのまま返し、全て失敗したら優先順チェーンの残り(Cerebras→
+// ChatGPT→DeepSeek→Claude)へ進む。
+//
+// **正直な開示**: 統合は「複数AIの回答をもう1回AIに読ませてまとめる」方式で、
+// 正しさを保証する仕組みではない(統合役も間違えうる)。1質問につき最大で
+// 群の数(最大4)+1回のAPI呼び出しを消費するため、無料枠の減りは速くなる。
+// ARUARU_LLM_HYBRID=off で無効化でき、その場合は従来の順次フォールバックのみ。
+pub const HYBRID_GROUP: [Provider; 4] = [Provider::Gemini, Provider::Groq, Provider::Grok, Provider::Mistral];
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HybridCompleteResult {
+    pub reply: Option<ProviderReply>,
+    /// 回答を出したハイブリッド群のプロバイダ(1つだけなら統合なし)。
+    pub hybrid_providers: Vec<Provider>,
+    /// 複数の回答を統合して作った回答か。
+    pub synthesized: bool,
+    pub attempted: Vec<PriorityAttempt>,
+    pub all_quota_exceeded: bool,
+}
+
+pub fn hybrid_enabled() -> bool {
+    !matches!(std::env::var("ARUARU_LLM_HYBRID").ok().as_deref(), Some("off") | Some("0") | Some("false"))
+}
+
+fn build_synthesis_prompt(question: &str, candidates: &[ProviderReply]) -> String {
+    let mut s = String::from(
+        "You are given a user's question and several candidate answers written by different AI assistants. \
+Write the single best final answer: keep the correct and useful points from all candidates, drop anything \
+wrong, unsupported or contradictory, and do not mention the candidates or that you merged them. \
+Answer in the same language as the user's question, naturally and clearly, like a knowledgeable and friendly human.\n\n",
+    );
+    s.push_str("### User question\n");
+    s.push_str(question);
+    for (i, c) in candidates.iter().enumerate() {
+        s.push_str(&format!("\n\n### Candidate answer {} ({})\n{}", i + 1, c.provider.label(), c.text));
+    }
+    s.push_str("\n\n### Final answer\n");
+    s
+}
+
+pub async fn complete_hybrid(prompt: &str) -> HybridCompleteResult {
+    let group: Vec<Provider> = if hybrid_enabled() { HYBRID_GROUP.iter().copied().filter(|p| is_configured(*p)).collect() } else { Vec::new() };
+    if group.is_empty() {
+        let r = complete_in_priority_order(prompt).await;
+        return HybridCompleteResult { reply: r.reply, hybrid_providers: Vec::new(), synthesized: false, attempted: r.attempted, all_quota_exceeded: r.all_quota_exceeded };
+    }
+    let (replies, failures) = complete_multi(&group, &HashMap::new(), prompt).await;
+    let mut attempted: Vec<PriorityAttempt> =
+        failures.into_iter().map(|f| PriorityAttempt { provider: f.provider, error: f.error, quota_exceeded: f.quota_exceeded }).collect();
+    match replies.len() {
+        0 => {
+            // ハイブリッド群が全滅 → 残りを優先順に(群は再試行しない)
+            let r = complete_in_priority_order_skipping(prompt, &group).await;
+            attempted.extend(r.attempted);
+            let all_quota_exceeded = r.reply.is_none() && !attempted.is_empty() && attempted.iter().all(|a| a.quota_exceeded);
+            HybridCompleteResult { reply: r.reply, hybrid_providers: Vec::new(), synthesized: false, attempted, all_quota_exceeded }
+        }
+        1 => {
+            let only = replies.into_iter().next().expect("one reply");
+            HybridCompleteResult { hybrid_providers: vec![only.provider], reply: Some(only), synthesized: false, attempted, all_quota_exceeded: false }
+        }
+        _ => {
+            let providers: Vec<Provider> = replies.iter().map(|r| r.provider).collect();
+            let synth_prompt = build_synthesis_prompt(prompt, &replies);
+            // 統合役: 回答を出せたプロバイダの先頭(Gemini→Groq→Grok→Mistralの順)。失敗したら次の候補、
+            // 全部失敗したら先頭の生の回答をそのまま返す。
+            for synthesizer in &providers {
+                if let Ok(text) = complete(*synthesizer, &synth_prompt).await {
+                    if !text.trim().is_empty() {
+                        return HybridCompleteResult {
+                            reply: Some(ProviderReply { provider: *synthesizer, text }),
+                            hybrid_providers: providers,
+                            synthesized: true,
+                            attempted,
+                            all_quota_exceeded: false,
+                        };
+                    }
+                }
+            }
+            let first = replies.into_iter().next().expect("replies non-empty");
+            HybridCompleteResult { reply: Some(first), hybrid_providers: providers, synthesized: false, attempted, all_quota_exceeded: false }
+        }
+    }
 }
 
 #[cfg(test)]
