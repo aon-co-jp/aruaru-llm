@@ -138,7 +138,7 @@ struct CseItem {
 /// 環境変数`ARUARU_LLM_GOOGLE_SEARCH_API_KEY`/`ARUARU_LLM_GOOGLE_SEARCH_CX`
 /// の両方が設定されているかどうか(空文字列は未設定として扱う)。
 pub fn is_configured() -> bool {
-    read_credentials().is_some()
+    read_brave_key().is_some() || read_credentials().is_some()
 }
 
 /// 実行時設定(ブラウザの設定パネル経由)を優先し、無ければ環境変数
@@ -155,19 +155,106 @@ fn read_credentials() -> Option<(String, String)> {
     Some((api_key, cx))
 }
 
-/// Google Custom Search JSON APIで検索を実行し、上位`max_results`件
-/// (既定呼び出し側は3件程度を想定)を返す。認証情報未設定時は
-/// 正直にエラーを返す(黙って空配列を返さない——呼び出し側が
-/// `is_configured()`で事前に分岐する設計を前提とする)。
+/// 共有(開発者設定)キーで検索する。2026-09-20変更: GoogleのCustom Search
+/// JSON APIは新規プロジェクトへの提供を終了しつつある(2027年終了予定)ため、
+/// **Brave Search API**(`ARUARU_LLM_BRAVE_SEARCH_API_KEY`)を第一候補、
+/// 従来のGoogle Custom Searchを第二候補として順に試す。片方が失敗
+/// (キー未設定・上限・HTTPエラー)したら次の検索サービスへ自動で移り、
+/// 全て失敗した場合のみエラーを返す(呼び出し側は検索無しで
+/// ChatGPT→Gemini→DeepSeek→Grok→Claudeの優先順チェーンへ進む)。
+/// 共有キー全体の1日上限(`SHARED_SEARCH_DAILY_LIMIT`)は、どの検索サービスを
+/// 使っても1回の検索につき1回として数える。
 pub async fn search(query: &str, max_results: u8) -> Result<Vec<SearchResult>> {
-    let (api_key, cx) = read_credentials().context("Google Custom Search API is not configured (set ARUARU_LLM_GOOGLE_SEARCH_API_KEY and ARUARU_LLM_GOOGLE_SEARCH_CX)")?;
+    let brave_key = read_brave_key();
+    let google = read_credentials();
+    if brave_key.is_none() && google.is_none() {
+        bail!("no shared search backend is configured (set ARUARU_LLM_BRAVE_SEARCH_API_KEY, or ARUARU_LLM_GOOGLE_SEARCH_API_KEY and ARUARU_LLM_GOOGLE_SEARCH_CX)");
+    }
     if !try_consume_shared_search_quota() {
         bail!(
-            "shared Google Search quota exhausted for today ({SHARED_SEARCH_DAILY_LIMIT}/day) — \
-             falling back to other providers"
+            "shared search quota exhausted for today ({SHARED_SEARCH_DAILY_LIMIT}/day) —              falling back to other providers"
         );
     }
-    search_with_credentials(query, max_results, &api_key, &cx).await
+    let mut errors: Vec<String> = Vec::new();
+    if let Some(key) = brave_key {
+        match search_brave(query, max_results, &key).await {
+            Ok(results) if !results.is_empty() => return Ok(results),
+            Ok(_) => errors.push("brave: 0 results".to_string()),
+            Err(err) => errors.push(format!("brave: {err:#}")),
+        }
+    }
+    if let Some((api_key, cx)) = google {
+        match search_with_credentials(query, max_results, &api_key, &cx).await {
+            Ok(results) => return Ok(results),
+            Err(err) => errors.push(format!("google: {err:#}")),
+        }
+    }
+    bail!("all shared search backends failed: {}", errors.join(" | "))
+}
+
+fn read_brave_key() -> Option<String> {
+    let key = std::env::var("ARUARU_LLM_BRAVE_SEARCH_API_KEY").ok()?;
+    let key = key.trim().to_string();
+    if key.is_empty() { None } else { Some(key) }
+}
+
+const BRAVE_ENDPOINT: &str = "https://api.search.brave.com/res/v1/web/search";
+
+#[derive(Debug, Deserialize)]
+struct BraveResponse {
+    #[serde(default)]
+    web: Option<BraveWeb>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BraveWeb {
+    #[serde(default)]
+    results: Vec<BraveItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BraveItem {
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    url: String,
+}
+
+/// Brave Search APIで検索する(`X-Subscription-Token`ヘッダにAPIキー)。
+/// 結果のタイトル・説明文・URLのみを使う(Google版と同じ引用の範囲)。
+pub async fn search_brave(query: &str, max_results: u8, api_key: &str) -> Result<Vec<SearchResult>> {
+    if query.trim().is_empty() {
+        bail!("search query must not be empty");
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .context("failed to build reqwest client for Brave Search")?;
+    let res = client
+        .get(BRAVE_ENDPOINT)
+        .header("Accept", "application/json")
+        .header("X-Subscription-Token", api_key)
+        .query(&[("q", query), ("count", &max_results.clamp(1, 10).to_string())])
+        .send()
+        .await
+        .context("Brave Search request failed")?;
+    if !res.status().is_success() {
+        let status = res.status();
+        let body = res.text().await.unwrap_or_default();
+        let body: String = body.chars().take(300).collect();
+        bail!("Brave Search returned HTTP {status}: {body}");
+    }
+    let parsed: BraveResponse = res.json().await.context("failed to parse Brave Search response")?;
+    Ok(parsed
+        .web
+        .map(|w| w.results)
+        .unwrap_or_default()
+        .into_iter()
+        .take(max_results as usize)
+        .map(|i| SearchResult { title: i.title, snippet: i.description, link: i.url })
+        .collect())
 }
 
 /// `search()`と同じ検索処理だが、プロセス全体で共有される
