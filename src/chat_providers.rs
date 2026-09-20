@@ -363,6 +363,9 @@ struct GeminiRequest<'a> {
 
 #[derive(Serialize)]
 struct GeminiContent<'a> {
+    // Vertex AI窓口はroleが必須("user"/"model")。通常のGenerative Language
+    // APIでも"user"を明示して問題無い。
+    role: &'static str,
     parts: Vec<GeminiPart<'a>>,
 }
 
@@ -395,7 +398,7 @@ struct GeminiResponsePart {
 }
 
 async fn complete_gemini(client: &reqwest::Client, api_key: &str, prompt: &str) -> Result<String> {
-    let body = GeminiRequest { contents: vec![GeminiContent { parts: vec![GeminiPart { text: prompt }] }] };
+    let body = GeminiRequest { contents: vec![GeminiContent { role: "user", parts: vec![GeminiPart { text: prompt }] }] };
     // 2026-09-20: Google AI Studioの通常キー(`AIza...`)はGenerative Language
     // API、Vertex AI(express mode)の新形式キー(`AQ.`で始まる)はVertex AIの
     // 窓口へ振り分ける(実機検証: `AQ.`キーは前者だと403
