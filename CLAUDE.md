@@ -4470,3 +4470,16 @@ docにも同じ限界が明記されている)。したがってこのリポジ�
 - **各社のモデル名は突然廃止される**(実例: GroqのLlama 3.3 70B)。モデル名自動追従(各社`/models`から
   最新の無料・安定版を選び、試験呼び出しに成功した時だけ切替、今より小さいモデルへは下げない、1日1回)は
   提案済みで**ユーザーの承認待ち**。
+
+**追記(2026-09-21 夜)**: **Gemini・Groq・Mistral・Cloudflare Workers AIの4社ハイブリッドが本番で稼働**
+(公開URLで確認、日本語の長い質問≈16.5秒、英語の短い質問≈5.6秒)。
+- Cloudflare Workers AI: キーは`ARUARU_LLM_CLOUDFLARE_API_KEY=アカウントID:APIトークン`(1変数)。
+  既定モデル`@cf/meta/llama-3.3-70b-instruct-fp8-fast`(日本語OK、約0.5秒)。`F:\cloudflare-token.txt`に
+  同形式で保存済み。⚠️途中でユーザーが「アカウント名」「ワーカーURL」をトークンと取り違えた。
+  アカウントIDは秘密でないため貼ってもらって`ID:トークン`へ結合した(トークン自体は画面に出していない)。
+- OpenRouter(`ARUARU_LLM_OPENROUTER_API_KEY`、既定モデル`openrouter/free`=空いている無料モデルを自動選択)は
+  **コード実装済みだがキー未取得**(アカウント作成が必要、キー無しは401)。キーは`F:\openrouter-key.txt`へ。
+- **GitHub Modelsは廃止予定(retirement brownout、410)のため見送り**。
+- Ollama(ローカル実行、`ARUARU_LLM_OLLAMA_MODEL`設定時のみ)はコード実装済み・実Ollamaでの確認は未実施。
+  クラウド群が全て使えない時の受け皿(優先順でハイブリッド群の直後)。
+- HYBRID_GROUPの最大構成: Gemini・Groq・Grok・Mistral・OpenRouter・Cloudflare(キーがあるものだけ参加)。
