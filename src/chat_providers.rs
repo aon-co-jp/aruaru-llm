@@ -637,19 +637,80 @@ Answer in the same language as the user's question, naturally and clearly, like 
     s
 }
 
+// --- 予備への自動交代(2026-09-21、ユーザー指示「最初は二社でハイブリッド運用して、
+// 無料枠が切れたり、無料期間が終了したものから、次のAIの使用に切り替えて、予備のAIが
+// 欲しかった」) --------------------------------------------------------------------
+//
+// 同時に使うのは、優先順の上位ARUARU_LLM_HYBRID_SIZE社(既定2)。使えなくなった
+// (枠切れ・無料期間終了・認証エラー等)AIは一定時間お休みさせ、その回のうちに
+// 予備の次のAIへ交代する。お休み中のAIは以後の質問で最初から飛ばす(毎回失敗する
+// 呼び出しで時間と枠を無駄にしない)。お休みが明けたら自動で復帰を試す。
+// **正直な開示**: お休み状態はプロセスのメモリ上のみ(再起動で消える)。
+static HYBRID_COOLDOWN: std::sync::Mutex<Option<HashMap<Provider, std::time::Instant>>> = std::sync::Mutex::new(None);
+
+fn hybrid_size() -> usize {
+    std::env::var("ARUARU_LLM_HYBRID_SIZE").ok().and_then(|v| v.trim().parse::<usize>().ok()).filter(|n| *n >= 1).unwrap_or(2)
+}
+
+fn in_cooldown(provider: Provider) -> bool {
+    let guard = HYBRID_COOLDOWN.lock().expect("hybrid cooldown lock poisoned");
+    guard.as_ref().and_then(|m| m.get(&provider)).map_or(false, |until| std::time::Instant::now() < *until)
+}
+
+/// 失敗の種類に応じてお休みさせる: 枠切れ(429等)=6時間、認証/権限/モデル廃止
+/// (401/403/404)=12時間(無料期間終了・キー失効・モデル廃止など)、それ以外(タイムアウト・
+/// 5xx等の一時的な失敗)=2分。
+fn mark_cooldown(provider: Provider, quota_exceeded: bool, error: &str) {
+    let secs = if quota_exceeded {
+        6 * 3600
+    } else if error.contains("HTTP 401") || error.contains("HTTP 403") || error.contains("HTTP 404") || error.contains("HTTP 402") {
+        12 * 3600
+    } else {
+        120
+    };
+    let mut guard = HYBRID_COOLDOWN.lock().expect("hybrid cooldown lock poisoned");
+    guard.get_or_insert_with(HashMap::new).insert(provider, std::time::Instant::now() + std::time::Duration::from_secs(secs));
+}
+
+/// ハイブリッド候補(優先順に並べた、設定済みで、お休み中でないAI)。
+fn hybrid_candidates() -> Vec<Provider> {
+    let mut out = Vec::new();
+    for svc in provider_priority::current_order() {
+        if let Some(p) = Provider::from_priority_service(svc) {
+            if HYBRID_GROUP.contains(&p) && is_configured(p) && !in_cooldown(p) && !out.contains(&p) {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
 pub async fn complete_hybrid(prompt: &str) -> HybridCompleteResult {
-    let group: Vec<Provider> = if hybrid_enabled() { HYBRID_GROUP.iter().copied().filter(|p| is_configured(*p)).collect() } else { Vec::new() };
-    if group.is_empty() {
+    let mut candidates: Vec<Provider> = if hybrid_enabled() { hybrid_candidates() } else { Vec::new() };
+    if candidates.is_empty() {
         let r = complete_in_priority_order(prompt).await;
         return HybridCompleteResult { reply: r.reply, hybrid_providers: Vec::new(), synthesized: false, attempted: r.attempted, all_quota_exceeded: r.all_quota_exceeded };
     }
-    let (replies, failures) = complete_multi(&group, &HashMap::new(), prompt).await;
-    let mut attempted: Vec<PriorityAttempt> =
-        failures.into_iter().map(|f| PriorityAttempt { provider: f.provider, error: f.error, quota_exceeded: f.quota_exceeded }).collect();
+    let size = hybrid_size();
+    let mut replies: Vec<ProviderReply> = Vec::new();
+    let mut attempted: Vec<PriorityAttempt> = Vec::new();
+    let mut tried: Vec<Provider> = Vec::new();
+    // 必要な社数(size)が揃うまで、予備を1ラウンドずつ繰り上げて並列に呼ぶ。
+    while replies.len() < size && !candidates.is_empty() {
+        let need = size - replies.len();
+        let batch: Vec<Provider> = candidates.drain(..need.min(candidates.len())).collect();
+        tried.extend(batch.iter().copied());
+        let (ok, failures) = complete_multi(&batch, &HashMap::new(), prompt).await;
+        replies.extend(ok);
+        for f in failures {
+            mark_cooldown(f.provider, f.quota_exceeded, &f.error);
+            attempted.push(PriorityAttempt { provider: f.provider, error: f.error, quota_exceeded: f.quota_exceeded });
+        }
+    }
     match replies.len() {
         0 => {
-            // ハイブリッド群が全滅 → 残りを優先順に(群は再試行しない)
-            let r = complete_in_priority_order_skipping(prompt, &group).await;
+            // ハイブリッド群が全滅 → 残り(Ollama・有料等)を優先順に(群は再試行しない)
+            let r = complete_in_priority_order_skipping(prompt, &HYBRID_GROUP).await;
             attempted.extend(r.attempted);
             let all_quota_exceeded = r.reply.is_none() && !attempted.is_empty() && attempted.iter().all(|a| a.quota_exceeded);
             HybridCompleteResult { reply: r.reply, hybrid_providers: Vec::new(), synthesized: false, attempted, all_quota_exceeded }
@@ -661,8 +722,7 @@ pub async fn complete_hybrid(prompt: &str) -> HybridCompleteResult {
         _ => {
             let providers: Vec<Provider> = replies.iter().map(|r| r.provider).collect();
             let synth_prompt = build_synthesis_prompt(prompt, &replies);
-            // 統合役: 回答を出せたプロバイダの先頭(Gemini→Groq→Grok→Mistralの順)。失敗したら次の候補、
-            // 全部失敗したら先頭の生の回答をそのまま返す。
+            // 統合役: 回答を出せたAIの先頭から順に。失敗したら次、全部失敗したら先頭の生の回答。
             for synthesizer in &providers {
                 if let Ok(text) = complete(*synthesizer, &synth_prompt).await {
                     if !text.trim().is_empty() {
