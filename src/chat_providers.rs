@@ -52,6 +52,9 @@ pub enum Provider {
     Cerebras,
     /// Mistral(2026-09-21追加)。OpenAI互換API(api.mistral.ai/v1)。
     Mistral,
+    /// Ollama(2026-09-21追加)。この端末で動くOllama(既定http://localhost:11434)の
+    /// OpenAI互換API。APIキーは不要で、環境変数の値=**モデル名**として扱う。
+    Ollama,
 }
 
 impl Provider {
@@ -65,6 +68,8 @@ impl Provider {
             Provider::Groq => "ARUARU_LLM_GROQ_API_KEY",
             Provider::Cerebras => "ARUARU_LLM_CEREBRAS_API_KEY",
             Provider::Mistral => "ARUARU_LLM_MISTRAL_API_KEY",
+            // 値はAPIキーではなくモデル名(例: ministral-3b)。設定されていればOllama有効。
+            Provider::Ollama => "ARUARU_LLM_OLLAMA_MODEL",
         }
     }
 
@@ -78,10 +83,11 @@ impl Provider {
             Provider::Groq => "groq",
             Provider::Cerebras => "cerebras",
             Provider::Mistral => "mistral",
+            Provider::Ollama => "ollama",
         }
     }
 
-    fn all() -> [Provider; 8] {
+    fn all() -> [Provider; 9] {
         [
             Provider::Openai,
             Provider::Deepseek,
@@ -91,6 +97,7 @@ impl Provider {
             Provider::Groq,
             Provider::Cerebras,
             Provider::Mistral,
+            Provider::Ollama,
         ]
     }
 
@@ -108,6 +115,7 @@ impl Provider {
             PriorityService::Groq => Some(Provider::Groq),
             PriorityService::Cerebras => Some(Provider::Cerebras),
             PriorityService::Mistral => Some(Provider::Mistral),
+            PriorityService::Ollama => Some(Provider::Ollama),
         }
     }
 }
@@ -224,6 +232,14 @@ pub async fn complete_with_key(provider: Provider, api_key: &str, prompt: &str) 
         Provider::Cerebras => {
             let model = std::env::var("ARUARU_LLM_CEREBRAS_MODEL").unwrap_or_else(|_| "llama-3.3-70b".to_string());
             complete_openai_compatible(&client, "Cerebras", "https://api.cerebras.ai/v1/chat/completions", &model, api_key, prompt).await
+        }
+        Provider::Ollama => {
+            // api_key引数はOllamaではモデル名。ローカルCPU実行は遅いことがあるため、
+            // 専用の長いタイムアウト(120秒)のクライアントを使う。
+            let base = std::env::var("ARUARU_LLM_OLLAMA_URL").unwrap_or_else(|_| "http://localhost:11434".to_string());
+            let url = format!("{}/v1/chat/completions", base.trim_end_matches('/'));
+            let slow_client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(120)).build().context("failed to build reqwest client for Ollama")?;
+            complete_openai_compatible(&slow_client, "Ollama", &url, api_key, "ollama", prompt).await
         }
         Provider::Mistral => {
             let model = std::env::var("ARUARU_LLM_MISTRAL_MODEL").unwrap_or_else(|_| "ministral-14b-latest".to_string());
