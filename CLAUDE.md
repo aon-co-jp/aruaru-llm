@@ -4492,3 +4492,9 @@ docにも同じ限界が明記されている)。したがってこのリポジ�
 群が全滅ならOllama→有料の順次。**検証済み**: Geminiだけ無効キーにした手元の別インスタンスで、1回目は
 Gemini失敗→Mistral繰り上げ(Groq+Mistral)、2回目以降はGeminiを最初から飛ばすことを確認。
 本番の既定構成(キー設定済み): Gemini・Groq(使用中の2社)、予備=Mistral・OpenRouter・Cloudflare。
+
+## HANDOFF追記(2026-09-21) / HANDOFF addendum (2026-09-21)
+
+**日本語**: (1)クラウドAIの選択(`providers[]`、`complete_hybrid_with`、`parse_selected_providers`、最大`MAX_SELECTED_PROVIDERS`=3)。(2)`/v1/accelerators`と`/v1/runtime`のCPUインベントリ(open-cpu連携)。(3)VPSは`../open-cpu`をパス依存するため、**aruaru-llmを更新する前にopen-cpuを`git pull`する**。(4)スマホNPU(NNAPI)はAndroid側(open-english)で実装し、Rustからは触らない方針。詳細は`open-cuda/DEVELOPMENT-NEXT.md`の「NPU層の再設計メモ」。
+
+**English**: (1) Cloud-AI selection (`providers[]`, `complete_hybrid_with`, `parse_selected_providers`, max `MAX_SELECTED_PROVIDERS`=3). (2) `/v1/accelerators` and the CPU inventory in `/v1/runtime` (via open-cpu). (3) The VPS path-depends on `../open-cpu`, so **`git pull` open-cpu before updating aruaru-llm**. (4) Phone NPU (NNAPI) lives on the Android side (open-english), not in Rust. See "NPU層の再設計メモ" in `open-cuda/DEVELOPMENT-NEXT.md`.

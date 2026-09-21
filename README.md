@@ -612,3 +612,10 @@ sudo ./install.sh
 - [open-cuda](https://github.com/aon-co-jp/open-cuda) — GPUランタイム(SET構成の相方)
 - [e-gov.info](https://github.com/aon-co-jp/e-gov) — 最初の呼び出し元想定
 - [open-raid-z](https://github.com/aon-co-jp/open-raid-z) — 開発ルールの正本
+
+## 2026-09-21の追加 / Added on 2026-09-21
+
+- `POST /v1/chat-providers/complete-priority`に`providers`(例: `["gemini","groq"]`、最大3個)を追加。指定したAIを同時に使い、使えないものは残りから予備を繰り上げる。空なら既定(優先順の上位2社)。 / New `providers` (max 3) selects which free AIs to combine; unavailable ones are replaced by standby providers.
+- `GET /v1/chat-providers/active`に`available`(キー設定済みの選択可能なAI一覧)を追加。 / `available` lists the configured, selectable AIs.
+- `GET /v1/accelerators`(新設): CPU論理コア数・OS/アーキテクチャ・GPU/NPU/USB接続Androidの検出結果。 / New: CPU cores, OS/arch, GPU/NPU/USB-Android detection.
+- `GET /v1/runtime`の`cpu_simd`に、open-cpuの全自動インベントリ(`arch`/`detected_features`/`not_detected_features`/`cores`)を追加。 / `cpu_simd` now includes the open-cpu inventory.
