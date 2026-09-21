@@ -694,6 +694,8 @@ pub struct HybridStatus {
     pub active: Vec<Provider>,
     pub standby: Vec<Provider>,
     pub resting: Vec<Provider>,
+    /// 利用者が選べる(キー設定済みの)無料AI全部。
+    pub available: Vec<Provider>,
 }
 
 pub fn hybrid_status() -> HybridStatus {
@@ -703,16 +705,55 @@ pub fn hybrid_status() -> HybridStatus {
     let active: Vec<Provider> = candidates.iter().copied().take(size).collect();
     let standby: Vec<Provider> = candidates.iter().copied().skip(size).collect();
     let resting: Vec<Provider> = HYBRID_GROUP.iter().copied().filter(|p| is_configured(*p) && in_cooldown(*p)).collect();
-    HybridStatus { hybrid_enabled: enabled, size, active, standby, resting }
+    let available: Vec<Provider> = HYBRID_GROUP.iter().copied().filter(|p| is_configured(*p)).collect();
+    HybridStatus { hybrid_enabled: enabled, size, active, standby, resting, available }
+}
+
+/// 利用者が選べる同時利用AI数の上限(1=単独、2=ハイブリッド、3=トライブリッド)。
+pub const MAX_SELECTED_PROVIDERS: usize = 3;
+
+/// 無料枠のハイブリッド群から、利用者が選んだAI(重複除去・最大3個)を取り出す。
+pub fn parse_selected_providers(names: &[String]) -> Vec<Provider> {
+    let mut out: Vec<Provider> = Vec::new();
+    for n in names {
+        let lower = n.trim().to_lowercase();
+        if let Some(p) = HYBRID_GROUP.iter().copied().find(|p| format!("{p:?}").to_lowercase() == lower) {
+            if !out.contains(&p) {
+                out.push(p);
+            }
+        }
+        if out.len() >= MAX_SELECTED_PROVIDERS {
+            break;
+        }
+    }
+    out
 }
 
 pub async fn complete_hybrid(prompt: &str) -> HybridCompleteResult {
+    complete_hybrid_with(prompt, &[]).await
+}
+
+/// `selected`が空なら従来どおり(優先順の上位N社)。指定があれば、そのAI(1〜3個)を
+/// 同時に使い、使えないものが出たら残りのハイブリッド群から予備を繰り上げる。
+pub async fn complete_hybrid_with(prompt: &str, selected: &[Provider]) -> HybridCompleteResult {
     let mut candidates: Vec<Provider> = if hybrid_enabled() { hybrid_candidates() } else { Vec::new() };
+    let mut size = hybrid_size();
+    if !selected.is_empty() && hybrid_enabled() {
+        let mut ordered: Vec<Provider> = selected.iter().copied().filter(|p| is_configured(*p) && !in_cooldown(*p)).collect();
+        if !ordered.is_empty() {
+            size = selected.len().min(MAX_SELECTED_PROVIDERS);
+            for p in candidates.iter().copied() {
+                if !ordered.contains(&p) {
+                    ordered.push(p);
+                }
+            }
+            candidates = ordered;
+        }
+    }
     if candidates.is_empty() {
         let r = complete_in_priority_order(prompt).await;
         return HybridCompleteResult { reply: r.reply, hybrid_providers: Vec::new(), synthesized: false, attempted: r.attempted, all_quota_exceeded: r.all_quota_exceeded };
     }
-    let size = hybrid_size();
     let mut replies: Vec<ProviderReply> = Vec::new();
     let mut attempted: Vec<PriorityAttempt> = Vec::new();
     let mut tried: Vec<Provider> = Vec::new();

@@ -1069,6 +1069,9 @@ struct ChatProviderCompletePriorityRequest {
     github_token: Option<String>,
     #[serde(default)]
     youtube_api_key: Option<String>,
+    /// 利用者が選んだ同時利用AI(1〜3個、例: ["gemini","groq"])。空なら既定(優先順の上位2社)。
+    #[serde(default)]
+    providers: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1163,7 +1166,8 @@ async fn chat_provider_complete_priority(req: Request) -> Response {
             &serde_json::json!({"error": format!("prompt (with search context) exceeds {CHAT_PROVIDER_PROMPT_CHAR_LIMIT} characters")}),
         );
     }
-    let result = chat_providers::complete_hybrid(&augmented_prompt).await;
+    let selected = chat_providers::parse_selected_providers(&req.providers);
+    let result = chat_providers::complete_hybrid_with(&augmented_prompt, &selected).await;
     json_response(
         StatusCode::OK,
         &ChatProviderCompletePriorityResponse {
