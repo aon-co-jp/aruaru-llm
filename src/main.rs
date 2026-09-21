@@ -2578,6 +2578,14 @@ struct CpuSimdInfo {
     vnni_path: bool,
     /// AVX-512 経路が有効化されているか(`OPEN_CPU_ENABLE_AVX512=1` が必要)。
     avx512_opt_in: bool,
+    /// open-cpuの全自動インベントリ(2026-09-21新設): CPUアーキテクチャ("x86_64"/"aarch64"等)。
+    arch: &'static str,
+    /// 検出できた全命令セット(x86: SSE〜AVX-512各種、aarch64: NEON/dotprod/i8mm/SVE等)。
+    detected_features: Vec<&'static str>,
+    /// 検出されなかった命令セット(「持っていない」ことも明示する)。
+    not_detected_features: Vec<&'static str>,
+    /// aarch64 Linux/Androidのコア構成(big.LITTLE)。取得不能なら空。
+    cores: Vec<serde_json::Value>,
     note_ja: &'static str,
 }
 
@@ -2589,6 +2597,10 @@ fn cpu_simd_info() -> CpuSimdInfo {
         avx2_fma_path: f.has_avx2_fma(),
         vnni_path: f.has_vnni_path(),
         avx512_opt_in: open_cpu::avx512_opt_in(),
+        arch: open_cpu::inventory().arch,
+        detected_features: open_cpu::inventory().detected_names(),
+        not_detected_features: open_cpu::inventory().features.iter().filter(|f| !f.detected).map(|f| f.name).collect(),
+        cores: open_cpu::inventory().cores.iter().map(|g| serde_json::json!({"name": g.name, "count": g.count})).collect(),
         note_ja: "CPU推論のGEMM/内積は open-cpu の検出結果に基づき実行時ディスパッチされる。                  AVX-512 経路は開発機に非搭載で実機未検証のため、既定では選択されない。",
     }
 }
