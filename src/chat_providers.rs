@@ -226,7 +226,7 @@ pub async fn complete_with_key(provider: Provider, api_key: &str, prompt: &str) 
             complete_openai_compatible(&client, "Cerebras", "https://api.cerebras.ai/v1/chat/completions", &model, api_key, prompt).await
         }
         Provider::Mistral => {
-            let model = std::env::var("ARUARU_LLM_MISTRAL_MODEL").unwrap_or_else(|_| "mistral-small-latest".to_string());
+            let model = std::env::var("ARUARU_LLM_MISTRAL_MODEL").unwrap_or_else(|_| "ministral-14b-latest".to_string());
             complete_openai_compatible(&client, "Mistral", "https://api.mistral.ai/v1/chat/completions", &model, api_key, prompt).await
         }
     }
