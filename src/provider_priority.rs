@@ -47,6 +47,8 @@ pub enum PriorityService {
     Cerebras,
     /// Mistral(2026-09-21追加、無料のExperimentプランあり)。
     Mistral,
+    /// Ollama(2026-09-21追加、ローカル実行のOpenAI互換API、キー不要・無料・無制限)。
+    Ollama,
 }
 
 impl PriorityService {
@@ -67,7 +69,10 @@ impl PriorityService {
             PriorityService::Groq,
             PriorityService::Grok,
             PriorityService::Mistral,
-            // 上が全て使えなくなったら、下を順番に(無料枠のあるものから先に)
+            // 上のクラウド群が全て使えない(無料枠切れ・通信不可)ときの受け皿:
+            // この端末のOllama(ARUARU_LLM_OLLAMA_MODEL設定時のみ)
+            PriorityService::Ollama,
+            // 下を順番に(無料枠のあるものから先に)
             PriorityService::Cerebras,
             PriorityService::Openai,
             PriorityService::Deepseek,
@@ -157,7 +162,7 @@ mod tests {
         let order = current_order();
         assert_eq!(order[0], PriorityService::Claude);
         assert_eq!(order[1], PriorityService::GoogleSearch);
-        assert_eq!(order.len(), 9);
+        assert_eq!(order.len(), 10);
         reset_priority();
     }
 }
