@@ -4448,7 +4448,7 @@ docにも同じ限界が明記されている)。したがってこのリポジ�
   `hybrid_providers`と`synthesized`を追加。`ARUARU_LLM_HYBRID=off`で無効化。
 - 追加プロバイダ(OpenAI互換): Groq(`ARUARU_LLM_GROQ_API_KEY`、既定`openai/gpt-oss-120b`(Llama 3.3 70Bは2026-09時点でGroqから提供終了))、
   Cerebras(`ARUARU_LLM_CEREBRAS_API_KEY`、既定`llama-3.3-70b`)、Mistral(`ARUARU_LLM_MISTRAL_API_KEY`、
-  既定`mistral-small-latest`)。モデルは`ARUARU_LLM_GROQ_MODEL`等で差し替え可。
+  既定`ministral-14b-latest`(無料のExperimentでは`mistral-small/medium/magistral`は枠0で429、ministral-3b/8b/14b・codestralが使える))。モデルは`ARUARU_LLM_GROQ_MODEL`等で差し替え可。
 - 既定の優先順: Google検索→Gemini→Groq→Grok→Mistral→Cerebras→ChatGPT→DeepSeek→Claude。
 - **VPSにキーが入っているのはGeminiのみ**(`/root/aruaru-llm/.env.providers`)。Groq/Cerebras/Mistral/Grokの
   キーはユーザーがアカウントを作って`F:\`のtxtへ保存 → scpで`.env.providers`へ追記して再起動する。
