@@ -55,6 +55,10 @@ pub enum Provider {
     /// Ollama(2026-09-21追加)。この端末で動くOllama(既定http://localhost:11434)の
     /// OpenAI互換API。APIキーは不要で、環境変数の値=**モデル名**として扱う。
     Ollama,
+    /// OpenRouter(2026-09-21追加)。OpenAI互換API(openrouter.ai/api/v1)。
+    OpenRouter,
+    /// Cloudflare Workers AI(2026-09-21追加)。OpenAI互換API。キーは「アカウントID:APIトークン」の形式。
+    Cloudflare,
 }
 
 impl Provider {
@@ -70,6 +74,9 @@ impl Provider {
             Provider::Mistral => "ARUARU_LLM_MISTRAL_API_KEY",
             // 値はAPIキーではなくモデル名(例: ministral-3b)。設定されていればOllama有効。
             Provider::Ollama => "ARUARU_LLM_OLLAMA_MODEL",
+            Provider::OpenRouter => "ARUARU_LLM_OPENROUTER_API_KEY",
+            // 値は「アカウントID:APIトークン」(1つの環境変数に収めるため)。
+            Provider::Cloudflare => "ARUARU_LLM_CLOUDFLARE_API_KEY",
         }
     }
 
@@ -84,10 +91,12 @@ impl Provider {
             Provider::Cerebras => "cerebras",
             Provider::Mistral => "mistral",
             Provider::Ollama => "ollama",
+            Provider::OpenRouter => "openrouter",
+            Provider::Cloudflare => "cloudflare",
         }
     }
 
-    fn all() -> [Provider; 9] {
+    fn all() -> [Provider; 11] {
         [
             Provider::Openai,
             Provider::Deepseek,
@@ -98,6 +107,8 @@ impl Provider {
             Provider::Cerebras,
             Provider::Mistral,
             Provider::Ollama,
+            Provider::OpenRouter,
+            Provider::Cloudflare,
         ]
     }
 
@@ -116,6 +127,8 @@ impl Provider {
             PriorityService::Cerebras => Some(Provider::Cerebras),
             PriorityService::Mistral => Some(Provider::Mistral),
             PriorityService::Ollama => Some(Provider::Ollama),
+            PriorityService::OpenRouter => Some(Provider::OpenRouter),
+            PriorityService::Cloudflare => Some(Provider::Cloudflare),
         }
     }
 }
@@ -232,6 +245,19 @@ pub async fn complete_with_key(provider: Provider, api_key: &str, prompt: &str) 
         Provider::Cerebras => {
             let model = std::env::var("ARUARU_LLM_CEREBRAS_MODEL").unwrap_or_else(|_| "llama-3.3-70b".to_string());
             complete_openai_compatible(&client, "Cerebras", "https://api.cerebras.ai/v1/chat/completions", &model, api_key, prompt).await
+        }
+        Provider::OpenRouter => {
+            // openrouter/free は、その時点で空いている無料モデルをOpenRouter側が自動選択する
+            // (無料モデルの入れ替わりに追従するため既定にしている)。
+            let model = std::env::var("ARUARU_LLM_OPENROUTER_MODEL").unwrap_or_else(|_| "openrouter/free".to_string());
+            let slow_client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(60)).build().context("failed to build reqwest client for OpenRouter")?;
+            complete_openai_compatible(&slow_client, "OpenRouter", "https://openrouter.ai/api/v1/chat/completions", &model, api_key, prompt).await
+        }
+        Provider::Cloudflare => {
+            let (account_id, token) = api_key.split_once(':').context("Cloudflare key must be in the form ACCOUNT_ID:API_TOKEN")?;
+            let model = std::env::var("ARUARU_LLM_CLOUDFLARE_MODEL").unwrap_or_else(|_| "@cf/meta/llama-3.3-70b-instruct-fp8-fast".to_string());
+            let url = format!("https://api.cloudflare.com/client/v4/accounts/{}/ai/v1/chat/completions", account_id.trim());
+            complete_openai_compatible(&client, "Cloudflare", &url, &model, token.trim(), prompt).await
         }
         Provider::Ollama => {
             // api_key引数はOllamaではモデル名。ローカルCPU実行は遅いことがあるため、
@@ -577,7 +603,8 @@ async fn complete_grok(client: &reqwest::Client, api_key: &str, prompt: &str) ->
 // 正しさを保証する仕組みではない(統合役も間違えうる)。1質問につき最大で
 // 群の数(最大4)+1回のAPI呼び出しを消費するため、無料枠の減りは速くなる。
 // ARUARU_LLM_HYBRID=off で無効化でき、その場合は従来の順次フォールバックのみ。
-pub const HYBRID_GROUP: [Provider; 4] = [Provider::Gemini, Provider::Groq, Provider::Grok, Provider::Mistral];
+pub const HYBRID_GROUP: [Provider; 6] =
+    [Provider::Gemini, Provider::Groq, Provider::Grok, Provider::Mistral, Provider::OpenRouter, Provider::Cloudflare];
 
 #[derive(Debug, Clone, Serialize)]
 pub struct HybridCompleteResult {
