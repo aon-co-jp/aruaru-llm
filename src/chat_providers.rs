@@ -685,6 +685,27 @@ fn hybrid_candidates() -> Vec<Provider> {
     out
 }
 
+/// いまのハイブリッド運用状態(画面の「使用中の無料AI」表示用、2026-09-21新設)。
+/// active=同時に使う上位N社、standby=予備(繰り上げ待ち)、resting=お休み中(枠切れ等)。
+#[derive(Debug, Clone, Serialize)]
+pub struct HybridStatus {
+    pub hybrid_enabled: bool,
+    pub size: usize,
+    pub active: Vec<Provider>,
+    pub standby: Vec<Provider>,
+    pub resting: Vec<Provider>,
+}
+
+pub fn hybrid_status() -> HybridStatus {
+    let enabled = hybrid_enabled();
+    let size = hybrid_size();
+    let candidates = if enabled { hybrid_candidates() } else { Vec::new() };
+    let active: Vec<Provider> = candidates.iter().copied().take(size).collect();
+    let standby: Vec<Provider> = candidates.iter().copied().skip(size).collect();
+    let resting: Vec<Provider> = HYBRID_GROUP.iter().copied().filter(|p| is_configured(*p) && in_cooldown(*p)).collect();
+    HybridStatus { hybrid_enabled: enabled, size, active, standby, resting }
+}
+
 pub async fn complete_hybrid(prompt: &str) -> HybridCompleteResult {
     let mut candidates: Vec<Provider> = if hybrid_enabled() { hybrid_candidates() } else { Vec::new() };
     if candidates.is_empty() {
