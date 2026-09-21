@@ -2680,6 +2680,22 @@ async fn runtime_info(pool: Arc<device_pool::DevicePool>) -> Response {
 
 /// アイドル時バックグラウンドModel Folding準備スケジューラの進捗確認用
 /// (2026-08-19新設、`idle_background_fold.rs`参照)。
+/// `GET /v1/accelerators`(2026-09-21新設): CPU論理コア数・GPU・NPU・USB接続Android端末の検出結果。
+/// 「おすすめLLM」画面のハードウェア仕様表示用。`/v1/runtime`(命令セット・加速段階)と合わせて使う。
+async fn accelerators_info() -> Response {
+    let inv = hardware::detect_accelerators();
+    let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    json_response(
+        StatusCode::OK,
+        &serde_json::json!({
+            "cpu_logical_cores": cores,
+            "os": std::env::consts::OS,
+            "arch": std::env::consts::ARCH,
+            "inventory": inv,
+        }),
+    )
+}
+
 async fn background_fold_status() -> Response {
     json_response(StatusCode::OK, &idle_background_fold::current_progress())
 }
@@ -3208,6 +3224,7 @@ async fn main() -> anyhow::Result<()> {
                 async move { runtime_info(pool).await }
             })),
         )
+        .at("/v1/accelerators", get(plain(|| Box::pin(accelerators_info()))))
         .at("/v1/background-fold/status", get(plain(|| Box::pin(background_fold_status()))))
         .at("/v1/background-fold/task", get(plain(|| Box::pin(background_fold_task()))))
         .at("/v1/background-fold/task-result", post(handler_fn(|req, _p| Box::pin(background_fold_task_result(req)))))
