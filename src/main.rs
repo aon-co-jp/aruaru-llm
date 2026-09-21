@@ -1085,6 +1085,11 @@ struct ChatProviderCompletePriorityResponse {
     synthesized: bool,
 }
 
+/// `GET /v1/chat-providers/active`(2026-09-21新設): 使用中/予備/お休み中の無料AI。キー等は返さない。
+async fn chat_provider_active() -> Response {
+    json_response(StatusCode::OK, &chat_providers::hybrid_status())
+}
+
 async fn chat_provider_complete_priority(req: Request) -> Response {
     let Json(req): Json<ChatProviderCompletePriorityRequest> = match Json::from_body(req).await {
         Ok(v) => v,
@@ -3131,6 +3136,7 @@ async fn main() -> anyhow::Result<()> {
         .at("/v1/chat-providers/complete", post(handler_fn(|req, _p| Box::pin(chat_provider_complete(req)))))
         .at("/v1/chat-providers/complete-multi", post(handler_fn(|req, _p| Box::pin(chat_provider_complete_multi(req)))))
         .at("/v1/chat-providers/complete-priority", post(handler_fn(|req, _p| Box::pin(chat_provider_complete_priority(req)))))
+        .at("/v1/chat-providers/active", get(plain(|| Box::pin(chat_provider_active()))))
         .at(
             "/v1/settings/provider-priority",
             post(handler_fn(|req, _p| Box::pin(set_provider_priority_settings(req))))
