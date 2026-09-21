@@ -49,6 +49,10 @@ pub enum PriorityService {
     Mistral,
     /// Ollama(2026-09-21追加、ローカル実行のOpenAI互換API、キー不要・無料・無制限)。
     Ollama,
+    /// OpenRouter(2026-09-21追加、無料モデル(:free)を空いているものから自動選択する openrouter/free)。
+    OpenRouter,
+    /// Cloudflare Workers AI(2026-09-21追加、1日あたりの無料枠)。
+    Cloudflare,
 }
 
 impl PriorityService {
@@ -69,6 +73,8 @@ impl PriorityService {
             PriorityService::Groq,
             PriorityService::Grok,
             PriorityService::Mistral,
+            PriorityService::OpenRouter,
+            PriorityService::Cloudflare,
             // 上のクラウド群が全て使えない(無料枠切れ・通信不可)ときの受け皿:
             // この端末のOllama(ARUARU_LLM_OLLAMA_MODEL設定時のみ)
             PriorityService::Ollama,
@@ -162,7 +168,7 @@ mod tests {
         let order = current_order();
         assert_eq!(order[0], PriorityService::Claude);
         assert_eq!(order[1], PriorityService::GoogleSearch);
-        assert_eq!(order.len(), 10);
+        assert_eq!(order.len(), 12);
         reset_priority();
     }
 }
