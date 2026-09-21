@@ -283,3 +283,9 @@ penalty`(CTRL方式、penalty>1.0で既に登場したトークンのlogitを弱
   規約)。`/v1/chat`(意図分類)は引き続きルールベース+エンコーダの
   意味的類似度分類であり、こちらもニューラル対話生成そのものではない
   ことを混同しないこと。
+
+## 追記(2026-09-21): アクセラレーター検出APIの移植ポイント / Accelerator detection API porting notes
+
+**日本語**: `/v1/accelerators`は`hardware::detect_accelerators()`(Windows: PowerShellのCIMでNPU名、adbでUSB接続Android)+論理コア数。Linux/VPSではNPU検出は未実装(`None`)。CPU命令は`open_cpu::inventory()`(パス依存`../open-cpu`)。
+
+**English**: `/v1/accelerators` wraps `hardware::detect_accelerators()` (Windows: NPU name via PowerShell/CIM, USB Android via adb) plus the logical core count. NPU detection is not implemented on Linux/VPS (`None`). CPU features come from `open_cpu::inventory()` (path dependency `../open-cpu`).
