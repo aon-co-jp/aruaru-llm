@@ -657,12 +657,24 @@ fn in_cooldown(provider: Provider) -> bool {
     guard.as_ref().and_then(|m| m.get(&provider)).map_or(false, |until| std::time::Instant::now() < *until)
 }
 
-/// 失敗の種類に応じてお休みさせる: 枠切れ(429等)=6時間、認証/権限/モデル廃止
+/// 失敗の種類に応じてお休みさせる: 枠切れ(429等)=24時間、認証/権限/モデル廃止
 /// (401/403/404)=12時間(無料期間終了・キー失効・モデル廃止など)、それ以外(タイムアウト・
 /// 5xx等の一時的な失敗)=2分。
+///
+/// 2026-09-22変更(ユーザー指示「一日の無料枠を超えて次のAIに移っても、一日経ったら、
+/// その使用制限がリセットされたら自動でGeminiなどを自動で再度使用可能に」): 枠切れの
+/// お休み時間を6時間→24時間に変更した。**正直な開示**: 各社の無料枠は元々「使えなく
+/// なった後、お休み時間(この秒数)が経過すれば自動的に候補へ復帰する」仕組みが既に
+/// あり(`in_cooldown`/`hybrid_candidates`参照、このコミット以前から動作済み)、今回の
+/// 変更は「その時間を1日に近づける」調整のみである。ベンダー各社の実際のリセット時刻
+/// (UTC深夜0時、リクエスト時刻から24時間後、等)はベンダーごとに異なり、かつ大半は
+/// 公式ドキュメントで明示されていないため、正確なリセット時刻に合わせることはできない
+/// ——「24時間経ったら再度試す」という近似にとどめている。もしリセット前に再度枠切れに
+/// なった場合は、そこからまた24時間のお休みに入り、実際にリセットされるまで自動で
+/// 再試行を繰り返す(既存の仕組みのまま)。
 fn mark_cooldown(provider: Provider, quota_exceeded: bool, error: &str) {
     let secs = if quota_exceeded {
-        6 * 3600
+        24 * 3600
     } else if error.contains("HTTP 401") || error.contains("HTTP 403") || error.contains("HTTP 404") || error.contains("HTTP 402") {
         12 * 3600
     } else {
@@ -867,5 +879,44 @@ mod tests {
         assert!(is_quota_exceeded_status(reqwest::StatusCode::TOO_MANY_REQUESTS));
         assert!(!is_quota_exceeded_status(reqwest::StatusCode::UNAUTHORIZED));
         assert!(!is_quota_exceeded_status(reqwest::StatusCode::OK));
+    }
+
+    /// 2026-09-22追加(ユーザー指示「一日経ったら、その使用制限がリセットされたら自動で
+    /// Geminiなどを自動で再度使用可能に」): 枠切れ直後は約24時間お休みすることを確認する。
+    #[test]
+    fn quota_exceeded_cooldown_is_about_one_day() {
+        {
+            let mut guard = HYBRID_COOLDOWN.lock().expect("lock");
+            guard.get_or_insert_with(HashMap::new).remove(&Provider::Gemini);
+        }
+        mark_cooldown(Provider::Gemini, true, "HTTP 429: rate limited");
+        let guard = HYBRID_COOLDOWN.lock().expect("lock");
+        let until = *guard.as_ref().unwrap().get(&Provider::Gemini).expect("cooldown set");
+        let remaining = until.saturating_duration_since(std::time::Instant::now());
+        // 24時間ちょうどは境界のタイミング差でずれうるので、23〜24時間の範囲で確認する。
+        assert!(remaining.as_secs() > 23 * 3600 && remaining.as_secs() <= 24 * 3600, "remaining={remaining:?}");
+    }
+
+    /// 枠切れでお休みしたAIも、お休み時間(実質的な「1日経過」)を過ぎれば、次回の候補
+    /// 選定(`hybrid_candidates`)へ自動的に復帰することを確認する(＝ユーザーが何も
+    /// しなくても、リセット後は自動的にGeminiなどが再度使われる、という仕組みそのものの検証)。
+    #[test]
+    fn provider_auto_recovers_once_cooldown_instant_has_passed() {
+        clear_runtime_keys();
+        set_runtime_key(Provider::Gemini, "test-key".to_string());
+        // 枠切れ直後: お休み中なので候補から外れている。
+        mark_cooldown(Provider::Gemini, true, "HTTP 429: rate limited");
+        assert!(in_cooldown(Provider::Gemini), "should be resting right after quota exceeded");
+        assert!(!hybrid_candidates().contains(&Provider::Gemini));
+        // お休み時間が「過去の時刻」まで進んだ状態(=無料枠がリセットされた後)を模擬する。
+        {
+            let mut guard = HYBRID_COOLDOWN.lock().expect("lock");
+            guard.get_or_insert_with(HashMap::new).insert(Provider::Gemini, std::time::Instant::now() - std::time::Duration::from_secs(1));
+        }
+        assert!(!in_cooldown(Provider::Gemini), "should have recovered automatically once the cooldown time has passed");
+        assert!(hybrid_candidates().contains(&Provider::Gemini), "must be usable again automatically, without any manual action");
+        clear_runtime_keys();
+        let mut guard = HYBRID_COOLDOWN.lock().expect("lock");
+        guard.get_or_insert_with(HashMap::new).remove(&Provider::Gemini);
     }
 }
