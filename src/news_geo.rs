@@ -132,12 +132,40 @@ pub fn get_latest() -> NewsDb {
     loaded
 }
 
-fn news_query_for_country(country: &str) -> String {
+pub(crate) fn news_query_for_country(country: &str) -> String {
     if country == "Japan" {
         "日本 ニュース 今日 主要".to_string()
     } else {
         format!("{country} news today headlines")
     }
+}
+
+/// 指定した国のニュースを、その場でGoogle Custom Searchして返す(2026-09-22新設)。
+/// `refresh()`(サーバー接続先国を自動検出し、結果をディスクへ永続保存する定期処理)とは
+/// 別に、open-english側から「日本語の質問なら日本のニュース、英語の質問ならアメリカの
+/// ニュース」のように**利用者の言語に応じて国を指定**できるようにする(`GET /v1/news/for`)。
+/// **正直な開示**: リクエストのたびにGoogle Custom Searchの共有無料枠(1日100件)を1回
+/// 消費する。永続保存・キャッシュはしない(常に最新を取りに行く、その場限りの結果)。
+pub async fn fetch_for_country(country: &str) -> NewsDb {
+    let mut db = NewsDb { country: Some(CountryInfo { country: country.to_string(), country_code: String::new(), query_ip: String::new() }), ..Default::default() };
+    if !web_search::is_configured() {
+        db.last_error = Some(
+            "Google Custom Search is not configured (set ARUARU_LLM_GOOGLE_SEARCH_API_KEY / \
+             ARUARU_LLM_GOOGLE_SEARCH_CX) — no news fetched".to_string(),
+        );
+    } else {
+        let query = news_query_for_country(country);
+        match web_search::search(&query, 8).await {
+            Ok(results) => {
+                db.items = results.into_iter().map(|r: SearchResult| NewsItem { title: r.title, snippet: r.snippet, link: r.link }).collect();
+            }
+            Err(e) => {
+                db.last_error = Some(format!("news search failed: {e}"));
+            }
+        }
+    }
+    db.fetched_at_unix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs());
+    db
 }
 
 /// 国を検出し、その国のニュースをGoogle Custom Searchで取得してローカル
