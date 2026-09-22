@@ -289,3 +289,20 @@ penalty`(CTRL方式、penalty>1.0で既に登場したトークンのlogitを弱
 **日本語**: `/v1/accelerators`は`hardware::detect_accelerators()`(Windows: PowerShellのCIMでNPU名、adbでUSB接続Android)+論理コア数。Linux/VPSではNPU検出は未実装(`None`)。CPU命令は`open_cpu::inventory()`(パス依存`../open-cpu`)。
 
 **English**: `/v1/accelerators` wraps `hardware::detect_accelerators()` (Windows: NPU name via PowerShell/CIM, USB Android via adb) plus the logical core count. NPU detection is not implemented on Linux/VPS (`None`). CPU features come from `open_cpu::inventory()` (path dependency `../open-cpu`).
+
+## HANDOFF追記(2026-09-22、本日後半のまとめ・多言語) / HANDOFF addendum (2026-09-22, later today, multilingual)
+
+**日本語**: 本日追加した機能: (1) 管理者専用のAI優先順位番号付け(#1-3)、(2) 四つの9パズルの自動採点(演算子・括弧の全角半角/日本語表記ゆれを正規化、括弧忘れのみ半分正解、÷9丸ごと忘れは不正解)、
+(3) 自分のAPIキー設定時はWEB版共有AIと併用しない(自分の鍵を優先・排他利用)、(4) タイ語・ベトナム語・フィリピン語・ミャンマー語・クルド語・トルコ語・ロマンシュ語を学習言語に追加(文化・敬語の豆知識つき)、
+(5) 学びたい言語・応答言語・レベルの保存(PC/スマホ/タブレット共通)、(6) 話題ガイドにGoogle画像検索リンク追加、(7) 文字入力/音声入力/翻訳/AI自身の知識に自信が無い時のGoogle検索自動裏取り(3つの理由を利用者へ開示)、
+(8) 3〜4ヶ国語同時ハイブリッド表示(hybrid3/hybrid4)、(9) 「今日のニュースは?」が公開WEB版で常に失敗していた不具合修正(`/v1/public/news/for?country=...`、質問言語で国を判定)、
+(10) ニュースダイジェストの国別DATABASE化(TTL3時間、`data/news_by_country.json`)+日付記録(検索日時・記事取得日時、`retrieved_at_unix`)、(11) 8日以上前のニュースを生きているDBから追い出しMarkdownへアーカイブする仕組み
+(`prune_and_archive_stale_news`、GitHubへの実際のpushは今回未実装——常時稼働プロセスへ書き込み資格情報を持たせないための意図的な判断、実際のpushは今後Claude Code経由で手動実施)、
+(12) 「もっと簡単に」「難しい」発言でレベルを自動的に1段下げる機能+ネイティブ表現アドバイスの指示、(13) 「最新の情報が欲しい」ニュアンス検出でGoogle検索・GitHub調査を自動的に有効化。
+**未着手**: 実際のGitHubアーカイブpush、GitHub Actionsやスケジュールタスクとしての定期実行の自動化(`news_prune_archive`エンドポイントは実装済みだが、呼び出しの自動化・cron化は未着手)。
+
+**English**: Features added today: (1) admin-only AI priority numbering (#1-3), (2) automatic grading for the four-nines puzzle, (3) own API key now excludes the shared web AI (exclusive use), (4) added Thai/Vietnamese/Filipino/Burmese/Kurdish/Turkish/Romansh as learn languages (with cultural tips),
+(5) persisted learn-target/reply-lang/level across PC/phone/tablet, (6) Google Images links in topic guides, (7) automatic Google-search grounding when text/voice/translation/AI-knowledge confidence is low (with a visible reason), (8) 3/4-language simultaneous hybrid mode,
+(9) fixed "today's news" always failing on the public web version, now picks the country from the question's language, (10) per-country news digest database (3h TTL) with retrieval timestamps on each item, (11) archiving of news older than 8 days out of the live DB into a local Markdown file
+(actual GitHub push not yet automated — deliberately not giving the always-running server process write credentials; the real push will be done manually via Claude Code), (12) auto level step-down on "too difficult/simpler please", (13) auto-enabling Google/GitHub search on "latest info" phrasing.
+**Not done yet**: actually pushing the archive to GitHub, and scheduling/cron automation for `news_prune_archive`.
