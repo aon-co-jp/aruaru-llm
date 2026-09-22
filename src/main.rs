@@ -2840,6 +2840,46 @@ async fn news_latest() -> Response {
     json_response(StatusCode::OK, &db)
 }
 
+/// `GET /v1/news/for?country=Japan`(2026-09-22新設、ユーザー指示「今日のニュースは？に
+/// 日本語の場合は日本の今日のニュースを、英語の場合はアメリカのニュースを検索して回答」)。
+/// `news_latest()`(サーバー接続先国を自動検出し定期取得・キャッシュ)とは別に、
+/// 呼び出し側(open-english)が言語から判定した国を、その場でGoogle Custom Search
+/// して返す。`country`未指定時は400で正直に拒否する(既定国を勝手に決めない)。
+async fn news_for_country(req: Request) -> Response {
+    let country = req.uri().query().and_then(|q| {
+        q.split('&').find_map(|pair| {
+            let (k, v) = pair.split_once('=')?;
+            if k != "country" || v.is_empty() {
+                return None;
+            }
+            urlencoding_decode(v)
+        })
+    });
+    let Some(country) = country else {
+        return json_response(StatusCode::BAD_REQUEST, &serde_json::json!({"error": "missing required query parameter: country"}));
+    };
+    let db = crate::news_geo::fetch_for_country(&country).await;
+    json_response(StatusCode::OK, &db)
+}
+
+/// クエリ文字列値の簡易`%XX`デコード(依存クレートを増やさないための最小実装、`+`はそのまま)。
+fn urlencoding_decode(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
 /// AI/LLM関連ニュースを英語・日本語・簡体字中国語・繁体字中国語の4言語で
 /// 取得しローカルDBへ保存する(`POST /v1/news/ai-refresh`、2026-09-11新設、
 /// `news_geo.rs`のモジュールdoc「AI/LLM ニュース」節参照)。open-englishの
@@ -3138,6 +3178,7 @@ async fn main() -> anyhow::Result<()> {
         .at("/v1/referrals/check", post(handler_fn(|req, _p| Box::pin(referrals_check(req)))))
         .at("/v1/news/refresh", post(plain(|| Box::pin(news_refresh()))))
         .at("/v1/news/latest", get(plain(|| Box::pin(news_latest()))))
+        .at("/v1/news/for", get(handler_fn(|req, _p| Box::pin(news_for_country(req)))))
         .at("/v1/news/ai-refresh", post(plain(|| Box::pin(ai_news_refresh()))))
         .at("/v1/news/ai-latest", get(plain(|| Box::pin(ai_news_latest()))))
         .at("/v1/geo/lookup", post(handler_fn(|req, _p| Box::pin(geo_lookup(req)))))
