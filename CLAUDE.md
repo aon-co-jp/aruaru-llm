@@ -4515,3 +4515,50 @@ Gemini失敗→Mistral繰り上げ(Groq+Mistral)、2回目以降はGeminiを最�
 (9) fixed "today's news" always failing on the public web version, now picks the country from the question's language, (10) per-country news digest database (3h TTL) with retrieval timestamps on each item, (11) archiving of news older than 8 days out of the live DB into a local Markdown file
 (actual GitHub push not yet automated — deliberately not giving the always-running server process write credentials; the real push will be done manually via Claude Code), (12) auto level step-down on "too difficult/simpler please", (13) auto-enabling Google/GitHub search on "latest info" phrasing.
 **Not done yet**: actually pushing the archive to GitHub, and scheduling/cron automation for `news_prune_archive`.
+
+## HANDOFF追記(2026-09-22、多言語版) / Multilingual handoff addendum
+
+**简体中文**: 今天新增的功能:(1)管理员专用的AI优先级编号(#1-3),(2)"四个9"数学谜题自动评分(标准化全角/半角运算符及日语表达,只忘记括号记为半对,完全忘记÷9记为错误),
+(3)设置自己的API密钥后不再与网页版共享AI并用(优先且排他使用自己的密钥),(4)新增泰语、越南语、菲律宾语、缅甸语、库尔德语、土耳其语、罗曼什语作为学习语言(附文化及敬语小知识),
+(5)学习语言/回复语言/等级设置可跨PC、手机、平板保存,(6)话题指南中新增Google图片搜索链接,(7)当文字输入/语音输入/翻译/AI自身知识置信度低时自动通过Google搜索核实(并向用户说明三种触发原因),
+(8)支持3~4种语言同时混合显示(hybrid3/hybrid4),(9)修复了公开网页版"今天的新闻"功能一直失败的问题(新增`/v1/public/news/for?country=...`,根据提问语言判断国家),
+(10)按国家分类的新闻摘要数据库(TTL 3小时,`data/news_by_country.json`)并记录检索/发布日期(`retrieved_at_unix`),(11)将8天以上的旧新闻从活跃数据库中清除并归档为Markdown文件
+(实际推送到GitHub的部分本次尚未实现——刻意不给常驻运行的服务器进程赋予GitHub写入权限,实际推送将来通过Claude Code手动完成),
+(12)当用户说"简单一点"或"太难了"时自动降低一级难度,并附带母语者表达建议,(13)检测到"想要最新信息"的语气时自动启用Google搜索与GitHub调查。
+**尚未完成**: 实际推送新闻归档到GitHub、以及`news_prune_archive`的定时/自动化执行。
+
+**繁體中文**: 今天新增的功能:(1)管理員專用的AI優先順序編號(#1-3),(2)「四個9」數學謎題自動評分(標準化全形/半形運算子及日語表達,只忘記括號記為半對,完全忘記÷9記為錯誤),
+(3)設定自己的API金鑰後不再與網頁版共用AI並用(優先且排他使用自己的金鑰),(4)新增泰語、越南語、菲律賓語、緬甸語、庫德語、土耳其語、羅曼什語作為學習語言(附文化及敬語小知識),
+(5)學習語言/回覆語言/等級設定可跨PC、手機、平板保存,(6)話題指南中新增Google圖片搜尋連結,(7)當文字輸入/語音輸入/翻譯/AI自身知識信心度低時自動透過Google搜尋核實(並向使用者說明三種觸發原因),
+(8)支援3~4種語言同時混合顯示(hybrid3/hybrid4),(9)修復了公開網頁版「今天的新聞」功能一直失敗的問題(新增`/v1/public/news/for?country=...`,依提問語言判斷國家),
+(10)依國家分類的新聞摘要資料庫(TTL 3小時,`data/news_by_country.json`)並記錄檢索/發布日期(`retrieved_at_unix`),(11)將8天以上的舊新聞從活躍資料庫中清除並歸檔為Markdown檔案
+(實際推送到GitHub的部分本次尚未實作——刻意不給常駐運行的伺服器行程賦予GitHub寫入權限,實際推送將來透過Claude Code手動完成),
+(12)當使用者說「簡單一點」或「太難了」時自動降低一級難度,並附帶母語者表達建議,(13)偵測到「想要最新資訊」的語氣時自動啟用Google搜尋與GitHub調查。
+**尚未完成**: 實際推送新聞歸檔到GitHub、以及`news_prune_archive`的排程/自動化執行。
+
+**Français**: Fonctionnalités ajoutées aujourd'hui : (1) numérotation de priorité IA réservée aux admins (#1-3), (2) notation automatique du puzzle des « quatre 9 » (normalisation des opérateurs pleine/demi-chasse et des expressions japonaises ; oubli des parenthèses seul = à moitié correct, oubli complet de ÷9 = incorrect),
+(3) l'utilisation de sa propre clé API exclut désormais l'IA partagée du site web (usage exclusif de sa propre clé), (4) ajout du thaï, vietnamien, philippin, birman, kurde, turc et romanche comme langues d'apprentissage (avec notes culturelles),
+(5) persistance des préférences (langue cible, langue de réponse, niveau) sur PC/mobile/tablette, (6) liens de recherche d'images Google dans les guides thématiques, (7) recherche Google automatique lorsque la confiance dans la saisie texte/vocale/traduction/connaissance de l'IA est faible (raison affichée à l'utilisateur),
+(8) mode hybride 3/4 langues simultané (hybrid3/hybrid4), (9) correction du bug où « les nouvelles du jour » échouaient toujours sur le site public (nouvelle route `/v1/public/news/for?country=...`, pays déterminé par la langue de la question),
+(10) base de données d'actualités par pays (TTL 3h, `data/news_by_country.json`) avec horodatage de récupération (`retrieved_at_unix`), (11) archivage des actualités de plus de 8 jours vers un fichier Markdown local
+(le push GitHub réel n'est pas encore automatisé — décision délibérée de ne pas donner d'identifiants d'écriture GitHub au processus serveur permanent ; le push sera fait manuellement via Claude Code), (12) rétrogradation automatique du niveau sur demande explicite (« plus simple », « trop difficile ») avec conseils de formulation naturelle,
+(13) activation automatique de la recherche Google/GitHub sur détection d'une intention « informations les plus récentes ».
+**Non terminé** : push réel de l'archive vers GitHub, automatisation planifiée de `news_prune_archive`.
+
+**Deutsch**: Heute hinzugefügte Funktionen: (1) nur für Admins sichtbare KI-Prioritätsnummerierung (#1-3), (2) automatische Bewertung des „Vier-Neunen"-Rätsels (Normalisierung von Voll-/Halbbreiten-Operatoren und japanischen Ausdrücken; nur vergessene Klammern = halb richtig, komplett vergessenes ÷9 = falsch),
+(3) eigener API-Schlüssel schließt die gemeinsame Web-KI nun aus (exklusive Nutzung des eigenen Schlüssels), (4) Thailändisch, Vietnamesisch, Filipino, Birmanisch, Kurdisch, Türkisch und Rätoromanisch als Lernsprachen hinzugefügt (mit kulturellen Hinweisen),
+(5) Speicherung von Zielsprache/Antwortsprache/Niveau geräteübergreifend (PC/Handy/Tablet), (6) Google-Bildersuche-Links in Themenführern, (7) automatische Google-Suchabsicherung bei geringer Konfidenz bei Text-/Spracheingabe/Übersetzung/KI-Wissen (Grund wird dem Nutzer angezeigt),
+(8) gleichzeitiger 3/4-Sprachen-Hybridmodus (hybrid3/hybrid4), (9) Fehlerbehebung: „heutige Nachrichten" funktionierten auf der öffentlichen Website nie (neue Route `/v1/public/news/for?country=...`, Land wird anhand der Fragesprache bestimmt),
+(10) länderspezifische Nachrichten-Datenbank (TTL 3h, `data/news_by_country.json`) mit Abrufzeitstempel (`retrieved_at_unix`), (11) Archivierung von Nachrichten älter als 8 Tage aus der Live-DB in eine lokale Markdown-Datei
+(tatsächlicher GitHub-Push noch nicht automatisiert — bewusste Entscheidung, dem dauerhaft laufenden Serverprozess keine GitHub-Schreibrechte zu geben; der eigentliche Push erfolgt später manuell über Claude Code), (12) automatische Niveau-Herabstufung bei „einfacher bitte"/„zu schwer" mit Hinweisen zu natürlicher Ausdrucksweise,
+(13) automatische Aktivierung der Google-/GitHub-Suche bei erkannter „aktuellste Informationen"-Absicht.
+**Noch nicht erledigt**: tatsächlicher Push des Archivs zu GitHub, geplante/automatisierte Ausführung von `news_prune_archive`.
+
+**ภาษาไทย**: ฟีเจอร์ที่เพิ่มวันนี้: (1) การจัดลำดับความสำคัญ AI แบบใส่หมายเลข (#1-3) สำหรับผู้ดูแลระบบเท่านั้น (2) การให้คะแนนอัตโนมัติสำหรับปริศนา "เลข 9 สี่ตัว" (ปรับเครื่องหมายเต็ม/ครึ่งความกว้างและคำภาษาญี่ปุ่นให้เท่ากัน ลืมเฉพาะวงเล็บ = ถูกครึ่งหนึ่ง ลืม ÷9 ทั้งหมด = ผิด)
+(3) เมื่อตั้งค่าคีย์ API ของตนเองแล้ว จะไม่ใช้ AI ที่แชร์บนเว็บร่วมด้วย (ใช้คีย์ของตนเองแบบเอกสิทธิ์) (4) เพิ่มภาษาไทย เวียดนาม ฟิลิปปินส์ พม่า เคิร์ด ตุรกี และโรมันช์ เป็นภาษาที่เรียนได้ (พร้อมข้อมูลวัฒนธรรม)
+(5) บันทึกการตั้งค่าภาษาที่เรียน/ภาษาตอบกลับ/ระดับ ข้ามอุปกรณ์ PC/มือถือ/แท็บเล็ต (6) ลิงก์ค้นหารูปภาพ Google ในคู่มือหัวข้อ (7) เปิดใช้การค้นหา Google อัตโนมัติเมื่อความมั่นใจในการพิมพ์/เสียง/การแปล/ความรู้ของ AI ต่ำ (แสดงเหตุผลให้ผู้ใช้เห็น)
+(8) โหมดผสมหลายภาษาพร้อมกัน 3-4 ภาษา (hybrid3/hybrid4) (9) แก้ไขบั๊กที่ฟีเจอร์ "ข่าววันนี้" ใช้งานไม่ได้เลยบนเว็บสาธารณะ (เพิ่มเส้นทาง `/v1/public/news/for?country=...` เลือกประเทศตามภาษาของคำถาม)
+(10) ฐานข้อมูลข่าวสรุปรายประเทศ (TTL 3 ชั่วโมง `data/news_by_country.json`) พร้อมบันทึกเวลาดึงข้อมูล (`retrieved_at_unix`) (11) เก็บถาวรข่าวที่เก่ากว่า 8 วันออกจากฐานข้อมูลไปเป็นไฟล์ Markdown
+(ยังไม่ได้ทำการ push ไปยัง GitHub จริง — เป็นการตัดสินใจโดยเจตนาที่จะไม่ให้สิทธิ์เขียน GitHub แก่โพรเซสเซิร์ฟเวอร์ที่ทำงานตลอดเวลา การ push จริงจะทำผ่าน Claude Code ในภายหลัง) (12) ลดระดับความยากอัตโนมัติเมื่อผู้ใช้พูดว่า "ง่ายกว่านี้" หรือ "ยากเกินไป" พร้อมคำแนะนำสำนวนแบบเจ้าของภาษา
+(13) เปิดใช้การค้นหา Google/GitHub อัตโนมัติเมื่อตรวจพบความต้องการ "ข้อมูลล่าสุด"
+**ยังไม่เสร็จ**: การ push คลังข่าวจริงไปยัง GitHub และระบบอัตโนมัติ/ตั้งเวลาสำหรับ `news_prune_archive`
