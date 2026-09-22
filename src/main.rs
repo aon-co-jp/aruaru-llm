@@ -2858,8 +2858,22 @@ async fn news_for_country(req: Request) -> Response {
     let Some(country) = country else {
         return json_response(StatusCode::BAD_REQUEST, &serde_json::json!({"error": "missing required query parameter: country"}));
     };
-    let db = crate::news_geo::fetch_for_country(&country).await;
+    let db = crate::news_geo::fetch_for_country_cached(&country).await;
     json_response(StatusCode::OK, &db)
+}
+
+/// `POST /v1/news/prune-archive`(2026-09-22新設、ユーザー指示「8日間以上前のニュース
+/// 記事などは...ストックして置いて」): 8日以上前の国別ニュースを、生きているDATABASE
+/// (`data/news_by_country.json`)から追い出し、VPSローカルのMarkdownファイル
+/// (`data/news-archive-pending.md`)へ追記する。**正直な開示**: このエンドポイント自体は
+/// GitHubへのcommit・pushは行わない(常時稼働プロセスへ書き込み資格情報を持たせない
+/// ための意図的な設計)。追記されたファイルを、実際にopen-englishリポジトリの
+/// NEWS-TITLE-README.md等へ取り込みGitHubへpushする作業は、開発者(Claude Code)が
+/// 手動で行う。内部運用向けのため公開WEB版(open-english側の`/v1/public/*`)へは
+/// 中継しておらず、VPS上で直接叩く用途を想定している。
+async fn news_prune_archive() -> Response {
+    let pruned = crate::news_geo::prune_and_archive_stale_news();
+    json_response(StatusCode::OK, &serde_json::json!({"archived_countries": pruned}))
 }
 
 /// クエリ文字列値の簡易`%XX`デコード(依存クレートを増やさないための最小実装、`+`はそのまま)。
@@ -3179,6 +3193,7 @@ async fn main() -> anyhow::Result<()> {
         .at("/v1/news/refresh", post(plain(|| Box::pin(news_refresh()))))
         .at("/v1/news/latest", get(plain(|| Box::pin(news_latest()))))
         .at("/v1/news/for", get(handler_fn(|req, _p| Box::pin(news_for_country(req)))))
+        .at("/v1/news/prune-archive", post(handler_fn(|_req, _p| Box::pin(news_prune_archive()))))
         .at("/v1/news/ai-refresh", post(plain(|| Box::pin(ai_news_refresh()))))
         .at("/v1/news/ai-latest", get(plain(|| Box::pin(ai_news_latest()))))
         .at("/v1/geo/lookup", post(handler_fn(|req, _p| Box::pin(geo_lookup(req)))))

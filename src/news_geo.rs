@@ -81,6 +81,15 @@ pub struct NewsItem {
     pub title: String,
     pub snippet: String,
     pub link: String,
+    /// このニュースをGoogle検索で取得した日時(Unix秒、2026-09-22追加)。
+    /// **正直な開示**: これは記事自体の公開日時ではなく、**検索を実行した日時**。
+    /// Google Custom Search JSON APIは記事の公開日を構造化データとして安定して
+    /// 返さないため、実際に確認できる事実(いつ検索して得た情報か)だけを記録する
+    /// (ユーザー指示「Google検索した日付と検索した結果にネットから得た情報にも
+    /// 日付を付けてDATABASEで管理して」への対応)。`#[serde(default)]`により、
+    /// 旧バージョンで保存されたこのフィールド無しの既存DATABASEも読み込める。
+    #[serde(default)]
+    pub retrieved_at_unix: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -140,12 +149,180 @@ pub(crate) fn news_query_for_country(country: &str) -> String {
     }
 }
 
+/// `fetch_for_country_cached`のキャッシュ有効期間。この間は同じ国への再検索をせず、
+/// 保存済みのダイジェストをそのまま返す(2026-09-22追加、ユーザー指示「今日のニュースは？
+/// の様なよくある質問などはGoogle検索後に重要と思える内容をダイジェストにしてDATABASE化
+/// してそれを表示するようにして」)。
+const NEWS_DIGEST_TTL_SECS: u64 = 3 * 3600;
+
+fn news_by_country_db_path() -> std::path::PathBuf {
+    std::env::var("ARUARU_LLM_NEWS_BY_COUNTRY_DB_PATH").map(std::path::PathBuf::from).unwrap_or_else(|_| std::path::PathBuf::from("data/news_by_country.json"))
+}
+
+static NEWS_BY_COUNTRY: RwLock<Option<std::collections::HashMap<String, NewsDb>>> = RwLock::new(None);
+
+fn load_news_by_country() -> std::collections::HashMap<String, NewsDb> {
+    {
+        let guard = NEWS_BY_COUNTRY.read().expect("news-by-country lock poisoned");
+        if let Some(map) = guard.as_ref() {
+            return map.clone();
+        }
+    }
+    let loaded = std::fs::read_to_string(news_by_country_db_path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    *NEWS_BY_COUNTRY.write().expect("news-by-country lock poisoned") = Some(loaded);
+    load_news_by_country() // 直前に書き込んだので次は必ずSomeから返る(再帰1回のみ)
+}
+
+fn save_news_by_country(country: &str, db: &NewsDb) {
+    let mut map = load_news_by_country();
+    map.insert(country.to_string(), db.clone());
+    if let Some(parent) = news_by_country_db_path().parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(json) = serde_json::to_string_pretty(&map) {
+        let _ = std::fs::write(news_by_country_db_path(), json);
+    }
+    *NEWS_BY_COUNTRY.write().expect("news-by-country lock poisoned") = Some(map);
+}
+
+/// VPSのディスク容量を圧迫しないよう、この期間より古いエントリは生きているDATABASEから
+/// 追い出す(2026-09-22追加、ユーザー指示「8日間以上前のニュース記事などは...GitHubへ
+/// pushして...ストックして置いてそこにアクセスして」)。
+const NEWS_ARCHIVE_AGE_SECS: u64 = 8 * 24 * 3600;
+
+/// 「古くなった国別ニュースを、生きているDATABASEから取り除いてMarkdown形式で書き出す」
+/// 純粋関数(副作用無し、テストしやすい形に分離)。戻り値は(残す新しいDB, 追い出した
+/// (国名, NewsDb)の一覧)。
+fn split_stale_entries(map: &std::collections::HashMap<String, NewsDb>, now: u64) -> (std::collections::HashMap<String, NewsDb>, Vec<(String, NewsDb)>) {
+    let mut fresh = std::collections::HashMap::new();
+    let mut stale = Vec::new();
+    for (country, db) in map.clone() {
+        let age = db.fetched_at_unix.map_or(u64::MAX, |t| now.saturating_sub(t));
+        if age >= NEWS_ARCHIVE_AGE_SECS {
+            stale.push((country, db));
+        } else {
+            fresh.insert(country, db);
+        }
+    }
+    (fresh, stale)
+}
+
+/// 追い出したエントリをMarkdownの追記用ブロックへ整形する(2026-09-22追加)。
+/// **正直な開示**: このMarkdownをGitHubへ実際にpush(コミット)する処理自体は、
+/// このRustサーバー本体には実装していない(常時稼働するサーバープロセスへGitHub
+/// 書き込み資格情報を持たせるリスクを避けるため)。この関数はアーカイブ内容の整形と
+/// VPS側ローカルファイルへの追記までを行い、実際のGitHubへのcommit・pushは、
+/// このリポジトリの他の変更と同じく開発者(Claude Code経由)が行う運用としている。
+fn format_archive_markdown(entries: &[(String, NewsDb)], now: u64) -> String {
+    let mut out = String::new();
+    let date = format_unix_date(now);
+    out.push_str(&format!("\n## アーカイブ日 / Archived on {date}\n\n"));
+    for (country, db) in entries {
+        let retrieved = db.fetched_at_unix.map(format_unix_date).unwrap_or_else(|| "unknown".to_string());
+        out.push_str(&format!("### {country}(検索日時 / searched at: {retrieved})\n\n"));
+        // 2026-09-22追加(ユーザー指示「GitHubを全文検索しないで良い用に、簡単なタグ分けや
+        // カテゴリー分けを基本に行なっておいて」): 国名・年月(YYYY-MM)を単純なタグとして
+        // 1行添える。GitHub上でファイル内検索(Ctrl+F)するだけで該当箇所へすぐ辿り着ける
+        // ように、という簡易的な目的にとどめる(全文検索インデックス構築などは行わない)。
+        out.push_str(&format!("Tags: `{country}` `{}`\n\n", &retrieved[..7.min(retrieved.len())]));
+        if db.items.is_empty() {
+            out.push_str("- (no items / 記事なし)\n");
+        }
+        for item in &db.items {
+            out.push_str(&format!("- [{}]({}) — {}\n", item.title, item.link, item.snippet));
+        }
+        out.push('\n');
+    }
+    out
+}
+
+fn format_unix_date(secs: u64) -> String {
+    // 依存クレートを増やさない簡易UTC日付変換(年月日のみ、時刻は省略)。
+    let days = secs / 86_400;
+    let (mut y, mut d) = (1970i64, days as i64);
+    loop {
+        let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+        let year_len = if leap { 366 } else { 365 };
+        if d < year_len {
+            break;
+        }
+        d -= year_len;
+        y += 1;
+    }
+    let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+    let month_lens = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let mut m = 0usize;
+    for (i, len) in month_lens.iter().enumerate() {
+        if d < *len {
+            m = i;
+            break;
+        }
+        d -= len;
+    }
+    format!("{:04}-{:02}-{:02}", y, m + 1, d + 1)
+}
+
+fn news_archive_path() -> std::path::PathBuf {
+    std::env::var("ARUARU_LLM_NEWS_ARCHIVE_PATH").map(std::path::PathBuf::from).unwrap_or_else(|_| std::path::PathBuf::from("data/news-archive-pending.md"))
+}
+
+/// 8日以上前のニュースを生きているDATABASEから追い出し、VPSローカルのMarkdown
+/// アーカイブファイルへ追記する。戻り値は追い出した件数(0なら何もしなかった)。
+pub fn prune_and_archive_stale_news() -> usize {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs()).unwrap_or(0);
+    let map = load_news_by_country();
+    let (fresh, stale) = split_stale_entries(&map, now);
+    if stale.is_empty() {
+        return 0;
+    }
+    let markdown = format_archive_markdown(&stale, now);
+    let path = news_archive_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    use std::io::Write as _;
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = f.write_all(markdown.as_bytes());
+    }
+    if let Some(parent) = news_by_country_db_path().parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(json) = serde_json::to_string_pretty(&fresh) {
+        let _ = std::fs::write(news_by_country_db_path(), json);
+    }
+    *NEWS_BY_COUNTRY.write().expect("news-by-country lock poisoned") = Some(fresh);
+    stale.len()
+}
+
+/// 指定した国のニュースダイジェストを返す。`GET /v1/news/for`本体はこちらを使う
+/// (2026-09-22変更): 保存済みのダイジェストが`NEWS_DIGEST_TTL_SECS`以内かつ
+/// エラー無しで取得できていれば、それをそのままDATABASE(`data/news_by_country.json`)
+/// から返し、検索は行わない。無い/古い/前回エラーだった場合のみ新たに検索し、
+/// 結果(=「重要と思える内容」としてGoogle検索が返した上位数件のダイジェスト)を
+/// DATABASEへ保存してから返す。共有無料枠(1日100件)の消費を、同じ国への
+/// よくある質問(「今日のニュースは？」等)のたびに繰り返さないための仕組み。
+pub async fn fetch_for_country_cached(country: &str) -> NewsDb {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs()).unwrap_or(0);
+    {
+        let map = load_news_by_country();
+        if let Some(cached) = map.get(country) {
+            let fresh = cached.fetched_at_unix.map_or(false, |t| now.saturating_sub(t) < NEWS_DIGEST_TTL_SECS);
+            if fresh && cached.last_error.is_none() && !cached.items.is_empty() {
+                return cached.clone();
+            }
+        }
+    }
+    let db = fetch_for_country(country).await;
+    save_news_by_country(country, &db);
+    db
+}
+
 /// 指定した国のニュースを、その場でGoogle Custom Searchして返す(2026-09-22新設)。
 /// `refresh()`(サーバー接続先国を自動検出し、結果をディスクへ永続保存する定期処理)とは
 /// 別に、open-english側から「日本語の質問なら日本のニュース、英語の質問ならアメリカの
 /// ニュース」のように**利用者の言語に応じて国を指定**できるようにする(`GET /v1/news/for`)。
-/// **正直な開示**: リクエストのたびにGoogle Custom Searchの共有無料枠(1日100件)を1回
-/// 消費する。永続保存・キャッシュはしない(常に最新を取りに行く、その場限りの結果)。
+/// キャッシュ・DATABASE化は`fetch_for_country_cached`が担う——この関数自体は常に
+/// 新たに検索する「その場限り」の下請け関数のまま。
 pub async fn fetch_for_country(country: &str) -> NewsDb {
     let mut db = NewsDb { country: Some(CountryInfo { country: country.to_string(), country_code: String::new(), query_ip: String::new() }), ..Default::default() };
     if !web_search::is_configured() {
@@ -155,9 +332,10 @@ pub async fn fetch_for_country(country: &str) -> NewsDb {
         );
     } else {
         let query = news_query_for_country(country);
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs()).unwrap_or(0);
         match web_search::search(&query, 8).await {
             Ok(results) => {
-                db.items = results.into_iter().map(|r: SearchResult| NewsItem { title: r.title, snippet: r.snippet, link: r.link }).collect();
+                db.items = results.into_iter().map(|r: SearchResult| NewsItem { title: r.title, snippet: r.snippet, link: r.link, retrieved_at_unix: now }).collect();
             }
             Err(e) => {
                 db.last_error = Some(format!("news search failed: {e}"));
@@ -196,9 +374,10 @@ pub async fn refresh() -> NewsDb {
             );
         } else {
             let query = news_query_for_country(&c.country);
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs()).unwrap_or(0);
             match web_search::search(&query, 8).await {
                 Ok(results) => {
-                    db.items = results.into_iter().map(|r: SearchResult| NewsItem { title: r.title, snippet: r.snippet, link: r.link }).collect();
+                    db.items = results.into_iter().map(|r: SearchResult| NewsItem { title: r.title, snippet: r.snippet, link: r.link, retrieved_at_unix: now }).collect();
                 }
                 Err(e) => {
                     db.last_error = Some(format!("news search failed: {e}"));
@@ -370,13 +549,94 @@ mod tests {
         let db = NewsDb {
             country: Some(CountryInfo { country: "Japan".to_string(), country_code: "JP".to_string(), query_ip: "1.2.3.4".to_string() }),
             items: vec![
-                NewsItem { title: "A".to_string(), snippet: "".to_string(), link: "".to_string() },
-                NewsItem { title: "B".to_string(), snippet: "".to_string(), link: "".to_string() },
-                NewsItem { title: "C".to_string(), snippet: "".to_string(), link: "".to_string() },
+                NewsItem { title: "A".to_string(), snippet: "".to_string(), link: "".to_string(), retrieved_at_unix: 0 },
+                NewsItem { title: "B".to_string(), snippet: "".to_string(), link: "".to_string(), retrieved_at_unix: 0 },
+                NewsItem { title: "C".to_string(), snippet: "".to_string(), link: "".to_string(), retrieved_at_unix: 0 },
             ],
             fetched_at_unix: None,
             last_error: None,
         };
         assert_eq!(topic_context_line(&db).unwrap(), "Recent news from Japan: A / B");
+    }
+
+    /// 2026-09-22追加(ユーザー指示「よくある質問はGoogle検索後にダイジェストにして
+    /// DATABASE化してそれを表示する」): 保存→読み込みが往復し、新しいエントリが
+    /// TTL内は「新鮮」、TTLを過ぎれば「古い」と判定されることを確認する。
+    #[test]
+    fn news_by_country_cache_round_trips_and_respects_ttl() {
+        let path = std::env::temp_dir().join(format!("aruaru_llm_news_by_country_test_{}.json", std::process::id()));
+        std::env::set_var("ARUARU_LLM_NEWS_BY_COUNTRY_DB_PATH", &path);
+        *NEWS_BY_COUNTRY.write().expect("lock") = None; // 前のテスト/実行のキャッシュを忘れさせる
+
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let fresh_db = NewsDb {
+            country: Some(CountryInfo { country: "Japan".to_string(), country_code: "JP".to_string(), query_ip: String::new() }),
+            items: vec![NewsItem { title: "Fresh headline".to_string(), snippet: "".to_string(), link: "".to_string(), retrieved_at_unix: now }],
+            fetched_at_unix: Some(now),
+            last_error: None,
+        };
+        save_news_by_country("Japan", &fresh_db);
+        let loaded = load_news_by_country();
+        assert_eq!(loaded.get("Japan").unwrap().items[0].title, "Fresh headline");
+
+        let stale_db = NewsDb {
+            fetched_at_unix: Some(now.saturating_sub(NEWS_DIGEST_TTL_SECS + 60)),
+            ..fresh_db.clone()
+        };
+        save_news_by_country("Japan", &stale_db);
+        let map = load_news_by_country();
+        let cached = map.get("Japan").unwrap();
+        let is_fresh = cached.fetched_at_unix.map_or(false, |t| now.saturating_sub(t) < NEWS_DIGEST_TTL_SECS);
+        assert!(!is_fresh, "an entry older than the TTL must be treated as stale");
+
+        std::env::remove_var("ARUARU_LLM_NEWS_BY_COUNTRY_DB_PATH");
+        let _ = std::fs::remove_file(&path);
+        *NEWS_BY_COUNTRY.write().expect("lock") = None;
+    }
+
+    /// 2026-09-22追加(ユーザー指示「8日間以上前のニュース記事などは...GitHubへpushして
+    /// ...ストックして置いて」): 8日以上前のエントリだけが追い出され、8日未満は
+    /// 生きているDATABASEに残ることを確認する。
+    #[test]
+    fn split_stale_entries_uses_eight_day_boundary() {
+        let now = 1_000_000_000u64;
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            "Japan".to_string(),
+            NewsDb { country: None, items: vec![], fetched_at_unix: Some(now - NEWS_ARCHIVE_AGE_SECS - 1), last_error: None },
+        );
+        map.insert(
+            "United States".to_string(),
+            NewsDb { country: None, items: vec![], fetched_at_unix: Some(now - NEWS_ARCHIVE_AGE_SECS + 1), last_error: None },
+        );
+        let (fresh, stale) = split_stale_entries(&map, now);
+        assert_eq!(fresh.len(), 1, "an entry just under 8 days old must stay in the live DB");
+        assert!(fresh.contains_key("United States"));
+        assert_eq!(stale.len(), 1, "an entry over 8 days old must be archived");
+        assert_eq!(stale[0].0, "Japan");
+    }
+
+    #[test]
+    fn format_archive_markdown_includes_country_date_and_items() {
+        let entries = vec![(
+            "Japan".to_string(),
+            NewsDb {
+                country: None,
+                items: vec![NewsItem { title: "Headline".to_string(), snippet: "Snippet text".to_string(), link: "https://example.com".to_string(), retrieved_at_unix: 1_000_000_000 }],
+                fetched_at_unix: Some(1_000_000_000),
+                last_error: None,
+            },
+        )];
+        let md = format_archive_markdown(&entries, 1_000_100_000);
+        assert!(md.contains("Japan"));
+        assert!(md.contains("Headline"));
+        assert!(md.contains("https://example.com"));
+        assert!(md.contains("Snippet text"));
+    }
+
+    #[test]
+    fn format_unix_date_matches_known_dates() {
+        assert_eq!(format_unix_date(0), "1970-01-01");
+        assert_eq!(format_unix_date(1_700_000_000), "2023-11-14");
     }
 }
