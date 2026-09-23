@@ -85,35 +85,33 @@ fn try_consume_shared_search_quota() -> bool {
     true
 }
 
-// ── プロバイダーごとの無料枠カウンタ(2026-09-23新設) ─────────────
+// ── プロバイダーごとの無料枠カウンタ(2026-09-23新設、同日中に日次
+// リセットへ再設計) ─────────────────────────────────────────
 //
 // ユーザー指示「SerpApi/Bing Search APIを両方実装してハイブリッド検索
-// 機能搭載として。ただし無料で利用できる前提です」「無料利用可能枠の
-// 範囲で一日が過ぎたら利用制限を自動でリセットして再び利用出来るように
-// して」への対応。
+// 機能搭載として。ただし無料で利用できる前提です」「無料枠を超えたら、
+// その日は使用を一旦止めて、次の日にリセットが掛かったら再び利用を
+// 再開して」への対応。
 //
-// **正直な開示(重要)**: SerpApi・Bing Search APIの無料枠は、Google
-// Custom Search(1日100件)とは異なり**月単位**(SerpApi: 月100件、
-// Bing Search API v7 F1プラン: 月1,000件)。ユーザー指示どおり「1日
-// 経過ごとにリセット」する形にすると、月の無料枠を初日〜数日で使い
-// 切ってしまい、その先は有料課金が発生するおそれがある。そのため、
-// 実際のベンダー請求サイクル(月単位)に合わせて**月単位でリセット**する
-// 形にした——「1日過ぎたら自動でリセットされ続けて欲しい」というご要望の
-// 意図(手動でのキー再設定や上限到達の心配をせずに使い続けたい)は、
-// 月単位のリセットでも「時間が経てば自動的に元に戻る」という点で
-// 満たせると判断したが、日単位ではない点はこの場で明記しておく。
+// **正直な開示(重要)**: SerpApi・Bing Search APIの実際の無料枠は
+// Google Custom Search(1日100件)とは異なり**月単位**(SerpApi: 月100件、
+// Bing Search API v7 F1プラン: 月1,000件)。ユーザーが明示的に「日次
+// リセット」を希望したため、月間無料枠をそのまま1日の上限にはせず
+// (それだと月初の数日で使い切ってしまう)、**月間無料枠を日数(30日)で
+// 割った安全な日割り上限**を1日あたりの上限として採用し、それを毎日
+// リセットする——SerpApi: 100÷30≒3件/日、Bing: 1,000÷30≒33件/日。
+// これにより「毎日リセットされ、待たされる期間も短い」というご要望と、
+// 「月間無料枠を使い切って課金が発生しない」という安全性の両方を満たす
+// (満遍なく使えば1ヶ月でSerpApiは最大90件・Bingは最大990件で、いずれも
+// 実際の月間無料枠以内に収まる)。
 const SERPAPI_FREE_MONTHLY_LIMIT: u32 = 100;
 const BING_FREE_MONTHLY_LIMIT: u32 = 1000;
+const DAYS_PER_MONTH_APPROX: u32 = 30;
+const SERPAPI_SAFE_DAILY_LIMIT: u32 = SERPAPI_FREE_MONTHLY_LIMIT / DAYS_PER_MONTH_APPROX;
+const BING_SAFE_DAILY_LIMIT: u32 = BING_FREE_MONTHLY_LIMIT / DAYS_PER_MONTH_APPROX;
 
-static SERPAPI_MONTHLY_COUNT: Mutex<(u64, u32)> = Mutex::new((0, 0));
-static BING_MONTHLY_COUNT: Mutex<(u64, u32)> = Mutex::new((0, 0));
-
-/// おおよその「月」バケット(30日単位の近似——正確なカレンダー月では
-/// ないが、無料枠を使い切らないための安全マージンとして意図的に
-/// やや厳しめ〈実際のカレンダー月より短い場合がある〉にしてある)。
-fn approx_epoch_month() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() / (30 * 86_400)).unwrap_or(0)
-}
+static SERPAPI_DAILY_COUNT: Mutex<(u64, u32)> = Mutex::new((0, 0));
+static BING_DAILY_COUNT: Mutex<(u64, u32)> = Mutex::new((0, 0));
 
 /// [`try_consume_shared_search_quota`]と同じ考え方のプロバイダー別版
 /// (純粋関数として分離、`consume_bucket`が実処理・テストしやすい形)。
@@ -129,15 +127,15 @@ fn consume_bucket(state: &mut (u64, u32), current_bucket: u64, limit: u32) -> bo
 }
 
 fn try_consume_serpapi_quota() -> bool {
-    let bucket = approx_epoch_month();
-    let mut guard = SERPAPI_MONTHLY_COUNT.lock().expect("serpapi quota lock poisoned");
-    consume_bucket(&mut guard, bucket, SERPAPI_FREE_MONTHLY_LIMIT)
+    let bucket = today_epoch_day();
+    let mut guard = SERPAPI_DAILY_COUNT.lock().expect("serpapi quota lock poisoned");
+    consume_bucket(&mut guard, bucket, SERPAPI_SAFE_DAILY_LIMIT)
 }
 
 fn try_consume_bing_quota() -> bool {
-    let bucket = approx_epoch_month();
-    let mut guard = BING_MONTHLY_COUNT.lock().expect("bing quota lock poisoned");
-    consume_bucket(&mut guard, bucket, BING_FREE_MONTHLY_LIMIT)
+    let bucket = today_epoch_day();
+    let mut guard = BING_DAILY_COUNT.lock().expect("bing quota lock poisoned");
+    consume_bucket(&mut guard, bucket, BING_SAFE_DAILY_LIMIT)
 }
 
 /// 利用者がブラウザの設定パネルから入力したAPIキー/cxを、実行中の
@@ -273,7 +271,7 @@ pub async fn search_with_locale(query: &str, max_results: u8, gl: Option<&str>, 
                 Err(err) => errors.push(format!("serpapi: {err:#}")),
             }
         } else {
-            errors.push(format!("serpapi: monthly free quota exhausted ({SERPAPI_FREE_MONTHLY_LIMIT}/month) — resets automatically next month"));
+            errors.push(format!("serpapi: today's safe daily quota exhausted ({SERPAPI_SAFE_DAILY_LIMIT}/day, derived from the {SERPAPI_FREE_MONTHLY_LIMIT}/month free tier) — resets automatically tomorrow"));
         }
     }
     if let Some(key) = bing_key {
@@ -284,7 +282,7 @@ pub async fn search_with_locale(query: &str, max_results: u8, gl: Option<&str>, 
                 Err(err) => errors.push(format!("bing: {err:#}")),
             }
         } else {
-            errors.push(format!("bing: monthly free quota exhausted ({BING_FREE_MONTHLY_LIMIT}/month) — resets automatically next month"));
+            errors.push(format!("bing: today's safe daily quota exhausted ({BING_SAFE_DAILY_LIMIT}/day, derived from the {BING_FREE_MONTHLY_LIMIT}/month free tier) — resets automatically tomorrow"));
         }
     }
     if let Some((api_key, cx)) = google {
