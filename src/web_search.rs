@@ -113,7 +113,10 @@ fn try_consume_shared_search_quota() -> bool {
 // スタンドアロンな検索結果取得は想定されていない)。そのため、実装済み
 // だったBing関連コード(`search_bing`/`BING_ENDPOINT`等)は全て削除し、
 // SerpApiのみを実質的な主力の代替候補として残した。
-const SERPAPI_FREE_MONTHLY_LIMIT: u32 = 100;
+// 2026-09-23修正: 公式料金ページ(https://serpapi.com/pricing)実機確認により
+// 100ではなく250件/月が正しい無料枠と判明(WebFetchで実ページの記載
+// "250 searches per month"を確認)。
+const SERPAPI_FREE_MONTHLY_LIMIT: u32 = 250;
 const DAYS_PER_MONTH_APPROX: u32 = 30;
 const SERPAPI_SAFE_DAILY_LIMIT: u32 = SERPAPI_FREE_MONTHLY_LIMIT / DAYS_PER_MONTH_APPROX;
 
