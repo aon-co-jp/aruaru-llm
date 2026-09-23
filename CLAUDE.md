@@ -4619,3 +4619,15 @@ Fallback order: Brave -> SerpApi -> Bing -> Google (Google is kept last since so
 
 **English**: When the user actually tried to create a Bing Search v7 resource in Azure Portal, it turned out Microsoft fully retired the API on 2025-08-11 (no new resources can be created). Its replacement, "Grounding with Bing Search," is built for AI-agent-embedded grounding and its terms don't allow standalone "fetch raw search-result JSON with just an API key" usage like this module needs, so all the Bing integration code (`search_bing`, etc.) that had been implemented was removed.
 Per user instruction, the search fallback order is now `SerpApi -> Brave -> Google` (SerpApi first). `ARUARU_LLM_SERPAPI_KEY` was actually configured on the VPS and verified live with real Japan/Germany news results (NHK News, tagesschau.de, etc.).
+
+## HANDOFF追記(2026-09-23、Tavily/Exaハイブリッド検索追加) / HANDOFF addendum (2026-09-23, Tavily/Exa hybrid search)
+
+**日本語**: ユーザー指示「Tavily/Exaも登録してopen-englishなどで使用したい」への対応として、`src/web_search.rs`に`search_tavily`/`search_exa`を追加した。
+検索フォールバック順序は`SerpApi → Tavily → Exa → Brave → Google`。両社とも無料枠がクレジットカード登録不要で、既存のSerpApiと同じ「月間無料枠÷30日の安全な日割り上限+日次リセット」方式でクォータ管理する
+(Tavily: 月1,000クレジット→33件/日、Exa: 毎月自動付与される$10ぶんの継続クレジットを根拠に≒47件/日——新規登録時の$20は使い切り型のボーナスのため日割り計算の根拠にしていない)。
+**未設定・要ユーザー対応**: `ARUARU_LLM_TAVILY_KEY`([tavily.com](https://www.tavily.com/))・`ARUARU_LLM_EXA_KEY`([exa.ai](https://exa.ai/))はこのリポジトリに一切保持していない——VPSの`.env.google-search`等へユーザー自身が設定する必要がある。
+
+**English**: Per the user's request to also register Tavily and Exa for use in open-english, added `search_tavily`/`search_exa` to `src/web_search.rs`.
+The fallback order is now `SerpApi -> Tavily -> Exa -> Brave -> Google`. Both have no-credit-card-required free tiers, tracked with the same "monthly free allowance / 30 days, daily reset" quota pattern as SerpApi
+(Tavily: 1000 credits/month -> 33/day; Exa: based on the ~$10/month recurring credit at ~$0.007/request -> ~47/day — the one-time $20 signup bonus is intentionally not used as the basis, since it would make the daily budget cliff once spent).
+**Not configured yet — needs the user**: `ARUARU_LLM_TAVILY_KEY` (from [tavily.com](https://www.tavily.com/)) and `ARUARU_LLM_EXA_KEY` (from [exa.ai](https://exa.ai/)) are not held anywhere in this repo — the user needs to set them on the VPS's `.env.google-search` or similar.
