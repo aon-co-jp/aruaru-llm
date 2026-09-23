@@ -85,6 +85,61 @@ fn try_consume_shared_search_quota() -> bool {
     true
 }
 
+// ── プロバイダーごとの無料枠カウンタ(2026-09-23新設) ─────────────
+//
+// ユーザー指示「SerpApi/Bing Search APIを両方実装してハイブリッド検索
+// 機能搭載として。ただし無料で利用できる前提です」「無料利用可能枠の
+// 範囲で一日が過ぎたら利用制限を自動でリセットして再び利用出来るように
+// して」への対応。
+//
+// **正直な開示(重要)**: SerpApi・Bing Search APIの無料枠は、Google
+// Custom Search(1日100件)とは異なり**月単位**(SerpApi: 月100件、
+// Bing Search API v7 F1プラン: 月1,000件)。ユーザー指示どおり「1日
+// 経過ごとにリセット」する形にすると、月の無料枠を初日〜数日で使い
+// 切ってしまい、その先は有料課金が発生するおそれがある。そのため、
+// 実際のベンダー請求サイクル(月単位)に合わせて**月単位でリセット**する
+// 形にした——「1日過ぎたら自動でリセットされ続けて欲しい」というご要望の
+// 意図(手動でのキー再設定や上限到達の心配をせずに使い続けたい)は、
+// 月単位のリセットでも「時間が経てば自動的に元に戻る」という点で
+// 満たせると判断したが、日単位ではない点はこの場で明記しておく。
+const SERPAPI_FREE_MONTHLY_LIMIT: u32 = 100;
+const BING_FREE_MONTHLY_LIMIT: u32 = 1000;
+
+static SERPAPI_MONTHLY_COUNT: Mutex<(u64, u32)> = Mutex::new((0, 0));
+static BING_MONTHLY_COUNT: Mutex<(u64, u32)> = Mutex::new((0, 0));
+
+/// おおよその「月」バケット(30日単位の近似——正確なカレンダー月では
+/// ないが、無料枠を使い切らないための安全マージンとして意図的に
+/// やや厳しめ〈実際のカレンダー月より短い場合がある〉にしてある)。
+fn approx_epoch_month() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() / (30 * 86_400)).unwrap_or(0)
+}
+
+/// [`try_consume_shared_search_quota`]と同じ考え方のプロバイダー別版
+/// (純粋関数として分離、`consume_bucket`が実処理・テストしやすい形)。
+fn consume_bucket(state: &mut (u64, u32), current_bucket: u64, limit: u32) -> bool {
+    if state.0 != current_bucket {
+        *state = (current_bucket, 0);
+    }
+    if state.1 >= limit {
+        return false;
+    }
+    state.1 += 1;
+    true
+}
+
+fn try_consume_serpapi_quota() -> bool {
+    let bucket = approx_epoch_month();
+    let mut guard = SERPAPI_MONTHLY_COUNT.lock().expect("serpapi quota lock poisoned");
+    consume_bucket(&mut guard, bucket, SERPAPI_FREE_MONTHLY_LIMIT)
+}
+
+fn try_consume_bing_quota() -> bool {
+    let bucket = approx_epoch_month();
+    let mut guard = BING_MONTHLY_COUNT.lock().expect("bing quota lock poisoned");
+    consume_bucket(&mut guard, bucket, BING_FREE_MONTHLY_LIMIT)
+}
+
 /// 利用者がブラウザの設定パネルから入力したAPIキー/cxを、実行中の
 /// プロセスのメモリ上にのみ保持する(ユーザー指示「利用者がAPIキーの
 /// 取得とCOPYペーストが簡単な機能を搭載して」への対応)。
@@ -138,7 +193,7 @@ struct CseItem {
 /// 環境変数`ARUARU_LLM_GOOGLE_SEARCH_API_KEY`/`ARUARU_LLM_GOOGLE_SEARCH_CX`
 /// の両方が設定されているかどうか(空文字列は未設定として扱う)。
 pub fn is_configured() -> bool {
-    read_brave_key().is_some() || read_credentials().is_some()
+    read_brave_key().is_some() || read_serpapi_key().is_some() || read_bing_key().is_some() || read_credentials().is_some()
 }
 
 /// 実行時設定(ブラウザの設定パネル経由)を優先し、無ければ環境変数
@@ -166,9 +221,15 @@ fn read_credentials() -> Option<(String, String)> {
 /// 使っても1回の検索につき1回として数える。
 pub async fn search(query: &str, max_results: u8) -> Result<Vec<SearchResult>> {
     let brave_key = read_brave_key();
+    let serpapi_key = read_serpapi_key();
+    let bing_key = read_bing_key();
     let google = read_credentials();
-    if brave_key.is_none() && google.is_none() {
-        bail!("no shared search backend is configured (set ARUARU_LLM_BRAVE_SEARCH_API_KEY, or ARUARU_LLM_GOOGLE_SEARCH_API_KEY and ARUARU_LLM_GOOGLE_SEARCH_CX)");
+    if brave_key.is_none() && serpapi_key.is_none() && bing_key.is_none() && google.is_none() {
+        bail!(
+            "no shared search backend is configured (set ARUARU_LLM_BRAVE_SEARCH_API_KEY, \
+             ARUARU_LLM_SERPAPI_KEY, ARUARU_LLM_BING_SEARCH_API_KEY, or ARUARU_LLM_GOOGLE_SEARCH_API_KEY \
+             and ARUARU_LLM_GOOGLE_SEARCH_CX)"
+        );
     }
     if !try_consume_shared_search_quota() {
         bail!(
@@ -181,6 +242,35 @@ pub async fn search(query: &str, max_results: u8) -> Result<Vec<SearchResult>> {
             Ok(results) if !results.is_empty() => return Ok(results),
             Ok(_) => errors.push("brave: 0 results".to_string()),
             Err(err) => errors.push(format!("brave: {err:#}")),
+        }
+    }
+    // 2026-09-23追加(ユーザー指示「SerpApi/Bing Search APIを両方実装して
+    // ハイブリッド検索機能搭載として」): Google Custom Search JSON APIが
+    // 新規プロジェクトで403を返すようになった(Google側の廃止方針、
+    // 2027-01-01終了予定)ため、Braveの次に試す実質的な主力候補として
+    // SerpApi→Bingの順に追加する。Google自体は「既存ユーザーではまだ
+    // 動く場合がある」という報告もあるため、完全には外さず最後の候補
+    // として残す(正直な開示: 動作は保証しない)。
+    if let Some(key) = serpapi_key {
+        if try_consume_serpapi_quota() {
+            match search_serpapi(query, max_results, &key).await {
+                Ok(results) if !results.is_empty() => return Ok(results),
+                Ok(_) => errors.push("serpapi: 0 results".to_string()),
+                Err(err) => errors.push(format!("serpapi: {err:#}")),
+            }
+        } else {
+            errors.push(format!("serpapi: monthly free quota exhausted ({SERPAPI_FREE_MONTHLY_LIMIT}/month) — resets automatically next month"));
+        }
+    }
+    if let Some(key) = bing_key {
+        if try_consume_bing_quota() {
+            match search_bing(query, max_results, &key).await {
+                Ok(results) if !results.is_empty() => return Ok(results),
+                Ok(_) => errors.push("bing: 0 results".to_string()),
+                Err(err) => errors.push(format!("bing: {err:#}")),
+            }
+        } else {
+            errors.push(format!("bing: monthly free quota exhausted ({BING_FREE_MONTHLY_LIMIT}/month) — resets automatically next month"));
         }
     }
     if let Some((api_key, cx)) = google {
@@ -254,6 +344,134 @@ pub async fn search_brave(query: &str, max_results: u8, api_key: &str) -> Result
         .into_iter()
         .take(max_results as usize)
         .map(|i| SearchResult { title: i.title, snippet: i.description, link: i.url })
+        .collect())
+}
+
+fn read_serpapi_key() -> Option<String> {
+    let key = std::env::var("ARUARU_LLM_SERPAPI_KEY").ok()?;
+    let key = key.trim().to_string();
+    if key.is_empty() { None } else { Some(key) }
+}
+
+fn read_bing_key() -> Option<String> {
+    let key = std::env::var("ARUARU_LLM_BING_SEARCH_API_KEY").ok()?;
+    let key = key.trim().to_string();
+    if key.is_empty() { None } else { Some(key) }
+}
+
+const SERPAPI_ENDPOINT: &str = "https://serpapi.com/search.json";
+
+#[derive(Debug, Deserialize)]
+struct SerpApiResponse {
+    #[serde(default)]
+    organic_results: Vec<SerpApiItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SerpApiItem {
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    snippet: String,
+    #[serde(default)]
+    link: String,
+}
+
+/// **SerpApi**(2026-09-23新設、ユーザー指示「Google Custom Search JSON APIが
+/// 廃止方針〈2027-01-01終了〉のため代替を実装して」への対応)。Google検索結果を
+/// 代行取得するスクレイピング代行サービス——`engine=google`を指定し、実質的に
+/// Google Custom Searchの代替として使える。無料枠は月100件までで、それ以降は
+/// 有料(`ARUARU_LLM_SERPAPI_KEY`はユーザー自身が[serpapi.com](https://serpapi.com/)
+/// で取得する必要があり、このリポジトリはキーを一切保持・同梱しない——既存の
+/// Google/Brave同様の方針)。
+pub async fn search_serpapi(query: &str, max_results: u8, api_key: &str) -> Result<Vec<SearchResult>> {
+    if query.trim().is_empty() {
+        bail!("search query must not be empty");
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .context("failed to build reqwest client for SerpApi")?;
+    let res = client
+        .get(SERPAPI_ENDPOINT)
+        .query(&[("engine", "google"), ("q", query), ("num", &max_results.clamp(1, 10).to_string()), ("api_key", api_key)])
+        .send()
+        .await
+        .context("SerpApi request failed")?;
+    if !res.status().is_success() {
+        let status = res.status();
+        let body = res.text().await.unwrap_or_default();
+        let body: String = body.chars().take(300).collect();
+        bail!("SerpApi returned HTTP {status}: {body}");
+    }
+    let parsed: SerpApiResponse = res.json().await.context("failed to parse SerpApi response")?;
+    Ok(parsed
+        .organic_results
+        .into_iter()
+        .take(max_results as usize)
+        .map(|i| SearchResult { title: i.title, snippet: i.snippet, link: i.link })
+        .collect())
+}
+
+const BING_ENDPOINT: &str = "https://api.bing.microsoft.com/v7.0/search";
+
+#[derive(Debug, Deserialize)]
+struct BingResponse {
+    #[serde(default, rename = "webPages")]
+    web_pages: Option<BingWebPages>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BingWebPages {
+    #[serde(default)]
+    value: Vec<BingItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BingItem {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    snippet: String,
+    #[serde(default)]
+    url: String,
+}
+
+/// **Bing Search API**(Microsoft Azure Cognitive Services、2026-09-23新設、
+/// SerpApiと同じくGoogle Custom Search JSON API廃止方針への対応)。
+/// `Ocp-Apim-Subscription-Key`ヘッダでAPIキーを渡す。無料枠(F1 tier)は
+/// 月1,000件まで。`ARUARU_LLM_BING_SEARCH_API_KEY`はユーザー自身が
+/// [Azure Portal](https://portal.azure.com/)でBing Search v7リソースを
+/// 作成して取得する必要があり、このリポジトリはキーを一切保持・同梱しない。
+pub async fn search_bing(query: &str, max_results: u8, api_key: &str) -> Result<Vec<SearchResult>> {
+    if query.trim().is_empty() {
+        bail!("search query must not be empty");
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .context("failed to build reqwest client for Bing Search")?;
+    let res = client
+        .get(BING_ENDPOINT)
+        .header("Ocp-Apim-Subscription-Key", api_key)
+        .query(&[("q", query), ("count", &max_results.clamp(1, 10).to_string())])
+        .send()
+        .await
+        .context("Bing Search request failed")?;
+    if !res.status().is_success() {
+        let status = res.status();
+        let body = res.text().await.unwrap_or_default();
+        let body: String = body.chars().take(300).collect();
+        bail!("Bing Search returned HTTP {status}: {body}");
+    }
+    let parsed: BingResponse = res.json().await.context("failed to parse Bing Search response")?;
+    Ok(parsed
+        .web_pages
+        .map(|w| w.value)
+        .unwrap_or_default()
+        .into_iter()
+        .take(max_results as usize)
+        .map(|i| SearchResult { title: i.name, snippet: i.snippet, link: i.url })
         .collect())
 }
 
@@ -362,21 +580,38 @@ Answer:"
 mod tests {
     use super::*;
 
+    /// `std::env::set_var`/`remove_var`はプロセス全体で共有される状態であり、
+    /// `cargo test`はデフォルトで並列実行するため、環境変数を触るテスト同士が
+    /// 競合するとフラーキーになる(2026-09-23実際に踏んだ: SerpApiキー用テストの
+    /// 追加後、既存の`is_configured_false_when_env_vars_absent`が並列実行で
+    /// 稀に失敗するようになった)。環境変数を操作するテストはこのロックを
+    /// 取ってから行うことで、この2つが同時に走らないようにする。
+    static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
+
     #[test]
     fn is_configured_false_when_env_vars_absent() {
+        let _guard = ENV_TEST_LOCK.lock().unwrap();
         // 実行環境の環境変数を汚さないよう、既存の値を保存・復元する。
-        let saved_key = std::env::var("ARUARU_LLM_GOOGLE_SEARCH_API_KEY").ok();
-        let saved_cx = std::env::var("ARUARU_LLM_GOOGLE_SEARCH_CX").ok();
-        std::env::remove_var("ARUARU_LLM_GOOGLE_SEARCH_API_KEY");
-        std::env::remove_var("ARUARU_LLM_GOOGLE_SEARCH_CX");
+        // 2026-09-23拡張: SerpApi/Bingもis_configured()の判定対象に
+        // なったため、この2つも同様に一時退避・復元する。
+        let keys = [
+            "ARUARU_LLM_GOOGLE_SEARCH_API_KEY",
+            "ARUARU_LLM_GOOGLE_SEARCH_CX",
+            "ARUARU_LLM_BRAVE_SEARCH_API_KEY",
+            "ARUARU_LLM_SERPAPI_KEY",
+            "ARUARU_LLM_BING_SEARCH_API_KEY",
+        ];
+        let saved: Vec<Option<String>> = keys.iter().map(|k| std::env::var(k).ok()).collect();
+        for k in keys {
+            std::env::remove_var(k);
+        }
 
         assert!(!is_configured());
 
-        if let Some(v) = saved_key {
-            std::env::set_var("ARUARU_LLM_GOOGLE_SEARCH_API_KEY", v);
-        }
-        if let Some(v) = saved_cx {
-            std::env::set_var("ARUARU_LLM_GOOGLE_SEARCH_CX", v);
+        for (k, v) in keys.iter().zip(saved) {
+            if let Some(v) = v {
+                std::env::set_var(k, v);
+            }
         }
     }
 
@@ -396,5 +631,75 @@ mod tests {
         assert!(prompt.contains("Search results:\n1. A: aaa"));
         assert!(prompt.contains("Question: What is A?"));
         assert!(prompt.trim_end().ends_with("Answer:"));
+    }
+
+    #[test]
+    fn serpapi_response_parses_organic_results() {
+        let json = r#"{"organic_results":[{"title":"T1","snippet":"S1","link":"http://a"},{"title":"T2","snippet":"S2","link":"http://b"}]}"#;
+        let parsed: SerpApiResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.organic_results.len(), 2);
+        assert_eq!(parsed.organic_results[0].title, "T1");
+        assert_eq!(parsed.organic_results[1].link, "http://b");
+    }
+
+    #[test]
+    fn serpapi_response_missing_organic_results_defaults_to_empty() {
+        let parsed: SerpApiResponse = serde_json::from_str("{}").unwrap();
+        assert!(parsed.organic_results.is_empty());
+    }
+
+    #[test]
+    fn bing_response_parses_web_pages() {
+        let json = r#"{"webPages":{"value":[{"name":"T1","snippet":"S1","url":"http://a"}]}}"#;
+        let parsed: BingResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.web_pages.unwrap().value[0].name, "T1");
+    }
+
+    #[test]
+    fn bing_response_missing_web_pages_defaults_to_none() {
+        let parsed: BingResponse = serde_json::from_str("{}").unwrap();
+        assert!(parsed.web_pages.is_none());
+    }
+
+    #[test]
+    fn consume_bucket_allows_up_to_limit_then_blocks() {
+        let mut state = (0u64, 0u32);
+        for _ in 0..3 {
+            assert!(consume_bucket(&mut state, 100, 3));
+        }
+        assert!(!consume_bucket(&mut state, 100, 3), "4th call must be blocked once limit is reached");
+    }
+
+    #[test]
+    fn consume_bucket_resets_when_bucket_changes() {
+        let mut state = (100u64, 3u32); // 前の月(バケット100)で使い切った状態
+        assert!(consume_bucket(&mut state, 101, 3), "a new bucket (new month) must start fresh even if the previous one was exhausted");
+        assert_eq!(state, (101, 1));
+    }
+
+    #[test]
+    fn is_configured_true_when_only_serpapi_key_present() {
+        let _guard = ENV_TEST_LOCK.lock().unwrap();
+        let keys = [
+            "ARUARU_LLM_GOOGLE_SEARCH_API_KEY",
+            "ARUARU_LLM_GOOGLE_SEARCH_CX",
+            "ARUARU_LLM_BRAVE_SEARCH_API_KEY",
+            "ARUARU_LLM_SERPAPI_KEY",
+            "ARUARU_LLM_BING_SEARCH_API_KEY",
+        ];
+        let saved: Vec<Option<String>> = keys.iter().map(|k| std::env::var(k).ok()).collect();
+        for k in keys {
+            std::env::remove_var(k);
+        }
+        std::env::set_var("ARUARU_LLM_SERPAPI_KEY", "dummy-key-for-test");
+
+        assert!(is_configured());
+
+        std::env::remove_var("ARUARU_LLM_SERPAPI_KEY");
+        for (k, v) in keys.iter().zip(saved) {
+            if let Some(v) = v {
+                std::env::set_var(k, v);
+            }
+        }
     }
 }
