@@ -33,6 +33,11 @@ COUNTRIES=(
   "Philippines" "Cambodia" "Thailand" "Malaysia"
   "United Kingdom" "Germany" "Italy" "France" "Austria" "Switzerland"
   "India" "Russia" "Ukraine" "Israel"
+  # 2026-09-23追加(ユーザー指示「ブラジルとミャンマーの毎日のネット
+  # ニュースも現地語と英語と日本語も追加して」): この2ヶ国のみ、現地語・
+  # 英語・日本語の3言語分を別エントリとして収集する。
+  "Brazil" "Brazil (English)" "Brazil (Japanese)"
+  "Myanmar" "Myanmar (English)" "Myanmar (Japanese)"
 )
 
 echo "[daily-news-collect] collecting news for ${#COUNTRIES[@]} countries via ${ARUARU_LLM_BASE_URL}/v1/news/for"

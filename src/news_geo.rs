@@ -171,6 +171,20 @@ pub(crate) fn news_query_for_country(country: &str) -> String {
         "France" => "France actualités aujourd'hui principales".to_string(),
         "Switzerland" => "Schweiz Nachrichten heute wichtigste".to_string(),
         "Russia" => "Россия новости сегодня главные".to_string(),
+        "Brazil" => "Brasil notícias hoje principais".to_string(),
+        "Myanmar" => "မြန်မာ သတင်း ယနေ့ အဓိက".to_string(),
+        // 2026-09-23追加(ユーザー指示「ブラジルとミャンマーの毎日のネット
+        // ニュースも現地語と英語と日本語も追加して」): この2ヶ国だけは
+        // 現地語に加えて英語版・日本語版も別途収集する。既存の「1国=1
+        // クエリ」というdata/news_by_country.jsonのキー設計を大きく変えず
+        // 済むよう、"Brazil (English)"のような疑似国名をキーとして扱う
+        // (daily-news-collect.shのCOUNTRIES配列に対応エントリを追加済み)。
+        "Brazil (English)" | "Myanmar (English)" => {
+            let base = country.split(" (").next().unwrap_or(country);
+            format!("{base} news today headlines")
+        }
+        "Brazil (Japanese)" => "ブラジル ニュース 今日 主要".to_string(),
+        "Myanmar (Japanese)" => "ミャンマー ニュース 今日 主要".to_string(),
         // India/Ukraine/Israel/United States/United Kingdom等はユーザー指示・
         // 実情により英語のまま(上記doc参照)。
         _ => format!("{country} news today headlines"),
@@ -585,6 +599,16 @@ mod tests {
         assert_eq!(news_query_for_country("Russia"), "Россия новости сегодня главные");
         // Germany/Austriaは同じドイツ語クエリを共有する。
         assert_eq!(news_query_for_country("Germany"), news_query_for_country("Austria"));
+    }
+
+    #[test]
+    fn news_query_for_country_covers_brazil_and_myanmar_in_three_languages() {
+        assert_eq!(news_query_for_country("Brazil"), "Brasil notícias hoje principais");
+        assert_eq!(news_query_for_country("Brazil (English)"), "Brazil news today headlines");
+        assert_eq!(news_query_for_country("Brazil (Japanese)"), "ブラジル ニュース 今日 主要");
+        assert_eq!(news_query_for_country("Myanmar"), "မြန်မာ သတင်း ယနေ့ အဓိက");
+        assert_eq!(news_query_for_country("Myanmar (English)"), "Myanmar news today headlines");
+        assert_eq!(news_query_for_country("Myanmar (Japanese)"), "ミャンマー ニュース 今日 主要");
     }
 
     #[test]
