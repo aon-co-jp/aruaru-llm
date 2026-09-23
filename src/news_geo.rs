@@ -141,11 +141,39 @@ pub fn get_latest() -> NewsDb {
     loaded
 }
 
+/// 国ごとに、可能な限り現地のネイティブ言語でニュースを検索する
+/// (2026-09-23拡張、ユーザー指示「現地のネイティブの言語のインターネット
+/// ニュース...を網羅」への対応)。
+///
+/// **正直な開示・意図的に現地語を使わない国**: ユーザー自身の指示により、
+/// インド・ウクライナ・イスラエルは(現地語での報道は存在するものの)
+/// 英語のニュースを使う——インドは英語が事実上の全国共通語として広く
+/// 使われているため、ウクライナは「英語版があれば」という条件付き指示、
+/// イスラエルはヘブライ語が「難しくてマイナーすぎる」というユーザー自身の
+/// 判断による。**北朝鮮は意図的に対象外**: 自由な報道機関が存在せず、
+/// Google検索で得られる結果は事実上すべて国外(主に英語圏)からの報道に
+/// なり、「北朝鮮の現地ニュース」として提示するのは誤解を招くため
+/// (ユーザーに要相談、`daily-news-collect.sh`のコメント参照)。
+/// スイスは公用語が独語・仏語・伊語・ロマンシュ語の4つあるが、話者数が
+/// 最多のドイツ語を代表として使う簡略化であることも明記する。
 pub(crate) fn news_query_for_country(country: &str) -> String {
-    if country == "Japan" {
-        "日本 ニュース 今日 主要".to_string()
-    } else {
-        format!("{country} news today headlines")
+    match country {
+        "Japan" => "日本 ニュース 今日 主要".to_string(),
+        "China" => "中国 新闻 今天 头条".to_string(),
+        "Taiwan" => "台灣 新聞 今天 頭條".to_string(),
+        "South Korea" => "한국 뉴스 오늘 주요".to_string(),
+        "Philippines" => "Pilipinas balita ngayon pangunahing".to_string(),
+        "Cambodia" => "កម្ពុជា ព័ត៌មាន ថ្ងៃនេះ".to_string(),
+        "Thailand" => "ประเทศไทย ข่าว วันนี้".to_string(),
+        "Malaysia" => "Malaysia berita hari ini utama".to_string(),
+        "Germany" | "Austria" => "Deutschland Nachrichten heute wichtigste".to_string(),
+        "Italy" => "Italia notizie oggi principali".to_string(),
+        "France" => "France actualités aujourd'hui principales".to_string(),
+        "Switzerland" => "Schweiz Nachrichten heute wichtigste".to_string(),
+        "Russia" => "Россия новости сегодня главные".to_string(),
+        // India/Ukraine/Israel/United States/United Kingdom等はユーザー指示・
+        // 実情により英語のまま(上記doc参照)。
+        _ => format!("{country} news today headlines"),
     }
 }
 
@@ -534,8 +562,29 @@ mod tests {
     }
 
     #[test]
-    fn news_query_for_country_uses_english_for_others() {
-        assert_eq!(news_query_for_country("France"), "France news today headlines");
+    fn news_query_for_country_uses_english_for_unlisted_countries() {
+        assert_eq!(news_query_for_country("United States"), "United States news today headlines");
+    }
+
+    #[test]
+    fn news_query_for_country_uses_english_for_india_ukraine_israel_by_user_instruction() {
+        // ユーザー自身の指示により、これら3ヶ国は意図的に現地語を使わない
+        // (news_query_for_countryのdocコメント参照)。
+        for country in ["India", "Ukraine", "Israel"] {
+            assert_eq!(news_query_for_country(country), format!("{country} news today headlines"));
+        }
+    }
+
+    #[test]
+    fn news_query_for_country_uses_native_language_for_covered_countries() {
+        assert_eq!(news_query_for_country("France"), "France actualités aujourd'hui principales");
+        assert_eq!(news_query_for_country("China"), "中国 新闻 今天 头条");
+        assert_eq!(news_query_for_country("Taiwan"), "台灣 新聞 今天 頭條");
+        assert_eq!(news_query_for_country("South Korea"), "한국 뉴스 오늘 주요");
+        assert_eq!(news_query_for_country("Thailand"), "ประเทศไทย ข่าว วันนี้");
+        assert_eq!(news_query_for_country("Russia"), "Россия новости сегодня главные");
+        // Germany/Austriaは同じドイツ語クエリを共有する。
+        assert_eq!(news_query_for_country("Germany"), news_query_for_country("Austria"));
     }
 
     #[test]

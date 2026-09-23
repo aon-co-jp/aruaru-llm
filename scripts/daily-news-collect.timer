@@ -1,0 +1,15 @@
+# VPS(conoha)の /etc/systemd/system/daily-news-collect.timer へ配置する。
+# 毎日02:00(サーバーのタイムゾーン設定次第)に一度、
+# daily-news-collect.serviceを起動する(2026-09-23新設)。
+# news-archive-push.timer(03:15)より前に置き、収集→(翌日以降)アーカイブ
+# という自然な順序にしている。
+[Unit]
+Description=Daily trigger for daily-news-collect.service
+
+[Timer]
+OnCalendar=*-*-* 02:00:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

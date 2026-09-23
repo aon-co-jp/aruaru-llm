@@ -2557,6 +2557,7 @@ dependencies = [
  "half",
  "open-cpu",
  "opencuda-core",
+ "opencuda-shader-build",
  "rayon",
  "tracing",
 ]
@@ -2599,6 +2600,10 @@ dependencies = [
  "opencuda-core",
  "tracing",
 ]
+
+[[package]]
+name = "opencuda-shader-build"
+version = "0.1.0"
 
 [[package]]
 name = "opencuda-vulkan"
