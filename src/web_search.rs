@@ -133,9 +133,21 @@ const TAVILY_SAFE_DAILY_LIMIT: u32 = TAVILY_FREE_MONTHLY_LIMIT / DAYS_PER_MONTH_
 const EXA_FREE_MONTHLY_REQUESTS_APPROX: u32 = 1428;
 const EXA_SAFE_DAILY_LIMIT: u32 = EXA_FREE_MONTHLY_REQUESTS_APPROX / DAYS_PER_MONTH_APPROX;
 
+// **2026-09-23追加(Jina AI)**: ユーザー指示「Jina AIも追加で組み込んで」
+// への対応。無料枠がAPIキー発行時に1,000万トークン付与される方式
+// (月次リセットではなく「トークンを使い切るまで」の一括付与)。1検索
+// あたり最低1万トークン消費が公式ドキュメントに明記されているため、
+// 1,000万÷1万=1,000回が理論上の総回数。日割り上限は他社と同じ考え方で
+// 30日分の目安として計算するが、**実際は月次リセットではなく総量制**
+// という点が他社と異なることを正直に開示しておく(このAPIの無料枠を
+// 使い切ったら、新しいAPIキーを取得し直す運用になる)。
+const JINA_FREE_TOTAL_REQUESTS_APPROX: u32 = 1000;
+const JINA_SAFE_DAILY_LIMIT: u32 = JINA_FREE_TOTAL_REQUESTS_APPROX / DAYS_PER_MONTH_APPROX;
+
 static SERPAPI_DAILY_COUNT: Mutex<(u64, u32)> = Mutex::new((0, 0));
 static TAVILY_DAILY_COUNT: Mutex<(u64, u32)> = Mutex::new((0, 0));
 static EXA_DAILY_COUNT: Mutex<(u64, u32)> = Mutex::new((0, 0));
+static JINA_DAILY_COUNT: Mutex<(u64, u32)> = Mutex::new((0, 0));
 
 /// [`try_consume_shared_search_quota`]と同じ考え方のプロバイダー別版
 /// (純粋関数として分離、`consume_bucket`が実処理・テストしやすい形)。
@@ -166,6 +178,12 @@ fn try_consume_exa_quota() -> bool {
     let bucket = today_epoch_day();
     let mut guard = EXA_DAILY_COUNT.lock().expect("exa quota lock poisoned");
     consume_bucket(&mut guard, bucket, EXA_SAFE_DAILY_LIMIT)
+}
+
+fn try_consume_jina_quota() -> bool {
+    let bucket = today_epoch_day();
+    let mut guard = JINA_DAILY_COUNT.lock().expect("jina quota lock poisoned");
+    consume_bucket(&mut guard, bucket, JINA_SAFE_DAILY_LIMIT)
 }
 
 /// 利用者がブラウザの設定パネルから入力したAPIキー/cxを、実行中の
@@ -225,6 +243,7 @@ pub fn is_configured() -> bool {
         || read_serpapi_key().is_some()
         || read_tavily_key().is_some()
         || read_exa_key().is_some()
+        || read_jina_key().is_some()
         || read_credentials().is_some()
 }
 
@@ -271,12 +290,13 @@ pub async fn search_with_locale(query: &str, max_results: u8, gl: Option<&str>, 
     let serpapi_key = read_serpapi_key();
     let tavily_key = read_tavily_key();
     let exa_key = read_exa_key();
+    let jina_key = read_jina_key();
     let brave_key = read_brave_key();
     let google = read_credentials();
-    if serpapi_key.is_none() && tavily_key.is_none() && exa_key.is_none() && brave_key.is_none() && google.is_none() {
+    if serpapi_key.is_none() && tavily_key.is_none() && exa_key.is_none() && jina_key.is_none() && brave_key.is_none() && google.is_none() {
         bail!(
             "no shared search backend is configured (set ARUARU_LLM_SERPAPI_KEY, ARUARU_LLM_TAVILY_KEY, \
-             ARUARU_LLM_EXA_KEY, ARUARU_LLM_BRAVE_SEARCH_API_KEY, or ARUARU_LLM_GOOGLE_SEARCH_API_KEY and ARUARU_LLM_GOOGLE_SEARCH_CX)"
+             ARUARU_LLM_EXA_KEY, ARUARU_LLM_JINA_KEY, ARUARU_LLM_BRAVE_SEARCH_API_KEY, or ARUARU_LLM_GOOGLE_SEARCH_API_KEY and ARUARU_LLM_GOOGLE_SEARCH_CX)"
         );
     }
     if !try_consume_shared_search_quota() {
@@ -331,6 +351,26 @@ pub async fn search_with_locale(query: &str, max_results: u8, gl: Option<&str>, 
         } else {
             errors.push(format!(
                 "exa: today's safe daily quota exhausted ({EXA_SAFE_DAILY_LIMIT}/day, derived from the ~{EXA_FREE_MONTHLY_REQUESTS_APPROX}/month recurring free credit) — resets automatically tomorrow"
+            ));
+        }
+    }
+    // 2026-09-23追加(ユーザー指示「Jina AIも追加で組み込んで」)。無料枠が
+    // 「APIキー発行時に1,000万トークン一括付与、消費し切るまで」という
+    // 総量制のため、他社(月次リセット)と性質が異なることを開示した上で
+    // 日割りの目安として最後に配置する。
+    if let Some(key) = jina_key {
+        if try_consume_jina_quota() {
+            match search_jina(query, max_results, &key).await {
+                Ok(results) if !results.is_empty() => {
+                    tracing::info!(backend = "jina", query, count = results.len(), "web_search: served by");
+                    return Ok(results);
+                }
+                Ok(_) => errors.push("jina: 0 results".to_string()),
+                Err(err) => errors.push(format!("jina: {err:#}")),
+            }
+        } else {
+            errors.push(format!(
+                "jina: today's safe usage pace exhausted ({JINA_SAFE_DAILY_LIMIT}/day, derived from the ~{JINA_FREE_TOTAL_REQUESTS_APPROX}-request total free allowance, NOT a monthly reset) — resets automatically tomorrow (pacing only, does not add more total credit)"
             ));
         }
     }
@@ -636,6 +676,80 @@ pub async fn search_exa(query: &str, max_results: u8, api_key: &str) -> Result<V
         .collect())
 }
 
+fn read_jina_key() -> Option<String> {
+    let key = std::env::var("ARUARU_LLM_JINA_KEY").ok()?;
+    let key = key.trim().to_string();
+    if key.is_empty() { None } else { Some(key) }
+}
+
+const JINA_ENDPOINT: &str = "https://s.jina.ai/";
+
+#[derive(Debug, Deserialize)]
+struct JinaResponse {
+    #[serde(default)]
+    data: Vec<JinaItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct JinaItem {
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    content: String,
+    #[serde(default)]
+    description: String,
+}
+
+/// **Jina AI Search**(`s.jina.ai`、2026-09-23新設、ユーザー指示「Jina AIも
+/// 追加で組み込んで」への対応)。無料枠はAPIキー発行時に1,000万トークンが
+/// 一括付与される方式(1検索あたり最低1万トークン消費、公式ドキュメント
+/// 記載)——月次リセットの他社とは性質が異なり、実質「使い切ったら新しい
+/// APIキーを取得し直す」運用になる(`JINA_SAFE_DAILY_LIMIT`は月次リセット
+/// を前提にしていない、あくまで消費ペースの目安)。
+///
+/// **正直な開示(未検証)**: このAPIは無料枠であってもAPIキー無しでは
+/// `401 AuthenticationRequiredError`を返すことを実機で確認済み(2026-09-23、
+/// `curl`による直接検証)。一方、実際に有効なAPIキーでの成功レスポンスの
+/// 正確なJSONフィールド名までは検証できていない(公式ドキュメントの記述
+/// 「URL・タイトル・本文・タイムスタンプを含むJSON」を根拠に
+/// `title`/`url`/`content`(無ければ`description`)という妥当な推測で実装した)。
+/// 実際のAPIキーが用意でき次第、実機で検証してこのコメントを更新する。
+pub async fn search_jina(query: &str, max_results: u8, api_key: &str) -> Result<Vec<SearchResult>> {
+    if query.trim().is_empty() {
+        bail!("search query must not be empty");
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .context("failed to build reqwest client for Jina AI Search")?;
+    let res = client
+        .get(JINA_ENDPOINT)
+        .header("Authorization", format!("Bearer {api_key}"))
+        .header("Accept", "application/json")
+        .query(&[("q", query)])
+        .send()
+        .await
+        .context("Jina AI Search request failed")?;
+    if !res.status().is_success() {
+        let status = res.status();
+        let body = res.text().await.unwrap_or_default();
+        let body: String = body.chars().take(300).collect();
+        bail!("Jina AI Search returned HTTP {status}: {body}");
+    }
+    let parsed: JinaResponse = res.json().await.context("failed to parse Jina AI Search response")?;
+    Ok(parsed
+        .data
+        .into_iter()
+        .take(max_results as usize)
+        .map(|i| {
+            let snippet = if !i.content.is_empty() { i.content.chars().take(300).collect() } else { i.description };
+            SearchResult { title: i.title, snippet, link: i.url }
+        })
+        .collect())
+}
+
 /// `search()`と同じ検索処理だが、プロセス全体で共有される
 /// `read_credentials()`(環境変数/`POST /v1/settings/google-search`で
 /// 設定されたグローバルな認証情報)を一切参照・消費しない版
@@ -762,6 +876,7 @@ mod tests {
             "ARUARU_LLM_SERPAPI_KEY",
             "ARUARU_LLM_TAVILY_KEY",
             "ARUARU_LLM_EXA_KEY",
+            "ARUARU_LLM_JINA_KEY",
         ];
         let saved: Vec<Option<String>> = keys.iter().map(|k| std::env::var(k).ok()).collect();
         for k in keys {
@@ -840,6 +955,21 @@ mod tests {
     }
 
     #[test]
+    fn jina_response_parses_data_array() {
+        let json = r#"{"code":200,"data":[{"title":"T1","url":"http://a","content":"C1"},{"title":"T2","url":"http://b","description":"D2"}]}"#;
+        let parsed: JinaResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.data.len(), 2);
+        assert_eq!(parsed.data[0].title, "T1");
+        assert_eq!(parsed.data[1].description, "D2");
+    }
+
+    #[test]
+    fn jina_response_missing_data_defaults_to_empty() {
+        let parsed: JinaResponse = serde_json::from_str("{}").unwrap();
+        assert!(parsed.data.is_empty());
+    }
+
+    #[test]
     fn consume_bucket_allows_up_to_limit_then_blocks() {
         let mut state = (0u64, 0u32);
         for _ in 0..3 {
@@ -865,6 +995,7 @@ mod tests {
             "ARUARU_LLM_SERPAPI_KEY",
             "ARUARU_LLM_TAVILY_KEY",
             "ARUARU_LLM_EXA_KEY",
+            "ARUARU_LLM_JINA_KEY",
         ];
         let saved: Vec<Option<String>> = keys.iter().map(|k| std::env::var(k).ok()).collect();
         for k in keys {
