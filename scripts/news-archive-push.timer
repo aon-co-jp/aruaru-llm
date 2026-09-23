@@ -1,0 +1,13 @@
+# VPS(conoha)の /etc/systemd/system/news-archive-push.timer へ配置する。
+# 毎日03:15(UTC、サーバーのタイムゾーン設定次第)に一度、news-archive-push.service
+# を起動する(2026-09-23新設)。
+[Unit]
+Description=Daily trigger for news-archive-push.service
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

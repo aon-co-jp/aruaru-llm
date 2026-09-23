@@ -1,0 +1,14 @@
+# VPS(conoha)の /etc/systemd/system/news-archive-push.service へ配置する。
+# news-archive-push.timer とセットで使う(2026-09-23新設)。
+[Unit]
+Description=Archive stale aruaru-llm news into open-english's NEWS-TITLE-README.md and push to GitHub
+After=network-online.target aruaru-llm.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/root/aruaru-llm/scripts/archive-news-to-github.sh
+Environment=ARUARU_LLM_DIR=/root/aruaru-llm
+Environment=OPEN_ENGLISH_DIR=/root/easy-web.tokyo/open-english
+Environment=ARUARU_LLM_BASE_URL=http://127.0.0.1:4600

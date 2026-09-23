@@ -4562,3 +4562,21 @@ Gemini失敗→Mistral繰り上げ(Groq+Mistral)、2回目以降はGeminiを最�
 (ยังไม่ได้ทำการ push ไปยัง GitHub จริง — เป็นการตัดสินใจโดยเจตนาที่จะไม่ให้สิทธิ์เขียน GitHub แก่โพรเซสเซิร์ฟเวอร์ที่ทำงานตลอดเวลา การ push จริงจะทำผ่าน Claude Code ในภายหลัง) (12) ลดระดับความยากอัตโนมัติเมื่อผู้ใช้พูดว่า "ง่ายกว่านี้" หรือ "ยากเกินไป" พร้อมคำแนะนำสำนวนแบบเจ้าของภาษา
 (13) เปิดใช้การค้นหา Google/GitHub อัตโนมัติเมื่อตรวจพบความต้องการ "ข้อมูลล่าสุด"
 **ยังไม่เสร็จ**: การ push คลังข่าวจริงไปยัง GitHub และระบบอัตโนมัติ/ตั้งเวลาสำหรับ `news_prune_archive`
+
+## HANDOFF追記(2026-09-23、ニュースアーカイブ自動push+参照機能) / HANDOFF addendum (2026-09-23, news archive auto-push + reference system)
+
+**日本語**: 「インターネットニュースを自動収集してGithubの無料のDATABASEを使って自動保存する」への対応として、以下を実装(GitHub Issues/Projects方式ではなく、既存のMarkdownアーカイブ設計と相性の良い「JSON/Markdownファイルをリポジトリで管理」方式を採用)。
+(1) `aruaru-llm/scripts/archive-news-to-github.sh`(新設): `POST /v1/news/prune-archive`を呼び出して8日以上前のニュースをローカルDBから追い出し、生成されたMarkdownをopen-englishリポジトリの`NEWS-TITLE-README.md`へ追記してGitHubへ実際にcommit・push する(常時稼働するRustサーバー本体にはGitHub資格情報を持たせない設計を維持——このスクリプトはVPS上でsystemdタイマー経由で日次実行する独立プロセス)。
+(2) `aruaru-llm/scripts/news-archive-push.service`/`news-archive-push.timer`(新設): 上記スクリプトを毎日1回自動実行するsystemdユニット(VPSの`/etc/systemd/system/`へ配置し`systemctl enable --now news-archive-push.timer`で有効化する運用、今回はユニットファイルの追加のみで、実際のVPSへの配置・有効化は次回対応)。
+(3) `open-english/NEWS-TITLE-README.md`(新設): アーカイブ先ファイル。
+(4) `open-english/server/src/main.rs`の`news_archive_search`/`parse_news_archive_markdown`(新設、`GET /v1/public/news/archive-search?q=<keyword>`): アーカイブされたMarkdownをその場読み込みし、タグ/国名/タイトル/抜粋への部分一致で検索する(全文検索インデックスは持たない素朴な実装、単体テスト5件で検証済み)。
+(5) `open-english/web/app.js`の`archiveNewsSuffix`/`mentionsPastNews`(新設): 質問フォームからの質問で、(a)最新ニュースの取得に失敗した時、または(b)利用者が「先週の」「過去の」等、明示的に過去のニュースを求めた時に、自動でアーカイブを検索して参照する。ブラウザでのモックテストで両パターンとも動作確認済み。
+**未対応**: 実際のVPSへのsystemdユニット配置・有効化、実データでのエンドツーエンド確認(まだ8日以上前のニュースが実在しないため)。
+
+**English**: To satisfy "automatically collect internet news and auto-save it using GitHub's free database," implemented the file-based ("JSON/Markdown files tracked in the repo") approach rather than GitHub Issues/Projects, since it fits the existing Markdown archive design already in place.
+(1) `aruaru-llm/scripts/archive-news-to-github.sh` (new): calls `POST /v1/news/prune-archive` to evict news older than 8 days from the local DB, appends the generated Markdown to `NEWS-TITLE-README.md` in the open-english repo, and actually commits + pushes to GitHub (keeps the design decision of never giving the always-running Rust server GitHub credentials — this script is a separate process run daily via a VPS systemd timer).
+(2) `aruaru-llm/scripts/news-archive-push.service`/`news-archive-push.timer` (new): systemd units to run the script daily (meant to be placed under `/etc/systemd/system/` on the VPS and enabled with `systemctl enable --now news-archive-push.timer`; only the unit files were added this session — actual VPS installation/activation is a follow-up).
+(3) `open-english/NEWS-TITLE-README.md` (new): the archive destination file.
+(4) `news_archive_search`/`parse_news_archive_markdown` in `open-english/server/src/main.rs` (new, `GET /v1/public/news/archive-search?q=<keyword>`): reads the archived Markdown on demand and does substring matching against tags/country/title/snippet (deliberately no full-text search index; verified with 5 passing unit tests).
+(5) `archiveNewsSuffix`/`mentionsPastNews` in `open-english/web/app.js` (new): the question form automatically searches the archive when (a) the latest-news fetch fails, or (b) the user explicitly asks for past news ("last week's", "past", etc.). Both paths verified with mocked browser tests.
+**Not done yet**: actually installing/enabling the systemd units on the VPS, and a real end-to-end check with live archived data (none exists yet since no news has reached the 8-day threshold).
