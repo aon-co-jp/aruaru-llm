@@ -1093,6 +1093,68 @@ async fn chat_provider_active() -> Response {
     json_response(StatusCode::OK, &chat_providers::hybrid_status())
 }
 
+/// `POST /v1/search/raw`(2026-09-24新設)の入力。rs-real-data が検索結果そのものを
+/// データセットとして分析するために使う(AI 応答は生成しない)。キーの扱いは
+/// `complete-priority` と同じ(利用者持ち込みのキーを優先し、無ければサーバー設定)。
+#[derive(Debug, Deserialize)]
+struct SearchRawRequest {
+    /// "google" | "youtube" | "github"
+    source: String,
+    query: String,
+    #[serde(default = "default_search_raw_max")]
+    max_results: u8,
+    #[serde(default)]
+    google_search_api_key: Option<String>,
+    #[serde(default)]
+    google_search_cx: Option<String>,
+    #[serde(default)]
+    github_token: Option<String>,
+    #[serde(default)]
+    youtube_api_key: Option<String>,
+}
+
+fn default_search_raw_max() -> u8 {
+    10
+}
+
+/// 検索結果をそのまま返す(`results` の形は source ごとの既存構造体のまま)。
+async fn search_raw(req: Request) -> Response {
+    let Json(req): Json<SearchRawRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let query = req.query.trim();
+    if query.is_empty() || query.chars().count() > 256 {
+        return json_response(StatusCode::BAD_REQUEST, &serde_json::json!({"error": "query must be 1-256 characters"}));
+    }
+    let nonempty = |s: &Option<String>| s.as_deref().map(str::trim).filter(|v| !v.is_empty()).map(str::to_string);
+    let result: anyhow::Result<serde_json::Value> = match req.source.as_str() {
+        "google" => {
+            let r = match (nonempty(&req.google_search_api_key), nonempty(&req.google_search_cx)) {
+                (Some(k), Some(c)) => web_search::search_with_credentials(query, req.max_results, &k, &c).await,
+                _ if web_search::is_configured() => web_search::search(query, req.max_results).await,
+                _ => Err(anyhow::anyhow!("Google Custom Search is not configured (no API key/cx set)")),
+            };
+            r.map(|v| serde_json::json!(v))
+        }
+        "github" => github_search::search_with_optional_token(query, req.max_results, nonempty(&req.github_token).as_deref())
+            .await
+            .map(|v| serde_json::json!(v)),
+        "youtube" => {
+            let r = match nonempty(&req.youtube_api_key) {
+                Some(k) => youtube_search::search_with_key(query, req.max_results, &k).await,
+                None => youtube_search::search(query, req.max_results).await,
+            };
+            r.map(|v| serde_json::json!(v))
+        }
+        other => return json_response(StatusCode::BAD_REQUEST, &serde_json::json!({"error": format!("unknown source: {other} (google|youtube|github)")})),
+    };
+    match result {
+        Ok(results) => json_response(StatusCode::OK, &serde_json::json!({"source": req.source, "query": query, "results": results})),
+        Err(err) => json_response(StatusCode::BAD_GATEWAY, &serde_json::json!({"source": req.source, "error": format!("{err:#}")})),
+    }
+}
+
 async fn chat_provider_complete_priority(req: Request) -> Response {
     let Json(req): Json<ChatProviderCompletePriorityRequest> = match Json::from_body(req).await {
         Ok(v) => v,
@@ -3224,6 +3286,7 @@ async fn main() -> anyhow::Result<()> {
         .at("/v1/chat-providers/complete", post(handler_fn(|req, _p| Box::pin(chat_provider_complete(req)))))
         .at("/v1/chat-providers/complete-multi", post(handler_fn(|req, _p| Box::pin(chat_provider_complete_multi(req)))))
         .at("/v1/chat-providers/complete-priority", post(handler_fn(|req, _p| Box::pin(chat_provider_complete_priority(req)))))
+        .at("/v1/search/raw", post(handler_fn(|req, _p| Box::pin(search_raw(req)))))
         .at("/v1/chat-providers/active", get(plain(|| Box::pin(chat_provider_active()))))
         .at(
             "/v1/settings/provider-priority",
