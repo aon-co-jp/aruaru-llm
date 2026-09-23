@@ -117,7 +117,22 @@ const SERPAPI_FREE_MONTHLY_LIMIT: u32 = 100;
 const DAYS_PER_MONTH_APPROX: u32 = 30;
 const SERPAPI_SAFE_DAILY_LIMIT: u32 = SERPAPI_FREE_MONTHLY_LIMIT / DAYS_PER_MONTH_APPROX;
 
+// **2026-09-23追加(Tavily/Exa)**: ユーザー指示「Tavily/Exaも登録してopen-english
+// などで使用したい」への対応。どちらもAIエージェント/RAG向けに最適化された検索API
+// (クレジットカード登録不要の無料枠あり)。SerpApiと同じ「月間無料枠÷30日」の
+// 安全な日割り上限+日次リセットの設計を踏襲する。
+// - Tavily: 月1,000クレジット、Basic検索1回=1クレジット消費 → 1000÷30≒33件/日。
+// - Exa: 毎月自動付与される$10ぶんの無料クレジット(新規登録時の$20は使い切り型の
+//   ボーナスのため、継続的に使える方の$10だけを根拠にする)、通常検索は$7/1000件
+//   (1回≒$0.007)→ $10÷$0.007≒1428件/月 → 1428÷30≒47件/日。
+const TAVILY_FREE_MONTHLY_LIMIT: u32 = 1000;
+const TAVILY_SAFE_DAILY_LIMIT: u32 = TAVILY_FREE_MONTHLY_LIMIT / DAYS_PER_MONTH_APPROX;
+const EXA_FREE_MONTHLY_REQUESTS_APPROX: u32 = 1428;
+const EXA_SAFE_DAILY_LIMIT: u32 = EXA_FREE_MONTHLY_REQUESTS_APPROX / DAYS_PER_MONTH_APPROX;
+
 static SERPAPI_DAILY_COUNT: Mutex<(u64, u32)> = Mutex::new((0, 0));
+static TAVILY_DAILY_COUNT: Mutex<(u64, u32)> = Mutex::new((0, 0));
+static EXA_DAILY_COUNT: Mutex<(u64, u32)> = Mutex::new((0, 0));
 
 /// [`try_consume_shared_search_quota`]と同じ考え方のプロバイダー別版
 /// (純粋関数として分離、`consume_bucket`が実処理・テストしやすい形)。
@@ -136,6 +151,18 @@ fn try_consume_serpapi_quota() -> bool {
     let bucket = today_epoch_day();
     let mut guard = SERPAPI_DAILY_COUNT.lock().expect("serpapi quota lock poisoned");
     consume_bucket(&mut guard, bucket, SERPAPI_SAFE_DAILY_LIMIT)
+}
+
+fn try_consume_tavily_quota() -> bool {
+    let bucket = today_epoch_day();
+    let mut guard = TAVILY_DAILY_COUNT.lock().expect("tavily quota lock poisoned");
+    consume_bucket(&mut guard, bucket, TAVILY_SAFE_DAILY_LIMIT)
+}
+
+fn try_consume_exa_quota() -> bool {
+    let bucket = today_epoch_day();
+    let mut guard = EXA_DAILY_COUNT.lock().expect("exa quota lock poisoned");
+    consume_bucket(&mut guard, bucket, EXA_SAFE_DAILY_LIMIT)
 }
 
 /// 利用者がブラウザの設定パネルから入力したAPIキー/cxを、実行中の
@@ -191,7 +218,11 @@ struct CseItem {
 /// 環境変数`ARUARU_LLM_GOOGLE_SEARCH_API_KEY`/`ARUARU_LLM_GOOGLE_SEARCH_CX`
 /// の両方が設定されているかどうか(空文字列は未設定として扱う)。
 pub fn is_configured() -> bool {
-    read_brave_key().is_some() || read_serpapi_key().is_some() || read_credentials().is_some()
+    read_brave_key().is_some()
+        || read_serpapi_key().is_some()
+        || read_tavily_key().is_some()
+        || read_exa_key().is_some()
+        || read_credentials().is_some()
 }
 
 /// 実行時設定(ブラウザの設定パネル経由)を優先し、無ければ環境変数
@@ -235,12 +266,14 @@ pub async fn search(query: &str, max_results: u8) -> Result<Vec<SearchResult>> {
 /// Q&A用途、国の概念が無い)は従来通り`gl`/`hl`無しのまま。
 pub async fn search_with_locale(query: &str, max_results: u8, gl: Option<&str>, hl: Option<&str>) -> Result<Vec<SearchResult>> {
     let serpapi_key = read_serpapi_key();
+    let tavily_key = read_tavily_key();
+    let exa_key = read_exa_key();
     let brave_key = read_brave_key();
     let google = read_credentials();
-    if serpapi_key.is_none() && brave_key.is_none() && google.is_none() {
+    if serpapi_key.is_none() && tavily_key.is_none() && exa_key.is_none() && brave_key.is_none() && google.is_none() {
         bail!(
-            "no shared search backend is configured (set ARUARU_LLM_SERPAPI_KEY, \
-             ARUARU_LLM_BRAVE_SEARCH_API_KEY, or ARUARU_LLM_GOOGLE_SEARCH_API_KEY and ARUARU_LLM_GOOGLE_SEARCH_CX)"
+            "no shared search backend is configured (set ARUARU_LLM_SERPAPI_KEY, ARUARU_LLM_TAVILY_KEY, \
+             ARUARU_LLM_EXA_KEY, ARUARU_LLM_BRAVE_SEARCH_API_KEY, or ARUARU_LLM_GOOGLE_SEARCH_API_KEY and ARUARU_LLM_GOOGLE_SEARCH_CX)"
         );
     }
     if !try_consume_shared_search_quota() {
@@ -260,6 +293,33 @@ pub async fn search_with_locale(query: &str, max_results: u8, gl: Option<&str>, 
             }
         } else {
             errors.push(format!("serpapi: today's safe daily quota exhausted ({SERPAPI_SAFE_DAILY_LIMIT}/day, derived from the {SERPAPI_FREE_MONTHLY_LIMIT}/month free tier) — resets automatically tomorrow"));
+        }
+    }
+    // 2026-09-23追加(ユーザー指示「Tavily/Exaも登録してopen-englishなどで
+    // 使用したい」): AIエージェント/RAG向けに最適化された2社をSerpApiの次、
+    // Braveより先に試す(いずれも無料枠がクレジットカード登録不要のため)。
+    if let Some(key) = tavily_key {
+        if try_consume_tavily_quota() {
+            match search_tavily(query, max_results, &key).await {
+                Ok(results) if !results.is_empty() => return Ok(results),
+                Ok(_) => errors.push("tavily: 0 results".to_string()),
+                Err(err) => errors.push(format!("tavily: {err:#}")),
+            }
+        } else {
+            errors.push(format!("tavily: today's safe daily quota exhausted ({TAVILY_SAFE_DAILY_LIMIT}/day, derived from the {TAVILY_FREE_MONTHLY_LIMIT}/month free tier) — resets automatically tomorrow"));
+        }
+    }
+    if let Some(key) = exa_key {
+        if try_consume_exa_quota() {
+            match search_exa(query, max_results, &key).await {
+                Ok(results) if !results.is_empty() => return Ok(results),
+                Ok(_) => errors.push("exa: 0 results".to_string()),
+                Err(err) => errors.push(format!("exa: {err:#}")),
+            }
+        } else {
+            errors.push(format!(
+                "exa: today's safe daily quota exhausted ({EXA_SAFE_DAILY_LIMIT}/day, derived from the ~{EXA_FREE_MONTHLY_REQUESTS_APPROX}/month recurring free credit) — resets automatically tomorrow"
+            ));
         }
     }
     if let Some(key) = brave_key {
@@ -418,6 +478,138 @@ pub async fn search_serpapi_localized(query: &str, max_results: u8, api_key: &st
         .collect())
 }
 
+fn read_tavily_key() -> Option<String> {
+    let key = std::env::var("ARUARU_LLM_TAVILY_KEY").ok()?;
+    let key = key.trim().to_string();
+    if key.is_empty() { None } else { Some(key) }
+}
+
+const TAVILY_ENDPOINT: &str = "https://api.tavily.com/search";
+
+#[derive(Debug, Deserialize)]
+struct TavilyResponse {
+    #[serde(default)]
+    results: Vec<TavilyItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TavilyItem {
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    content: String,
+    #[serde(default)]
+    url: String,
+}
+
+/// **Tavily**(2026-09-23新設、ユーザー指示「Tavily/Exaも登録して
+/// open-englishなどで使用したい」への対応)。AIエージェント/RAG向けに
+/// 最適化された検索API——クレジットカード登録不要で月1,000クレジットの
+/// 無料枠があり、Basic検索(`search_depth: "basic"`、本関数が使う方)は
+/// 1回1クレジット消費(Advanced検索は2クレジットのためコスト面で使わない)。
+/// `ARUARU_LLM_TAVILY_KEY`はユーザー自身が[tavily.com](https://www.tavily.com/)
+/// で取得する必要があり、このリポジトリはキーを一切保持・同梱しない。
+pub async fn search_tavily(query: &str, max_results: u8, api_key: &str) -> Result<Vec<SearchResult>> {
+    if query.trim().is_empty() {
+        bail!("search query must not be empty");
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .context("failed to build reqwest client for Tavily")?;
+    let res = client
+        .post(TAVILY_ENDPOINT)
+        .json(&serde_json::json!({
+            "api_key": api_key,
+            "query": query,
+            "search_depth": "basic",
+            "max_results": max_results.clamp(1, 10),
+        }))
+        .send()
+        .await
+        .context("Tavily request failed")?;
+    if !res.status().is_success() {
+        let status = res.status();
+        let body = res.text().await.unwrap_or_default();
+        let body: String = body.chars().take(300).collect();
+        bail!("Tavily returned HTTP {status}: {body}");
+    }
+    let parsed: TavilyResponse = res.json().await.context("failed to parse Tavily response")?;
+    Ok(parsed
+        .results
+        .into_iter()
+        .take(max_results as usize)
+        .map(|i| SearchResult { title: i.title, snippet: i.content, link: i.url })
+        .collect())
+}
+
+fn read_exa_key() -> Option<String> {
+    let key = std::env::var("ARUARU_LLM_EXA_KEY").ok()?;
+    let key = key.trim().to_string();
+    if key.is_empty() { None } else { Some(key) }
+}
+
+const EXA_ENDPOINT: &str = "https://api.exa.ai/search";
+
+#[derive(Debug, Deserialize)]
+struct ExaResponse {
+    #[serde(default)]
+    results: Vec<ExaItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ExaItem {
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    text: String,
+}
+
+/// **Exa**(旧Metaphor、2026-09-23新設)。キーワード一致ではなく意味
+/// (セマンティック)ベースの検索を行うニューラル検索エンジン。新規登録時に
+/// $20ぶんの無料クレジット(使い切り型ボーナス)に加え、毎月$10ぶんが
+/// 自動的に再付与される——本モジュールの日割り上限計算は、いずれ尽きる
+/// $20ボーナスではなく継続的な$10/月の方だけを根拠にしている(正直な開示)。
+/// `contents.text`を小さめの文字数上限で要求し、スニペット代わりに使う
+/// (本文全体を取得するとクレジット消費が増えるため最小限に絞る)。
+/// `ARUARU_LLM_EXA_KEY`はユーザー自身が[exa.ai](https://exa.ai/)で取得する
+/// 必要があり、このリポジトリはキーを一切保持・同梱しない。
+pub async fn search_exa(query: &str, max_results: u8, api_key: &str) -> Result<Vec<SearchResult>> {
+    if query.trim().is_empty() {
+        bail!("search query must not be empty");
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .context("failed to build reqwest client for Exa")?;
+    let res = client
+        .post(EXA_ENDPOINT)
+        .header("x-api-key", api_key)
+        .json(&serde_json::json!({
+            "query": query,
+            "numResults": max_results.clamp(1, 10),
+            "contents": {"text": {"maxCharacters": 300}},
+        }))
+        .send()
+        .await
+        .context("Exa request failed")?;
+    if !res.status().is_success() {
+        let status = res.status();
+        let body = res.text().await.unwrap_or_default();
+        let body: String = body.chars().take(300).collect();
+        bail!("Exa returned HTTP {status}: {body}");
+    }
+    let parsed: ExaResponse = res.json().await.context("failed to parse Exa response")?;
+    Ok(parsed
+        .results
+        .into_iter()
+        .take(max_results as usize)
+        .map(|i| SearchResult { title: i.title, snippet: i.text, link: i.url })
+        .collect())
+}
+
 /// `search()`と同じ検索処理だが、プロセス全体で共有される
 /// `read_credentials()`(環境変数/`POST /v1/settings/google-search`で
 /// 設定されたグローバルな認証情報)を一切参照・消費しない版
@@ -535,13 +727,15 @@ mod tests {
     fn is_configured_false_when_env_vars_absent() {
         let _guard = ENV_TEST_LOCK.lock().unwrap();
         // 実行環境の環境変数を汚さないよう、既存の値を保存・復元する。
-        // 2026-09-23拡張: SerpApiもis_configured()の判定対象になったため、
-        // 同様に一時退避・復元する。
+        // 2026-09-23拡張: SerpApi/Tavily/Exaもis_configured()の判定対象に
+        // なったため、同様に一時退避・復元する。
         let keys = [
             "ARUARU_LLM_GOOGLE_SEARCH_API_KEY",
             "ARUARU_LLM_GOOGLE_SEARCH_CX",
             "ARUARU_LLM_BRAVE_SEARCH_API_KEY",
             "ARUARU_LLM_SERPAPI_KEY",
+            "ARUARU_LLM_TAVILY_KEY",
+            "ARUARU_LLM_EXA_KEY",
         ];
         let saved: Vec<Option<String>> = keys.iter().map(|k| std::env::var(k).ok()).collect();
         for k in keys {
@@ -591,6 +785,35 @@ mod tests {
     }
 
     #[test]
+    fn tavily_response_parses_results() {
+        let json = r#"{"results":[{"title":"T1","content":"C1","url":"http://a"},{"title":"T2","content":"C2","url":"http://b"}]}"#;
+        let parsed: TavilyResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.results.len(), 2);
+        assert_eq!(parsed.results[0].title, "T1");
+        assert_eq!(parsed.results[1].url, "http://b");
+    }
+
+    #[test]
+    fn tavily_response_missing_results_defaults_to_empty() {
+        let parsed: TavilyResponse = serde_json::from_str("{}").unwrap();
+        assert!(parsed.results.is_empty());
+    }
+
+    #[test]
+    fn exa_response_parses_results() {
+        let json = r#"{"results":[{"title":"T1","url":"http://a","text":"snippet text"}]}"#;
+        let parsed: ExaResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.results.len(), 1);
+        assert_eq!(parsed.results[0].text, "snippet text");
+    }
+
+    #[test]
+    fn exa_response_missing_results_defaults_to_empty() {
+        let parsed: ExaResponse = serde_json::from_str("{}").unwrap();
+        assert!(parsed.results.is_empty());
+    }
+
+    #[test]
     fn consume_bucket_allows_up_to_limit_then_blocks() {
         let mut state = (0u64, 0u32);
         for _ in 0..3 {
@@ -614,6 +837,8 @@ mod tests {
             "ARUARU_LLM_GOOGLE_SEARCH_CX",
             "ARUARU_LLM_BRAVE_SEARCH_API_KEY",
             "ARUARU_LLM_SERPAPI_KEY",
+            "ARUARU_LLM_TAVILY_KEY",
+            "ARUARU_LLM_EXA_KEY",
         ];
         let saved: Vec<Option<String>> = keys.iter().map(|k| std::env::var(k).ok()).collect();
         for k in keys {
