@@ -4598,3 +4598,16 @@ Extended `news_query_for_country` to search in the local native language for Chi
 India/Ukraine/Israel intentionally stay in English per the user's own instructions (India: English is the de facto lingua franca; Ukraine: "if an English version exists"; Israel: the user judged Hebrew "too difficult and too minor").
 Switzerland is simplified to German (its most-spoken of four official languages) as a representative query.
 Collected news feeds naturally into the existing 8-day-stale archive mechanism (`prune_and_archive_stale_news` → `archive-news-to-github.sh`).
+
+## HANDOFF追記(2026-09-23、Google Custom Search廃止対応・ハイブリッド検索) / HANDOFF addendum (2026-09-23, Google Custom Search sunset workaround, hybrid search)
+
+**日本語**: Google Custom Search JSON APIが新規プロジェクトでHTTP 403(「This project does not have the access to Custom Search JSON API」)を返すようになった件、ユーザーが調査し原因判明:
+Googleが同APIの新規受付を停止し、2027-01-01に完全終了予定という仕様変更で、APIを有効化しても解決しない。対応として`src/web_search.rs`に**SerpApi**・**Bing Search API(Azure)**をBrave Searchに次ぐハイブリッド検索バックエンドとして追加した(`search_serpapi`/`search_bing`)。
+両者とも無料枠が**月単位**(SerpApi: 月100件、Bing Search API v7 F1プラン: 月1,000件)——既存のGoogle/共有検索カウンタ(1日100件)とは性質が異なるため、別途月単位でリセットする専用カウンタ(`SERPAPI_MONTHLY_COUNT`/`BING_MONTHLY_COUNT`)を新設した。
+**未設定・要ユーザー対応**: `ARUARU_LLM_SERPAPI_KEY`([serpapi.com](https://serpapi.com/)で取得)・`ARUARU_LLM_BING_SEARCH_API_KEY`([Azure Portal](https://portal.azure.com/)でBing Search v7リソース作成)は、このリポジトリには一切保持していない——VPSの`.env`等へユーザー自身が設定する必要がある(既存のGoogle/Braveキーと同じ運用、`feedback_keys_via_files_never_echo`メモ参照)。
+検索フォールバック順序: Brave → SerpApi → Bing → Google(Googleは動く場合があるため完全には外さず最後の候補として残した)。
+
+**English**: The user investigated why Google Custom Search JSON API started returning HTTP 403 ("This project does not have the access to Custom Search JSON API") even after enabling it, and found the root cause: Google has stopped accepting new Custom Search JSON API projects and is fully sunsetting it by 2027-01-01 — enabling the API in Cloud Console no longer helps. Added **SerpApi** and **Bing Search API (Azure)** as two more hybrid search backends in `src/web_search.rs` (`search_serpapi`/`search_bing`), inserted after Brave Search in the fallback chain.
+Both have **monthly** (not daily) free tiers (SerpApi: 100/month, Bing Search API v7 F1 plan: 1,000/month) — unlike the existing Google-shaped daily shared counter, so a separate monthly-reset quota tracker (`SERPAPI_MONTHLY_COUNT`/`BING_MONTHLY_COUNT`) was added.
+**Not configured yet — needs the user**: `ARUARU_LLM_SERPAPI_KEY` (from [serpapi.com](https://serpapi.com/)) and `ARUARU_LLM_BING_SEARCH_API_KEY` (from an Azure Bing Search v7 resource) are not held anywhere in this repo — the user needs to set them on the VPS's `.env`, same as the existing Google/Brave keys.
+Fallback order: Brave -> SerpApi -> Bing -> Google (Google is kept last since some existing/grandfathered projects reportedly still work).
