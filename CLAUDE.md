@@ -4611,3 +4611,11 @@ Googleが同APIの新規受付を停止し、2027-01-01に完全終了予定と�
 Both have **monthly** (not daily) free tiers (SerpApi: 100/month, Bing Search API v7 F1 plan: 1,000/month) — unlike the existing Google-shaped daily shared counter, so a separate monthly-reset quota tracker (`SERPAPI_MONTHLY_COUNT`/`BING_MONTHLY_COUNT`) was added.
 **Not configured yet — needs the user**: `ARUARU_LLM_SERPAPI_KEY` (from [serpapi.com](https://serpapi.com/)) and `ARUARU_LLM_BING_SEARCH_API_KEY` (from an Azure Bing Search v7 resource) are not held anywhere in this repo — the user needs to set them on the VPS's `.env`, same as the existing Google/Brave keys.
 Fallback order: Brave -> SerpApi -> Bing -> Google (Google is kept last since some existing/grandfathered projects reportedly still work).
+
+## HANDOFF追記(2026-09-23、Bing Search API廃止確認・SerpApi最優先化) / HANDOFF addendum (2026-09-23, Bing Search API confirmed retired, SerpApi promoted to top priority)
+
+**日本語**: ユーザーが実際にAzure PortalでBing Search v7リソースを作成しようとしたところ、Microsoftが2025-08-11付で同APIを完全廃止(新規リソース作成不可)していたことが判明。後継の「Grounding with Bing Search」はAIエージェント組み込み専用で、本モジュールのような「生の検索結果JSONをAPIキー単体で取得する」用途には利用規約上使えないため、実装済みだったBing統合コード(`search_bing`等)を全て削除した。
+検索フォールバック順序をユーザー指示により`SerpApi → Brave → Google`(SerpApiを最優先)へ変更。`ARUARU_LLM_SERPAPI_KEY`をVPSへ実際に設定し、日本・ドイツのニュース取得で実データ(NHKニュース・tagesschau.de等)を実機確認済み。
+
+**English**: When the user actually tried to create a Bing Search v7 resource in Azure Portal, it turned out Microsoft fully retired the API on 2025-08-11 (no new resources can be created). Its replacement, "Grounding with Bing Search," is built for AI-agent-embedded grounding and its terms don't allow standalone "fetch raw search-result JSON with just an API key" usage like this module needs, so all the Bing integration code (`search_bing`, etc.) that had been implemented was removed.
+Per user instruction, the search fallback order is now `SerpApi -> Brave -> Google` (SerpApi first). `ARUARU_LLM_SERPAPI_KEY` was actually configured on the VPS and verified live with real Japan/Germany news results (NHK News, tagesschau.de, etc.).
