@@ -649,7 +649,14 @@ Answer in the same language as the user's question, naturally and clearly, like 
 static HYBRID_COOLDOWN: std::sync::Mutex<Option<HashMap<Provider, std::time::Instant>>> = std::sync::Mutex::new(None);
 
 fn hybrid_size() -> usize {
-    std::env::var("ARUARU_LLM_HYBRID_SIZE").ok().and_then(|v| v.trim().parse::<usize>().ok()).filter(|n| *n >= 1).unwrap_or(2)
+    // 2026-09-24変更(ユーザー指示「初期はGeminiとGrokを同時に使う用に
+    // なっていますが、もったいないので、Geminiから一個ずつ使用するように
+    // 仕様を変更しましょう」): 既定値を2(同時2社)→1(1社ずつ、優先順の
+    // 上位から)へ変更。無料枠を同時消費するのは無駄で、1社が使えなくなって
+    // 初めて次の候補へ移る方が無料枠を長持ちさせられる。複数社を本当に
+    // 同時併用したい場合は引き続き`ARUARU_LLM_HYBRID_SIZE`で明示的に
+    // 指定できる(既存の仕組みは維持)。
+    std::env::var("ARUARU_LLM_HYBRID_SIZE").ok().and_then(|v| v.trim().parse::<usize>().ok()).filter(|n| *n >= 1).unwrap_or(1)
 }
 
 fn in_cooldown(provider: Provider) -> bool {
@@ -820,8 +827,19 @@ pub async fn complete_hybrid_with(prompt: &str, selected: &[Provider]) -> Hybrid
 mod tests {
     use super::*;
 
+    /// `RUNTIME_KEYS`/`HYBRID_COOLDOWN`はプロセス全体で共有されるグローバル
+    /// 状態であり、`cargo test`はデフォルトで並列実行するため、これらを
+    /// 触るテスト同士が競合するとフラーキーになる(2026-09-24実際に踏んだ:
+    /// `configured_providers_reflects_runtime_keys`/
+    /// `provider_auto_recovers_once_cooldown_instant_has_passed`が並列実行で
+    /// 稀に失敗、単体実行では常に成功することを確認済み——`web_search.rs`の
+    /// `ENV_TEST_LOCK`と同じ根本原因・同じ対処)。これらを触るテストは
+    /// このロックを取ってから行う。
+    static PROVIDER_STATE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn is_configured_false_when_env_and_runtime_absent() {
+        let _guard = PROVIDER_STATE_TEST_LOCK.lock().unwrap();
         clear_runtime_keys();
         let saved = std::env::var("ARUARU_LLM_OPENAI_API_KEY").ok();
         std::env::remove_var("ARUARU_LLM_OPENAI_API_KEY");
@@ -835,6 +853,7 @@ mod tests {
 
     #[test]
     fn set_and_clear_runtime_key_round_trips() {
+        let _guard = PROVIDER_STATE_TEST_LOCK.lock().unwrap();
         clear_runtime_keys();
         assert!(!is_configured(Provider::Claude));
         set_runtime_key(Provider::Claude, "sk-test".to_string());
@@ -845,6 +864,7 @@ mod tests {
 
     #[test]
     fn configured_providers_reflects_runtime_keys() {
+        let _guard = PROVIDER_STATE_TEST_LOCK.lock().unwrap();
         clear_runtime_keys();
         set_runtime_key(Provider::Gemini, "test-key".to_string());
         let configured = configured_providers();
@@ -885,6 +905,7 @@ mod tests {
     /// Geminiなどを自動で再度使用可能に」): 枠切れ直後は約24時間お休みすることを確認する。
     #[test]
     fn quota_exceeded_cooldown_is_about_one_day() {
+        let _guard = PROVIDER_STATE_TEST_LOCK.lock().unwrap();
         {
             let mut guard = HYBRID_COOLDOWN.lock().expect("lock");
             guard.get_or_insert_with(HashMap::new).remove(&Provider::Gemini);
@@ -902,6 +923,7 @@ mod tests {
     /// しなくても、リセット後は自動的にGeminiなどが再度使われる、という仕組みそのものの検証)。
     #[test]
     fn provider_auto_recovers_once_cooldown_instant_has_passed() {
+        let _guard = PROVIDER_STATE_TEST_LOCK.lock().unwrap();
         clear_runtime_keys();
         set_runtime_key(Provider::Gemini, "test-key".to_string());
         // 枠切れ直後: お休み中なので候補から外れている。
