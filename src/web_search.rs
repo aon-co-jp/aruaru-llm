@@ -709,13 +709,13 @@ struct JinaItem {
 /// APIキーを取得し直す」運用になる(`JINA_SAFE_DAILY_LIMIT`は月次リセット
 /// を前提にしていない、あくまで消費ペースの目安)。
 ///
-/// **正直な開示(未検証)**: このAPIは無料枠であってもAPIキー無しでは
-/// `401 AuthenticationRequiredError`を返すことを実機で確認済み(2026-09-23、
-/// `curl`による直接検証)。一方、実際に有効なAPIキーでの成功レスポンスの
-/// 正確なJSONフィールド名までは検証できていない(公式ドキュメントの記述
-/// 「URL・タイトル・本文・タイムスタンプを含むJSON」を根拠に
-/// `title`/`url`/`content`(無ければ`description`)という妥当な推測で実装した)。
-/// 実際のAPIキーが用意でき次第、実機で検証してこのコメントを更新する。
+/// **実機検証済み(2026-09-23)**: このAPIは無料枠であってもAPIキー無しでは
+/// `401 AuthenticationRequiredError`を返すことを確認済み。実際に有効な
+/// APIキーで`curl "https://s.jina.ai/?q=..."`を叩き、
+/// `{"code":200,"status":20000,"data":[{"title":...,"url":...,
+/// "description":...,"date":...,"content":...}]}`という形を実際に確認した
+/// ——実装時の推測(`title`/`url`/`content`、無ければ`description`)が
+/// そのまま正しかった。
 pub async fn search_jina(query: &str, max_results: u8, api_key: &str) -> Result<Vec<SearchResult>> {
     if query.trim().is_empty() {
         bail!("search query must not be empty");
