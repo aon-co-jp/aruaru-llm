@@ -579,7 +579,7 @@ struct ExaItem {
     #[serde(default)]
     url: String,
     #[serde(default)]
-    text: String,
+    highlights: Vec<String>,
 }
 
 /// **Exa**(旧Metaphor、2026-09-23新設)。キーワード一致ではなく意味
@@ -587,10 +587,17 @@ struct ExaItem {
 /// $20ぶんの無料クレジット(使い切り型ボーナス)に加え、毎月$10ぶんが
 /// 自動的に再付与される——本モジュールの日割り上限計算は、いずれ尽きる
 /// $20ボーナスではなく継続的な$10/月の方だけを根拠にしている(正直な開示)。
-/// `contents.text`を小さめの文字数上限で要求し、スニペット代わりに使う
-/// (本文全体を取得するとクレジット消費が増えるため最小限に絞る)。
-/// `ARUARU_LLM_EXA_KEY`はユーザー自身が[exa.ai](https://exa.ai/)で取得する
-/// 必要があり、このリポジトリはキーを一切保持・同梱しない。
+///
+/// **2026-09-23修正**: Exa公式の`build-with-exa`スキル(`npx skills use
+/// "https://github.com/exa-labs/agent-skills" --skill "build-with-exa"`、
+/// ユーザー指示により参照)によると、スニペット抽出の推奨方式は
+/// `contents.text`+`maxCharacters`ではなく`contents.highlights: true`
+/// (「ほぼ全てのタスクでbare `highlights: true`を使うべき、
+/// `maxCharacters`は明示的な予算要件がある場合のみ」と明記)。当初の実装は
+/// この推奨に反していたため、`highlights: true`へ修正し、レスポンスの
+/// `results[].highlights`(文字列配列)を結合してスニペットとして使う形へ
+/// 直した。`ARUARU_LLM_EXA_KEY`はユーザー自身が[exa.ai](https://exa.ai/)で
+/// 取得する必要があり、このリポジトリはキーを一切保持・同梱しない。
 pub async fn search_exa(query: &str, max_results: u8, api_key: &str) -> Result<Vec<SearchResult>> {
     if query.trim().is_empty() {
         bail!("search query must not be empty");
@@ -604,8 +611,9 @@ pub async fn search_exa(query: &str, max_results: u8, api_key: &str) -> Result<V
         .header("x-api-key", api_key)
         .json(&serde_json::json!({
             "query": query,
+            "type": "auto",
             "numResults": max_results.clamp(1, 10),
-            "contents": {"text": {"maxCharacters": 300}},
+            "contents": {"highlights": true},
         }))
         .send()
         .await
@@ -621,7 +629,7 @@ pub async fn search_exa(query: &str, max_results: u8, api_key: &str) -> Result<V
         .results
         .into_iter()
         .take(max_results as usize)
-        .map(|i| SearchResult { title: i.title, snippet: i.text, link: i.url })
+        .map(|i| SearchResult { title: i.title, snippet: i.highlights.join(" … "), link: i.url })
         .collect())
 }
 
@@ -816,10 +824,10 @@ mod tests {
 
     #[test]
     fn exa_response_parses_results() {
-        let json = r#"{"results":[{"title":"T1","url":"http://a","text":"snippet text"}]}"#;
+        let json = r#"{"results":[{"title":"T1","url":"http://a","highlights":["highlight one","highlight two"]}]}"#;
         let parsed: ExaResponse = serde_json::from_str(json).unwrap();
         assert_eq!(parsed.results.len(), 1);
-        assert_eq!(parsed.results[0].text, "snippet text");
+        assert_eq!(parsed.results[0].highlights, vec!["highlight one", "highlight two"]);
     }
 
     #[test]
