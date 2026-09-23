@@ -220,6 +220,20 @@ fn read_credentials() -> Option<(String, String)> {
 /// 共有キー全体の1日上限(`SHARED_SEARCH_DAILY_LIMIT`)は、どの検索サービスを
 /// 使っても1回の検索につき1回として数える。
 pub async fn search(query: &str, max_results: u8) -> Result<Vec<SearchResult>> {
+    search_with_locale(query, max_results, None, None).await
+}
+
+/// [`search`]のロケール指定版(2026-09-23新設、ユーザー報告「フランスの
+/// ニュースを検索したら無関係な結果(学校の話)が返ってきた」への対応)。
+///
+/// **根本原因**: SerpApi/Bingは`gl`(国)/`hl`(言語)パラメータを渡さないと
+/// 既定でアメリカ・英語向けのインデックスを検索してしまい、フランス語の
+/// クエリ文字列を渡しても関連性の低い結果になりやすい(実機で
+/// "France actualités aujourd'hui principales" が学校紹介動画を返した事例で
+/// 確認済み)。`news_geo.rs`の国別ニュース取得はこちらを使い、`gl`/`hl`で
+/// Google/SerpApi/Bing側に明示的に地域・言語を伝える。`search()`(一般的な
+/// Q&A用途、国の概念が無い)は従来通り`gl`/`hl`無しのまま。
+pub async fn search_with_locale(query: &str, max_results: u8, gl: Option<&str>, hl: Option<&str>) -> Result<Vec<SearchResult>> {
     let brave_key = read_brave_key();
     let serpapi_key = read_serpapi_key();
     let bing_key = read_bing_key();
@@ -253,7 +267,7 @@ pub async fn search(query: &str, max_results: u8) -> Result<Vec<SearchResult>> {
     // として残す(正直な開示: 動作は保証しない)。
     if let Some(key) = serpapi_key {
         if try_consume_serpapi_quota() {
-            match search_serpapi(query, max_results, &key).await {
+            match search_serpapi_localized(query, max_results, &key, gl, hl).await {
                 Ok(results) if !results.is_empty() => return Ok(results),
                 Ok(_) => errors.push("serpapi: 0 results".to_string()),
                 Err(err) => errors.push(format!("serpapi: {err:#}")),
@@ -264,7 +278,7 @@ pub async fn search(query: &str, max_results: u8) -> Result<Vec<SearchResult>> {
     }
     if let Some(key) = bing_key {
         if try_consume_bing_quota() {
-            match search_bing(query, max_results, &key).await {
+            match search_bing_localized(query, max_results, &key, gl).await {
                 Ok(results) if !results.is_empty() => return Ok(results),
                 Ok(_) => errors.push("bing: 0 results".to_string()),
                 Err(err) => errors.push(format!("bing: {err:#}")),
@@ -385,6 +399,14 @@ struct SerpApiItem {
 /// で取得する必要があり、このリポジトリはキーを一切保持・同梱しない——既存の
 /// Google/Brave同様の方針)。
 pub async fn search_serpapi(query: &str, max_results: u8, api_key: &str) -> Result<Vec<SearchResult>> {
+    search_serpapi_localized(query, max_results, api_key, None, None).await
+}
+
+/// [`search_serpapi`]のロケール指定版。`gl`(2文字国コード、例: "fr")・
+/// `hl`(言語コード、例: "fr")を渡すと、SerpApi(実体はGoogle検索)が
+/// その国・言語向けの結果を返すようになる(2026-09-23新設、
+/// [`search_with_locale`]のdoc参照)。
+pub async fn search_serpapi_localized(query: &str, max_results: u8, api_key: &str, gl: Option<&str>, hl: Option<&str>) -> Result<Vec<SearchResult>> {
     if query.trim().is_empty() {
         bail!("search query must not be empty");
     }
@@ -392,12 +414,19 @@ pub async fn search_serpapi(query: &str, max_results: u8, api_key: &str) -> Resu
         .timeout(std::time::Duration::from_secs(8))
         .build()
         .context("failed to build reqwest client for SerpApi")?;
-    let res = client
-        .get(SERPAPI_ENDPOINT)
-        .query(&[("engine", "google"), ("q", query), ("num", &max_results.clamp(1, 10).to_string()), ("api_key", api_key)])
-        .send()
-        .await
-        .context("SerpApi request failed")?;
+    let mut params = vec![
+        ("engine".to_string(), "google".to_string()),
+        ("q".to_string(), query.to_string()),
+        ("num".to_string(), max_results.clamp(1, 10).to_string()),
+        ("api_key".to_string(), api_key.to_string()),
+    ];
+    if let Some(gl) = gl {
+        params.push(("gl".to_string(), gl.to_string()));
+    }
+    if let Some(hl) = hl {
+        params.push(("hl".to_string(), hl.to_string()));
+    }
+    let res = client.get(SERPAPI_ENDPOINT).query(&params).send().await.context("SerpApi request failed")?;
     if !res.status().is_success() {
         let status = res.status();
         let body = res.text().await.unwrap_or_default();
@@ -444,6 +473,16 @@ struct BingItem {
 /// [Azure Portal](https://portal.azure.com/)でBing Search v7リソースを
 /// 作成して取得する必要があり、このリポジトリはキーを一切保持・同梱しない。
 pub async fn search_bing(query: &str, max_results: u8, api_key: &str) -> Result<Vec<SearchResult>> {
+    search_bing_localized(query, max_results, api_key, None).await
+}
+
+/// [`search_bing`]のロケール指定版。`market`(例: "fr-FR")を渡すと
+/// Bing側がその地域向けの結果を優先する(2026-09-23新設)。
+/// **簡略化**: 呼び出し側は`gl`(2文字国コード、例: "fr")のみ渡せばよく、
+/// ここで`{gl}-{GL}`形式のBing market コードへ変換する(完全な地域
+/// バリエーション〈en-US vs en-GB等〉までは作り込まない、既存の
+/// 「国名→クエリ言語」マッピングと同程度の簡略化)。
+pub async fn search_bing_localized(query: &str, max_results: u8, api_key: &str, gl: Option<&str>) -> Result<Vec<SearchResult>> {
     if query.trim().is_empty() {
         bail!("search query must not be empty");
     }
@@ -451,10 +490,14 @@ pub async fn search_bing(query: &str, max_results: u8, api_key: &str) -> Result<
         .timeout(std::time::Duration::from_secs(8))
         .build()
         .context("failed to build reqwest client for Bing Search")?;
+    let mut params = vec![("q".to_string(), query.to_string()), ("count".to_string(), max_results.clamp(1, 10).to_string())];
+    if let Some(gl) = gl {
+        params.push(("mkt".to_string(), format!("{gl}-{}", gl.to_uppercase())));
+    }
     let res = client
         .get(BING_ENDPOINT)
         .header("Ocp-Apim-Subscription-Key", api_key)
-        .query(&[("q", query), ("count", &max_results.clamp(1, 10).to_string())])
+        .query(&params)
         .send()
         .await
         .context("Bing Search request failed")?;

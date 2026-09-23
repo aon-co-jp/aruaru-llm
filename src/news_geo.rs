@@ -191,6 +191,47 @@ pub(crate) fn news_query_for_country(country: &str) -> String {
     }
 }
 
+/// 国名から`(gl, hl)`(SerpApi/Bingの地域・言語ヒント)を返す
+/// (2026-09-23新設、実機で発見したバグの修正: `gl`/`hl`無しで検索すると
+/// SerpApi/Bingが既定でアメリカ・英語向けの結果を返し、フランス語の
+/// クエリ文字列を渡しても無関係な結果〈学校紹介動画等〉になっていた)。
+/// `(Brazil (English)`のような疑似国名は素の国名部分だけを見る。
+fn locale_for_country(country: &str) -> (Option<&'static str>, Option<&'static str>) {
+    let base = country.split(" (").next().unwrap_or(country);
+    if country.ends_with("(English)") {
+        let gl = locale_for_country(base).0;
+        return (gl, Some("en"));
+    }
+    if country.ends_with("(Japanese)") {
+        let gl = locale_for_country(base).0;
+        return (gl, Some("ja"));
+    }
+    match base {
+        "Japan" => (Some("jp"), Some("ja")),
+        "United States" => (Some("us"), Some("en")),
+        "China" => (Some("cn"), Some("zh-cn")),
+        "Taiwan" => (Some("tw"), Some("zh-tw")),
+        "South Korea" => (Some("kr"), Some("ko")),
+        "Philippines" => (Some("ph"), Some("en")),
+        "Cambodia" => (Some("kh"), Some("en")),
+        "Thailand" => (Some("th"), Some("th")),
+        "Malaysia" => (Some("my"), Some("en")),
+        "United Kingdom" => (Some("uk"), Some("en")),
+        "Germany" => (Some("de"), Some("de")),
+        "Austria" => (Some("at"), Some("de")),
+        "Italy" => (Some("it"), Some("it")),
+        "France" => (Some("fr"), Some("fr")),
+        "Switzerland" => (Some("ch"), Some("de")),
+        "India" => (Some("in"), Some("en")),
+        "Russia" => (Some("ru"), Some("ru")),
+        "Ukraine" => (Some("ua"), Some("en")),
+        "Israel" => (Some("il"), Some("en")),
+        "Brazil" => (Some("br"), Some("pt")),
+        "Myanmar" => (Some("mm"), Some("en")),
+        _ => (None, None),
+    }
+}
+
 /// `fetch_for_country_cached`のキャッシュ有効期間。この間は同じ国への再検索をせず、
 /// 保存済みのダイジェストをそのまま返す(2026-09-22追加、ユーザー指示「今日のニュースは？
 /// の様なよくある質問などはGoogle検索後に重要と思える内容をダイジェストにしてDATABASE化
@@ -374,8 +415,9 @@ pub async fn fetch_for_country(country: &str) -> NewsDb {
         );
     } else {
         let query = news_query_for_country(country);
+        let (gl, hl) = locale_for_country(country);
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs()).unwrap_or(0);
-        match web_search::search(&query, 8).await {
+        match web_search::search_with_locale(&query, 8, gl, hl).await {
             Ok(results) => {
                 db.items = results.into_iter().map(|r: SearchResult| NewsItem { title: r.title, snippet: r.snippet, link: r.link, retrieved_at_unix: now }).collect();
             }
@@ -416,8 +458,9 @@ pub async fn refresh() -> NewsDb {
             );
         } else {
             let query = news_query_for_country(&c.country);
+            let (gl, hl) = locale_for_country(&c.country);
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs()).unwrap_or(0);
-            match web_search::search(&query, 8).await {
+            match web_search::search_with_locale(&query, 8, gl, hl).await {
                 Ok(results) => {
                     db.items = results.into_iter().map(|r: SearchResult| NewsItem { title: r.title, snippet: r.snippet, link: r.link, retrieved_at_unix: now }).collect();
                 }
@@ -599,6 +642,21 @@ mod tests {
         assert_eq!(news_query_for_country("Russia"), "Россия новости сегодня главные");
         // Germany/Austriaは同じドイツ語クエリを共有する。
         assert_eq!(news_query_for_country("Germany"), news_query_for_country("Austria"));
+    }
+
+    #[test]
+    fn locale_for_country_returns_correct_gl_hl() {
+        assert_eq!(locale_for_country("France"), (Some("fr"), Some("fr")));
+        assert_eq!(locale_for_country("Japan"), (Some("jp"), Some("ja")));
+        assert_eq!(locale_for_country("Unknown Country"), (None, None));
+    }
+
+    #[test]
+    fn locale_for_country_handles_english_japanese_suffix_variants() {
+        assert_eq!(locale_for_country("Brazil"), (Some("br"), Some("pt")));
+        assert_eq!(locale_for_country("Brazil (English)"), (Some("br"), Some("en")));
+        assert_eq!(locale_for_country("Brazil (Japanese)"), (Some("br"), Some("ja")));
+        assert_eq!(locale_for_country("Myanmar (English)"), (Some("mm"), Some("en")));
     }
 
     #[test]
