@@ -287,7 +287,10 @@ pub async fn search_with_locale(query: &str, max_results: u8, gl: Option<&str>, 
     if let Some(key) = serpapi_key {
         if try_consume_serpapi_quota() {
             match search_serpapi_localized(query, max_results, &key, gl, hl).await {
-                Ok(results) if !results.is_empty() => return Ok(results),
+                Ok(results) if !results.is_empty() => {
+                    tracing::info!(backend = "serpapi", query, count = results.len(), "web_search: served by");
+                    return Ok(results);
+                }
                 Ok(_) => errors.push("serpapi: 0 results".to_string()),
                 Err(err) => errors.push(format!("serpapi: {err:#}")),
             }
@@ -301,7 +304,10 @@ pub async fn search_with_locale(query: &str, max_results: u8, gl: Option<&str>, 
     if let Some(key) = tavily_key {
         if try_consume_tavily_quota() {
             match search_tavily(query, max_results, &key).await {
-                Ok(results) if !results.is_empty() => return Ok(results),
+                Ok(results) if !results.is_empty() => {
+                    tracing::info!(backend = "tavily", query, count = results.len(), "web_search: served by");
+                    return Ok(results);
+                }
                 Ok(_) => errors.push("tavily: 0 results".to_string()),
                 Err(err) => errors.push(format!("tavily: {err:#}")),
             }
@@ -312,7 +318,10 @@ pub async fn search_with_locale(query: &str, max_results: u8, gl: Option<&str>, 
     if let Some(key) = exa_key {
         if try_consume_exa_quota() {
             match search_exa(query, max_results, &key).await {
-                Ok(results) if !results.is_empty() => return Ok(results),
+                Ok(results) if !results.is_empty() => {
+                    tracing::info!(backend = "exa", query, count = results.len(), "web_search: served by");
+                    return Ok(results);
+                }
                 Ok(_) => errors.push("exa: 0 results".to_string()),
                 Err(err) => errors.push(format!("exa: {err:#}")),
             }
@@ -324,14 +333,20 @@ pub async fn search_with_locale(query: &str, max_results: u8, gl: Option<&str>, 
     }
     if let Some(key) = brave_key {
         match search_brave(query, max_results, &key).await {
-            Ok(results) if !results.is_empty() => return Ok(results),
+            Ok(results) if !results.is_empty() => {
+                tracing::info!(backend = "brave", query, count = results.len(), "web_search: served by");
+                return Ok(results);
+            }
             Ok(_) => errors.push("brave: 0 results".to_string()),
             Err(err) => errors.push(format!("brave: {err:#}")),
         }
     }
     if let Some((api_key, cx)) = google {
         match search_with_credentials(query, max_results, &api_key, &cx).await {
-            Ok(results) => return Ok(results),
+            Ok(results) => {
+                tracing::info!(backend = "google", query, count = results.len(), "web_search: served by");
+                return Ok(results);
+            }
             Err(err) => errors.push(format!("google: {err:#}")),
         }
     }
