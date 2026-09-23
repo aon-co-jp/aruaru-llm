@@ -1,0 +1,10 @@
+# VPS(conoha)の /etc/systemd/system/check-search-quota-terms.service へ配置する。
+# check-search-quota-terms.timerとセットで使う(2026-09-23新設)。
+[Unit]
+Description=Daily crawl of search API pricing/free-tier pages to detect changes
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/aruaru-llm
+ExecStart=/root/aruaru-llm/scripts/check-search-quota-terms.sh

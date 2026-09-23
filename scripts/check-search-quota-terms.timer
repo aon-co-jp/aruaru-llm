@@ -1,0 +1,16 @@
+# VPS(conoha)の /etc/systemd/system/check-search-quota-terms.timer へ配置する。
+# 毎朝07:00(サーバーのタイムゾーン設定次第)に一度、
+# check-search-quota-terms.serviceを起動する(2026-09-23新設、ユーザー指示
+# 「無料枠の仕様変更やルール改正などを毎朝自動クロールで自動で情報収集
+# して」への対応)。他のタイマー(daily-news-collect 02:00、
+# news-archive-push 03:15)より後にして負荷が重ならないようにしている。
+[Unit]
+Description=Daily morning trigger for check-search-quota-terms.service
+
+[Timer]
+OnCalendar=*-*-* 07:00:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
