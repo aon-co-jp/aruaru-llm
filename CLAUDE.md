@@ -4580,3 +4580,21 @@ Gemini失敗→Mistral繰り上げ(Groq+Mistral)、2回目以降はGeminiを最�
 (4) `news_archive_search`/`parse_news_archive_markdown` in `open-english/server/src/main.rs` (new, `GET /v1/public/news/archive-search?q=<keyword>`): reads the archived Markdown on demand and does substring matching against tags/country/title/snippet (deliberately no full-text search index; verified with 5 passing unit tests).
 (5) `archiveNewsSuffix`/`mentionsPastNews` in `open-english/web/app.js` (new): the question form automatically searches the archive when (a) the latest-news fetch fails, or (b) the user explicitly asks for past news ("last week's", "past", etc.). Both paths verified with mocked browser tests.
 **Not done yet**: actually installing/enabling the systemd units on the VPS, and a real end-to-end check with live archived data (none exists yet since no news has reached the 8-day threshold).
+
+## HANDOFF追記(2026-09-23、世界主要国ニュースの毎日自動収集) / HANDOFF addendum (2026-09-23, daily multi-country news collection)
+
+**日本語**: ユーザー指示「主要な言語を網羅...毎日DATABASE化して」への対応として、`scripts/daily-news-collect.sh`(新設、systemdタイマーで毎日02:00に実行)を追加した。
+日本・アメリカ・中国・台湾・韓国・フィリピン・カンボジア・タイ・マレーシア・イギリス・ドイツ・イタリア・フランス・オーストリア・スイス・インド・ロシア・ウクライナ・イスラエルの19ヶ国を対象に、既存の`GET /v1/news/for?country=...`を順に叩き、`news_by_country.json`(3時間TTLキャッシュ)へ保存させる。
+`news_query_for_country`を拡張し、中国語(簡体字/繁体字)・韓国語・フィリピン語(タガログ語)・クメール語・タイ語・マレー語・ドイツ語・イタリア語・フランス語・ロシア語で現地語検索するようにした(単体テスト6件追加、全green)。
+**意図的に対象外**: 北朝鮮。自由な報道機関が存在せず、Google検索結果は事実上すべて国外(主に英語圏)からの報道になるため、「北朝鮮の現地ニュース」として提示するのは誤解を招くと判断し、ユーザーへ別途報告した上で対象国リストから外した。
+インド・ウクライナ・イスラエルは、ユーザー指示により意図的に英語のまま(インドは英語が事実上の共通語、ウクライナは「英語版があれば」という条件、イスラエルはヘブライ語が「難しくてマイナーすぎる」というユーザー自身の判断)。
+スイスは公用語4つ(独仏伊ロマンシュ)のうち話者数最多のドイツ語を代表とする簡略化。
+収集したニュースは、既存の8日超過アーカイブ機構(`prune_and_archive_stale_news`→`archive-news-to-github.sh`)へそのままつながる。
+
+**English**: To satisfy "cover the major languages... turn it into a daily database," added `scripts/daily-news-collect.sh` (new, run daily at 02:00 via a systemd timer).
+It calls the existing `GET /v1/news/for?country=...` for 19 countries — Japan, United States, China, Taiwan, South Korea, Philippines, Cambodia, Thailand, Malaysia, United Kingdom, Germany, Italy, France, Austria, Switzerland, India, Russia, Ukraine, Israel — populating `news_by_country.json` (3h TTL cache).
+Extended `news_query_for_country` to search in the local native language for Chinese (simplified/traditional), Korean, Filipino (Tagalog), Khmer, Thai, Malay, German, Italian, French, and Russian (6 new unit tests, all passing).
+**Deliberately excluded**: North Korea. No free press exists there, so Google search results would effectively all be foreign (mostly English-language) reporting — presenting that as "North Korea's local news" would be misleading. Reported this decision to the user separately rather than silently including or excluding it.
+India/Ukraine/Israel intentionally stay in English per the user's own instructions (India: English is the de facto lingua franca; Ukraine: "if an English version exists"; Israel: the user judged Hebrew "too difficult and too minor").
+Switzerland is simplified to German (its most-spoken of four official languages) as a representative query.
+Collected news feeds naturally into the existing 8-day-stale archive mechanism (`prune_and_archive_stale_news` → `archive-news-to-github.sh`).

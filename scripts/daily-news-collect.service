@@ -1,0 +1,12 @@
+# VPS(conoha)の /etc/systemd/system/daily-news-collect.service へ配置する。
+# daily-news-collect.timerとセットで使う(2026-09-23新設)。
+[Unit]
+Description=Daily collection of world news (per-country digest DATABASE) for aruaru-llm
+After=network-online.target aruaru-llm.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/root/aruaru-llm/scripts/daily-news-collect.sh
+Environment=ARUARU_LLM_BASE_URL=http://127.0.0.1:4600
