@@ -1111,6 +1111,12 @@ struct SearchRawRequest {
     github_token: Option<String>,
     #[serde(default)]
     youtube_api_key: Option<String>,
+    /// Google 検索の地域(例: "us", "de")と表示言語(例: "en", "de")。2026-09-24 追加
+    /// (realdata.pro の世界リサーチで、各国の現地の検索結果を集めるため)。
+    #[serde(default)]
+    gl: Option<String>,
+    #[serde(default)]
+    hl: Option<String>,
 }
 
 fn default_search_raw_max() -> u8 {
@@ -1130,8 +1136,14 @@ async fn search_raw(req: Request) -> Response {
     let nonempty = |s: &Option<String>| s.as_deref().map(str::trim).filter(|v| !v.is_empty()).map(str::to_string);
     let result: anyhow::Result<serde_json::Value> = match req.source.as_str() {
         "google" => {
+            // 地域・言語コードは英小文字と '-' の2〜8文字だけを受け付ける(API へそのまま渡すため)
+            let code = |s: &Option<String>| {
+                nonempty(s).filter(|v| (2..=8).contains(&v.len()) && v.chars().all(|c| c.is_ascii_lowercase() || c == '-'))
+            };
+            let (gl, hl) = (code(&req.gl), code(&req.hl));
             let r = match (nonempty(&req.google_search_api_key), nonempty(&req.google_search_cx)) {
                 (Some(k), Some(c)) => web_search::search_with_credentials(query, req.max_results, &k, &c).await,
+                _ if gl.is_some() || hl.is_some() => web_search::search_with_locale(query, req.max_results, gl.as_deref(), hl.as_deref()).await,
                 _ if web_search::is_configured() => web_search::search(query, req.max_results).await,
                 _ => Err(anyhow::anyhow!("Google Custom Search is not configured (no API key/cx set)")),
             };
