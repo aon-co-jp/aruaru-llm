@@ -286,7 +286,57 @@ pub async fn search(query: &str, max_results: u8) -> Result<Vec<SearchResult>> {
 /// 確認済み)。`news_geo.rs`の国別ニュース取得はこちらを使い、`gl`/`hl`で
 /// Google/SerpApi側に明示的に地域・言語を伝える。`search()`(一般的な
 /// Q&A用途、国の概念が無い)は従来通り`gl`/`hl`無しのまま。
+/// 2026-09-25追加(ユーザー指示「aruaru-searchはaruaruLLMとSETで連動して使用」):
+/// 自前のメタ検索`aruaru-search`(https://github.com/aon-co-jp/aruaru-search、APIキー不要・
+/// VPSで完全無料、世界約130言語対応)を**第一候補**にする。ここで結果が得られれば、共有キーの
+/// 1日上限(`SHARED_SEARCH_DAILY_LIMIT`)も各社の無料枠も消費しない。aruaru-searchが動いていない・
+/// 全検索元から拒否された・結果が0件のときは、従来どおり下の共有キー経由のチェーンへ自動で移る。
+/// 接続先は環境変数`ARUARU_LLM_SEARCH_URL`(既定`http://127.0.0.1:4610`、空文字で無効化)。
+async fn search_via_aruaru_search(query: &str, max_results: u8, gl: Option<&str>, hl: Option<&str>) -> Option<Vec<SearchResult>> {
+    let base = std::env::var("ARUARU_LLM_SEARCH_URL").unwrap_or_else(|_| "http://127.0.0.1:4610".to_string());
+    if base.trim().is_empty() {
+        return None;
+    }
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(2))
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .ok()?;
+    let body = serde_json::json!({
+        "q": query,
+        "n": max_results,
+        "hl": hl.unwrap_or(""),
+        "gl": gl.unwrap_or(""),
+    });
+    let resp = client.post(format!("{}/v1/search", base.trim_end_matches('/'))).json(&body).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let json: serde_json::Value = resp.json().await.ok()?;
+    let results: Vec<SearchResult> = json
+        .get("results")?
+        .as_array()?
+        .iter()
+        .filter_map(|r| {
+            Some(SearchResult {
+                title: r.get("title")?.as_str()?.to_string(),
+                snippet: r.get("snippet").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+                link: r.get("link")?.as_str()?.to_string(),
+            })
+        })
+        .take(max_results as usize)
+        .collect();
+    if results.is_empty() {
+        return None;
+    }
+    tracing::info!(backend = "aruaru-search", query, count = results.len(), "web_search: served by");
+    Some(results)
+}
+
 pub async fn search_with_locale(query: &str, max_results: u8, gl: Option<&str>, hl: Option<&str>) -> Result<Vec<SearchResult>> {
+    if let Some(results) = search_via_aruaru_search(query, max_results, gl, hl).await {
+        return Ok(results);
+    }
     let serpapi_key = read_serpapi_key();
     let tavily_key = read_tavily_key();
     let exa_key = read_exa_key();
