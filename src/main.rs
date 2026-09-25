@@ -1157,6 +1157,10 @@ struct SearchRawRequest {
     gl: Option<String>,
     #[serde(default)]
     hl: Option<String>,
+    /// true なら、無料の自前メタ検索(aruaru-search)だけを使い、共有キーの検索(1日の上限・各社の無料枠)へは
+    /// 一切移らない。毎朝の自動収集のように大量に検索する呼び出し元が、共有の枠を使い切らないため(2026-09-25)。
+    #[serde(default)]
+    free_only: bool,
 }
 
 fn default_search_raw_max() -> u8 {
@@ -1182,6 +1186,7 @@ async fn search_raw(req: Request) -> Response {
             };
             let (gl, hl) = (code(&req.gl), code(&req.hl));
             let r = match (nonempty(&req.google_search_api_key), nonempty(&req.google_search_cx)) {
+                _ if req.free_only => web_search::search_free_only(query, req.max_results, gl.as_deref(), hl.as_deref()).await,
                 (Some(k), Some(c)) => web_search::search_with_credentials(query, req.max_results, &k, &c).await,
                 _ if gl.is_some() || hl.is_some() => web_search::search_with_locale(query, req.max_results, gl.as_deref(), hl.as_deref()).await,
                 _ if web_search::is_configured() => web_search::search(query, req.max_results).await,

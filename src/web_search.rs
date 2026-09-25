@@ -333,6 +333,13 @@ async fn search_via_aruaru_search(query: &str, max_results: u8, gl: Option<&str>
     Some(results)
 }
 
+/// 自前メタ検索(aruaru-search)だけで検索する。使えなければエラー(共有キーの検索へは移らない)。
+pub async fn search_free_only(query: &str, max_results: u8, gl: Option<&str>, hl: Option<&str>) -> Result<Vec<SearchResult>> {
+    search_via_aruaru_search(query, max_results, gl, hl)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("free search (aruaru-search) is unavailable or returned nothing; not falling back to shared keys"))
+}
+
 pub async fn search_with_locale(query: &str, max_results: u8, gl: Option<&str>, hl: Option<&str>) -> Result<Vec<SearchResult>> {
     if let Some(results) = search_via_aruaru_search(query, max_results, gl, hl).await {
         return Ok(results);
