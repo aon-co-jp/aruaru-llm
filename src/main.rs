@@ -131,6 +131,46 @@ struct ChatResponse {
     lang_fallback: bool,
 }
 
+/// `POST /v1/rerank`(2026-09-25新設、`aruaru-search`との連動)の入力。検索語と文書の意味的な近さを、
+/// 世界約100言語に対応する埋め込み(multilingual-e5-small、open-cuda上で実行)で測る。
+#[derive(Deserialize)]
+struct RerankRequest {
+    query: String,
+    documents: Vec<String>,
+}
+
+/// 検索語と各文書のコサイン類似度を返す。`aruaru-search`が検索結果を「意味の近さ」で並べ直すために使う
+/// (言語をまたいでも比べられる: 日本語の検索語で中国語や英語の文書の近さも測れる)。
+/// 1回の上限は文書15件・各400文字(埋め込みはCPUで計算するため)。
+async fn rerank(req: Request, device: Arc<dyn GpuDevice>) -> Response {
+    idle_background_fold::touch_activity();
+    let Json(req): Json<RerankRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let q = req.query.trim().to_string();
+    if q.is_empty() || q.chars().count() > 300 || req.documents.is_empty() || req.documents.len() > 15 {
+        return json_response(StatusCode::BAD_REQUEST, &serde_json::json!({"error": "query は1〜300文字、documents は1〜15件にしてください"}));
+    }
+    let docs: Vec<String> = req.documents.iter().map(|d| d.chars().take(400).collect()).collect();
+    let dev = Arc::clone(&device);
+    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<f32>> {
+        let qv = scoring::embed(&dev, &q, true)?;
+        docs.iter()
+            .map(|d| Ok(open_cuda_bert::cosine_similarity(&qv, &scoring::embed(&dev, d, false)?)))
+            .collect()
+    })
+    .await;
+    match result {
+        Ok(Ok(scores)) => json_response(
+            StatusCode::OK,
+            &serde_json::json!({"scores": scores, "engine": scoring::engine_embedding_label(&device)}),
+        ),
+        Ok(Err(e)) => json_response(StatusCode::SERVICE_UNAVAILABLE, &serde_json::json!({"error": format!("埋め込みを計算できません: {e:#}")})),
+        Err(e) => json_response(StatusCode::INTERNAL_SERVER_ERROR, &serde_json::json!({"error": format!("{e}")})),
+    }
+}
+
 async fn chat(req: Request, device: Arc<dyn GpuDevice>, registry: Arc<TenantRegistry>) -> Response {
     // アイドル時バックグラウンドModel Folding準備スケジューラ(idle_background_fold.rs、
     // 2026-08-19新設)へ「今アクティブなリクエストがあった」ことを伝える。
@@ -3195,6 +3235,7 @@ async fn main() -> anyhow::Result<()> {
     let admin_remove_registry = Arc::clone(&registry);
 
     let app = Route::new()
+        .at("/v1/rerank", post(handler_fn({ let pool = Arc::clone(&chat_pool); move |req, _p| { let device = pool.next_device(); async move { rerank(req, device).await } } })))
         .at("/v1/chat", post(handler_fn(move |req, _p| { let device = chat_pool.next_device(); let registry = Arc::clone(&chat_registry); async move { chat(req, device, registry).await } })))
         .at(
             "/v1/classify-security",
