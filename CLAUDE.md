@@ -709,6 +709,7 @@ multi_threadフレーバー(`current_thread`への固定なし)。CPU計算
 - [e-gov.info](https://github.com/aon-co-jp/e-gov) — 本サービスの最初の呼び出し元(`src/chat_commerce.rs`のロジックをここに集約する想定)。「分身の術」構成の最初のテナント候補
 - [open-easy-web](https://github.com/aon-co-jp/open-easy-web) — 本サービスの管理(テナント登録・削除)を行う想定の管理ツール(統合は未着手)
 - [aruaru-tokyo](https://github.com/aon-co-jp/aruaru-tokyo-server) — 将来の呼び出し元候補
+- [aruaru-search](https://github.com/aon-co-jp/aruaru-search) — **本サービスとセットで動かす**自前メタ検索(Rust・APIキー不要・世界約130言語)。`web_search::search_with_locale` はまずこれを呼び(`ARUARU_LLM_SEARCH_URL`、既定 `http://127.0.0.1:4610`、空文字で無効)、成功すれば共有キーの1日100回の上限・各社の無料枠を消費しない(2026-09-25)。失敗・0件のときだけ従来の共有キーのチェーンへ移る。逆方向として、aruaru-search は検索元の自動保守に本サービスの `/v1/chat-providers/complete-priority`(無料AI)を、結果の意味による並べ替えに `POST /v1/rerank`(open-cuda上のmultilingual-e5-small、約100言語)を使う。systemd は `aruaru-llm.service.d/aruaru-search.conf`(Wants/After)で一緒に起動する。
 - [open-raid-z](https://github.com/aon-co-jp/open-raid-z) — 開発ルールの正本
 
 ## 運用ルール追記(2026-07-18、正本はopen-raid-zのCLAUDE.md参照) — 確認不要の自動継続・リミット解除後の自動再開
