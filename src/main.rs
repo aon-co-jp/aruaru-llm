@@ -34,6 +34,7 @@ mod web_search;
 mod youtube_search;
 mod generation;
 mod hardware;
+mod google_search_fallback_health;
 mod idle_background_fold;
 mod intrusion_detection;
 mod model_catalog;
@@ -2850,6 +2851,13 @@ async fn background_fold_status() -> Response {
     json_response(StatusCode::OK, &idle_background_fold::current_progress())
 }
 
+/// `GET /v1/search/fallback-status` — open-english予備パス(訪問者自身の
+/// Google Custom Searchキー)の毎朝の自己点検結果を返す
+/// (`google_search_fallback_health.rs`参照、2026-09-27新設)。
+async fn google_search_fallback_status() -> Response {
+    json_response(StatusCode::OK, &google_search_fallback_health::current())
+}
+
 /// USB接続スマホ向けタスク配布(2026-08-19新設、`phone_task.rs`参照)。
 /// 常に1件のタスクを返す(キューの空/満杯という概念は持たない簡易実装、
 /// 呼び出すたびに新しい題材を生成する)。
@@ -3201,6 +3209,10 @@ async fn main() -> anyhow::Result<()> {
     // docおよびCLAUDE.mdのHANDOFF(2026-08-19)参照。
     idle_background_fold::spawn();
 
+    // open-english予備パス(訪問者自身のGoogle Custom Searchキー)の毎朝の
+    // 自己点検(2026-09-27新設、`google_search_fallback_health.rs`参照)。
+    google_search_fallback_health::spawn();
+
     // 地理・観光DB(2026-08-11追加): aruaru-dbへベストエフォートでseedを
     // 投入する(接続できない/未設定ならログのみで正常起動を継続、
     // geo_content.rsのモジュールdoc参照)。
@@ -3425,6 +3437,10 @@ async fn main() -> anyhow::Result<()> {
             delete(handler_fn(move |req, params| { let registry = Arc::clone(&admin_remove_registry); async move { admin_remove_tenant(req, params, registry).await } })),
         )
         .at("/healthz", get(plain(|| Box::pin(healthz()))))
+        .at(
+            "/v1/search/fallback-status",
+            get(handler_fn(|_req, _p| Box::pin(google_search_fallback_status()))),
+        )
         .at(
             "/v1/runtime",
             get(handler_fn(move |_req, _p| {
