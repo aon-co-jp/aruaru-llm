@@ -736,44 +736,63 @@ async fn generate_with_search(req: Request, device: Arc<dyn GpuDevice>, registry
         );
     }
 
-    // 利用者自身が持ち込んだキー(ブラウザ側の設定パネル入力→リクエスト
-    // ボディ経由)があれば最優先で使い、グローバル共有設定
-    // (`web_search::is_configured`/`web_search::search`)には一切触れない。
-    // これにより、同じ`aruaru-llm`インスタンスを複数の訪問者が共有する
-    // デプロイ(VPS上の共有デプロイ等)でも、ある訪問者の検索が
-    // 開発者や他の訪問者のAPIキー・クォータを消費することは無い。
+    // 2026-09-26変更(ユーザー指示「aruaru-searchの無制限の検索システムを
+    // open-englishに最優先で使用する様に組み込んで」): 従来はここで
+    // 訪問者自身が持ち込んだキー(ブラウザ側の設定パネル入力→リクエスト
+    // ボディ経由)があれば**無条件に最優先**し、aruaru-search(自前メタ検索、
+    // APIキー不要・VPSで完全無料・1日上限なし)を一切試さずに素通り
+    // していた——`web_search::search()`(共有設定側)はaruaru-searchを
+    // 第一候補にしているのに、訪問者が自分の鍵を設定した途端その恩恵が
+    // 消える、という優先順位の逆転バグだった。
+    //
+    // 修正後の優先順位: (1) aruaru-search(無料・無制限・APIキー不要)を
+    // まず試す。(2) 失敗/利用不可のときのみ、訪問者自身の鍵(あれば、
+    // Googleの無料枠のみを消費する予備)を試す。(3) それも無ければ
+    // 従来通り共有設定側(`web_search::search`、これも内部でaruaru-search
+    // →共有キーの順)にフォールバックする。
     let own_credentials = match (&req.google_search_api_key, &req.google_search_cx) {
         (Some(k), Some(c)) if !k.trim().is_empty() && !c.trim().is_empty() => Some((k.clone(), c.clone())),
         _ => None,
     };
-    let (augmented_prompt, used_search, search_results, search_error) = if let Some((api_key, cx)) = own_credentials {
-        match web_search::search_with_credentials(&req.prompt, 3, &api_key, &cx).await {
-            Ok(results) if !results.is_empty() => {
-                let context = web_search::format_results_as_context(&results);
-                (web_search::build_search_augmented_prompt(&context, &req.prompt), true, results, None)
-            }
-            Ok(_) => (req.prompt.clone(), false, Vec::new(), Some("Google returned zero results for this query.".to_string())),
-            Err(err) => {
-                let msg = format!("{err:#}");
-                tracing::warn!("google custom search (visitor-supplied key) failed, falling back to no-search generation: {msg}");
-                (req.prompt.clone(), false, Vec::new(), Some(msg))
+    let free_search_result = web_search::search_free_only(&req.prompt, 3, None, None).await;
+    let (augmented_prompt, used_search, search_results, search_error) = match free_search_result {
+        Ok(results) if !results.is_empty() => {
+            let context = web_search::format_results_as_context(&results);
+            (web_search::build_search_augmented_prompt(&context, &req.prompt), true, results, None)
+        }
+        _ => {
+            // aruaru-search が使えない/0件だった場合のみ、ここから先の
+            // 予備(訪問者自身の鍵→共有設定)を順に試す。
+            if let Some((api_key, cx)) = own_credentials {
+                match web_search::search_with_credentials(&req.prompt, 3, &api_key, &cx).await {
+                    Ok(results) if !results.is_empty() => {
+                        let context = web_search::format_results_as_context(&results);
+                        (web_search::build_search_augmented_prompt(&context, &req.prompt), true, results, None)
+                    }
+                    Ok(_) => (req.prompt.clone(), false, Vec::new(), Some("aruaru-search and your Google key both returned zero results for this query.".to_string())),
+                    Err(err) => {
+                        let msg = format!("aruaru-search unavailable; your Google key (backup) also failed: {err:#}");
+                        tracing::warn!("google custom search (visitor-supplied key, backup) failed, falling back to no-search generation: {msg}");
+                        (req.prompt.clone(), false, Vec::new(), Some(msg))
+                    }
+                }
+            } else if web_search::is_configured() {
+                match web_search::search(&req.prompt, 3).await {
+                    Ok(results) if !results.is_empty() => {
+                        let context = web_search::format_results_as_context(&results);
+                        (web_search::build_search_augmented_prompt(&context, &req.prompt), true, results, None)
+                    }
+                    Ok(_) => (req.prompt.clone(), false, Vec::new(), Some("Google returned zero results for this query.".to_string())),
+                    Err(err) => {
+                        let msg = format!("{err:#}");
+                        tracing::warn!("google custom search failed, falling back to no-search generation: {msg}");
+                        (req.prompt.clone(), false, Vec::new(), Some(msg))
+                    }
+                }
+            } else {
+                (req.prompt.clone(), false, Vec::new(), Some("aruaru-search is unavailable and no backup Google Custom Search key is configured.".to_string()))
             }
         }
-    } else if web_search::is_configured() {
-        match web_search::search(&req.prompt, 3).await {
-            Ok(results) if !results.is_empty() => {
-                let context = web_search::format_results_as_context(&results);
-                (web_search::build_search_augmented_prompt(&context, &req.prompt), true, results, None)
-            }
-            Ok(_) => (req.prompt.clone(), false, Vec::new(), Some("Google returned zero results for this query.".to_string())),
-            Err(err) => {
-                let msg = format!("{err:#}");
-                tracing::warn!("google custom search failed, falling back to no-search generation: {msg}");
-                (req.prompt.clone(), false, Vec::new(), Some(msg))
-            }
-        }
-    } else {
-        (req.prompt.clone(), false, Vec::new(), Some("Google Custom Search is not configured (no API key/cx set).".to_string()))
     };
 
     let max_new_tokens = req.max_new_tokens.clamp(1, MAX_NEW_TOKENS_LIMIT);
