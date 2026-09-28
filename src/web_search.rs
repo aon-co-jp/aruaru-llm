@@ -333,6 +333,33 @@ async fn search_via_aruaru_search(query: &str, max_results: u8, gl: Option<&str>
     Some(results)
 }
 
+/// `aruaru-search`の`GET /v1/media-search`(archive.org横断検索、パブリックドメイン・CC0・
+/// CC-BY(-SA)のみ許可——CC-BY-NC等は`aruaru-search`側で既に除外済み)へそのままプロキシする。
+/// ユーザー指示(2026-09-28)「実際に組み込むのはarchive.orgのライセンス確認済み音源なら
+/// 商用化してもOKな方で」への対応(MusicGenのCC-BY-NC限定生成の代わりに使う)。
+/// 接続先は`search_via_aruaru_search`と同じ`ARUARU_LLM_SEARCH_URL`(既定`http://127.0.0.1:4610`)。
+pub async fn media_search(query: &str, max_results: u8) -> Result<serde_json::Value> {
+    let base = std::env::var("ARUARU_LLM_SEARCH_URL").unwrap_or_else(|_| "http://127.0.0.1:4610".to_string());
+    if base.trim().is_empty() {
+        bail!("aruaru-search is not configured (ARUARU_LLM_SEARCH_URL is empty)");
+    }
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(2))
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .context("failed to build HTTP client")?;
+    let resp = client
+        .get(format!("{}/v1/media-search", base.trim_end_matches('/')))
+        .query(&[("q", query), ("n", &max_results.to_string())])
+        .send()
+        .await
+        .context("failed to reach aruaru-search")?;
+    if !resp.status().is_success() {
+        bail!("aruaru-search rejected the media-search request (HTTP {})", resp.status());
+    }
+    resp.json::<serde_json::Value>().await.context("failed to parse aruaru-search media-search response")
+}
+
 /// 自前メタ検索(aruaru-search)だけで検索する。使えなければエラー(共有キーの検索へは移らない)。
 pub async fn search_free_only(query: &str, max_results: u8, gl: Option<&str>, hl: Option<&str>) -> Result<Vec<SearchResult>> {
     search_via_aruaru_search(query, max_results, gl, hl)

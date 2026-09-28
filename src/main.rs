@@ -1187,6 +1187,36 @@ fn default_search_raw_max() -> u8 {
     10
 }
 
+/// `GET /v1/media-search?q=...&n=10` — `aruaru-search`の`/v1/media-search`(archive.org横断
+/// 検索、パブリックドメイン・CC0・CC-BY(-SA)のみ)へそのままプロキシする。ユーザー指示
+/// (2026-09-28)「実際に組み込むのはarchive.orgのライセンス確認済み音源なら商用化してもOKな
+/// 方で」への対応(各薄いクライアント、例えば`maid-cafe-programming-school`の学習中BGMは、
+/// MusicGen(CC-BY-NC限定)ではなくこちらを使う)。
+async fn media_search(req: Request) -> Response {
+    let qs = req.uri().query().unwrap_or("").to_string();
+    let q = qs
+        .split('&')
+        .find_map(|pair| {
+            let (k, v) = pair.split_once('=')?;
+            (k == "q").then(|| urlencoding_decode(v)).flatten()
+        })
+        .unwrap_or_default();
+    if q.trim().is_empty() {
+        return json_response(StatusCode::BAD_REQUEST, &serde_json::json!({"error": "missing required query parameter: q"}));
+    }
+    let n: u8 = qs
+        .split('&')
+        .find_map(|pair| {
+            let (k, v) = pair.split_once('=')?;
+            (k == "n").then(|| v.parse().ok()).flatten()
+        })
+        .unwrap_or(10);
+    match web_search::media_search(&q, n).await {
+        Ok(v) => json_response(StatusCode::OK, &v),
+        Err(e) => json_response(StatusCode::BAD_GATEWAY, &serde_json::json!({"error": format!("{e:#}")})),
+    }
+}
+
 /// 検索結果をそのまま返す(`results` の形は source ごとの既存構造体のまま)。
 async fn search_raw(req: Request) -> Response {
     let Json(req): Json<SearchRawRequest> = match Json::from_body(req).await {
@@ -3376,6 +3406,7 @@ async fn main() -> anyhow::Result<()> {
         .at("/v1/chat-providers/complete-multi", post(handler_fn(|req, _p| Box::pin(chat_provider_complete_multi(req)))))
         .at("/v1/chat-providers/complete-priority", post(handler_fn(|req, _p| Box::pin(chat_provider_complete_priority(req)))))
         .at("/v1/search/raw", post(handler_fn(|req, _p| Box::pin(search_raw(req)))))
+        .at("/v1/media-search", get(handler_fn(|req, _p| Box::pin(media_search(req)))))
         .at("/v1/chat-providers/active", get(plain(|| Box::pin(chat_provider_active()))))
         .at(
             "/v1/settings/provider-priority",
