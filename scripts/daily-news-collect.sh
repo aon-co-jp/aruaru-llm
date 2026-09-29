@@ -24,20 +24,39 @@ set -uo pipefail
 
 ARUARU_LLM_BASE_URL="${ARUARU_LLM_BASE_URL:-http://127.0.0.1:4600}"
 
-# ユーザー指示(2026-09-23)の列挙に基づく対象国一覧。
+# ユーザー指示(2026-09-23、2026-09-30)の列挙に基づく対象国一覧。
 # 日本語/英語圏以外は現地のネイティブ言語で検索される(news_geo.rs::news_query_for_country)。
-# India/Ukraine/Israelは英語(ユーザー指示により意図的)。北朝鮮は上記の理由で対象外。
+# India/Israelは英語のまま(ユーザー指示により意図的)。北朝鮮は上記の理由で対象外。
+# 2026-09-30変更: ウクライナは英語→現地語(ウクライナ語)へ。アラビア語圏の
+# 代表国としてEgypt、ペルシャ語のIranを追加。
 COUNTRIES=(
   "Japan" "United States"
   "China" "Taiwan" "South Korea"
   "Philippines" "Cambodia" "Thailand" "Malaysia"
   "United Kingdom" "Germany" "Italy" "France" "Austria" "Switzerland"
-  "India" "Russia" "Ukraine" "Israel"
+  "India" "Russia" "Ukraine" "Israel" "Egypt" "Iran"
   # 2026-09-23追加(ユーザー指示「ブラジルとミャンマーの毎日のネット
   # ニュースも現地語と英語と日本語も追加して」): この2ヶ国のみ、現地語・
   # 英語・日本語の3言語分を別エントリとして収集する。
   "Brazil" "Brazil (English)" "Brazil (Japanese)"
   "Myanmar" "Myanmar (English)" "Myanmar (Japanese)"
+  # 2026-09-30追加(ユーザー指示「その国の言語ではなく、その国のニュースを
+  # 英語と日本語でニュース配信されていればそれも自動収集して」)。日本自体は
+  # 既に日本語が主言語のため英語版のみ追加(日本語版は元々収集済み)。
+  "Japan (English)"
+  "China (English)" "China (Japanese)"
+  "Taiwan (English)" "Taiwan (Japanese)"
+  "South Korea (English)" "South Korea (Japanese)"
+  "Thailand (English)" "Thailand (Japanese)"
+  "Germany (English)" "Germany (Japanese)"
+  "Austria (English)" "Austria (Japanese)"
+  "Italy (English)" "Italy (Japanese)"
+  "France (English)" "France (Japanese)"
+  "Switzerland (English)" "Switzerland (Japanese)"
+  "Russia (English)" "Russia (Japanese)"
+  "Ukraine (English)" "Ukraine (Japanese)"
+  "Egypt (English)" "Egypt (Japanese)"
+  "Iran (English)" "Iran (Japanese)"
 )
 
 echo "[daily-news-collect] collecting news for ${#COUNTRIES[@]} countries via ${ARUARU_LLM_BASE_URL}/v1/news/for"
