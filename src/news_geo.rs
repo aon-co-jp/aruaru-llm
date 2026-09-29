@@ -173,6 +173,14 @@ pub(crate) fn news_query_for_country(country: &str) -> String {
         "Russia" => "Россия новости сегодня главные".to_string(),
         "Brazil" => "Brasil notícias hoje principais".to_string(),
         "Myanmar" => "မြန်မာ သတင်း ယနေ့ အဓိက".to_string(),
+        // 2026-09-30追加(ユーザー指示「ウクライナとアラビア語とイラン
+        // （ペルシャ語）は、現地語で良いです」): 従来は英語のままだった
+        // ウクライナを現地語(ウクライナ語)へ変更。アラビア語圏の代表国は
+        // このアプリの他箇所(world-language-regions.json)でもエジプトを
+        // 筆頭に挙げている慣例に合わせ「Egypt」を採用。
+        "Ukraine" => "Україна новини сьогодні головні".to_string(),
+        "Egypt" => "مصر أخبار اليوم الرئيسية".to_string(),
+        "Iran" => "ایران اخبار امروز اصلی".to_string(),
         // 2026-09-23追加(ユーザー指示「ブラジルとミャンマーの毎日のネット
         // ニュースも現地語と英語と日本語も追加して」): この2ヶ国だけは
         // 現地語に加えて英語版・日本語版も別途収集する。既存の「1国=1
@@ -185,7 +193,38 @@ pub(crate) fn news_query_for_country(country: &str) -> String {
         }
         "Brazil (Japanese)" => "ブラジル ニュース 今日 主要".to_string(),
         "Myanmar (Japanese)" => "ミャンマー ニュース 今日 主要".to_string(),
-        // India/Ukraine/Israel/United States/United Kingdom等はユーザー指示・
+        // 2026-09-30追加(ユーザー指示「日本語のニュースの英語版があれば…
+        // 中国語やロシア語やヨーロッパの言語その他も英語版があれば、それも
+        // 収集して」→「その国の言語ではなく、その国のニュースを英語と
+        // 日本語でニュース配信されていればそれも自動収集して」): 現地語で
+        // 収集している主要国について、英語版・日本語版も同じ
+        // "{国名} (English)"/"{国名} (Japanese)"という疑似国名パターンで
+        // 追加収集する(Brazil/Myanmarと同じ仕組みの横展開。日本自体は
+        // 既に日本語が主言語のため対象外)。**正直な開示**: これは元記事の
+        // 機械翻訳ではなく、英語圏/日本語圏メディアがそれぞれの言語で
+        // 報じた当該国のニュース記事を別途検索するもの(aruaru-llmの
+        // /v1/translateはGPT-2ベースで品質が不安定なため、記事本文の
+        // 逐語翻訳ではなく独立したニュース検索を採用した)。
+        "Japan (English)" | "China (English)" | "Taiwan (English)" | "South Korea (English)"
+        | "Thailand (English)" | "Germany (English)" | "Austria (English)" | "Italy (English)"
+        | "France (English)" | "Switzerland (English)" | "Russia (English)" | "Ukraine (English)"
+        | "Egypt (English)" | "Iran (English)" => {
+            let base = country.split(" (").next().unwrap_or(country);
+            format!("{base} news today headlines")
+        }
+        "China (Japanese)" => "中国 ニュース 今日 主要".to_string(),
+        "Taiwan (Japanese)" => "台湾 ニュース 今日 主要".to_string(),
+        "South Korea (Japanese)" => "韓国 ニュース 今日 主要".to_string(),
+        "Thailand (Japanese)" => "タイ ニュース 今日 主要".to_string(),
+        "Germany (Japanese)" | "Austria (Japanese)" => "ドイツ ニュース 今日 主要".to_string(),
+        "Italy (Japanese)" => "イタリア ニュース 今日 主要".to_string(),
+        "France (Japanese)" => "フランス ニュース 今日 主要".to_string(),
+        "Switzerland (Japanese)" => "スイス ニュース 今日 主要".to_string(),
+        "Russia (Japanese)" => "ロシア ニュース 今日 主要".to_string(),
+        "Ukraine (Japanese)" => "ウクライナ ニュース 今日 主要".to_string(),
+        "Egypt (Japanese)" => "エジプト ニュース 今日 主要".to_string(),
+        "Iran (Japanese)" => "イラン ニュース 今日 主要".to_string(),
+        // India/Israel/United States/United Kingdom等はユーザー指示・
         // 実情により英語のまま(上記doc参照)。
         _ => format!("{country} news today headlines"),
     }
@@ -224,10 +263,15 @@ fn locale_for_country(country: &str) -> (Option<&'static str>, Option<&'static s
         "Switzerland" => (Some("ch"), Some("de")),
         "India" => (Some("in"), Some("en")),
         "Russia" => (Some("ru"), Some("ru")),
-        "Ukraine" => (Some("ua"), Some("en")),
+        // 2026-09-30変更(ユーザー指示「ウクライナ…は、現地語で良いです」):
+        // 英語(en)から現地語のウクライナ語(uk)へ変更。
+        "Ukraine" => (Some("ua"), Some("uk")),
         "Israel" => (Some("il"), Some("en")),
         "Brazil" => (Some("br"), Some("pt")),
         "Myanmar" => (Some("mm"), Some("en")),
+        // 2026-09-30追加(同上ユーザー指示、アラビア語圏の代表国・イラン)。
+        "Egypt" => (Some("eg"), Some("ar")),
+        "Iran" => (Some("ir"), Some("fa")),
         _ => (None, None),
     }
 }
@@ -624,11 +668,40 @@ mod tests {
     }
 
     #[test]
-    fn news_query_for_country_uses_english_for_india_ukraine_israel_by_user_instruction() {
-        // ユーザー自身の指示により、これら3ヶ国は意図的に現地語を使わない
-        // (news_query_for_countryのdocコメント参照)。
-        for country in ["India", "Ukraine", "Israel"] {
+    fn news_query_for_country_uses_english_for_india_israel_by_user_instruction() {
+        // ユーザー自身の指示により、これらの国は意図的に現地語を使わない
+        // (news_query_for_countryのdocコメント参照)。ウクライナは
+        // 2026-09-30のユーザー指示により現地語(ウクライナ語)へ変更済み
+        // (下のnews_query_for_country_uses_native_language_for_newly_added_countries参照)。
+        for country in ["India", "Israel"] {
             assert_eq!(news_query_for_country(country), format!("{country} news today headlines"));
+        }
+    }
+
+    #[test]
+    fn news_query_for_country_uses_native_language_for_newly_added_countries() {
+        // 2026-09-30追加(ユーザー指示「ウクライナとアラビア語とイラン
+        // （ペルシャ語）は、現地語で良いです」)。
+        assert_eq!(news_query_for_country("Ukraine"), "Україна новини сьогодні головні");
+        assert_eq!(news_query_for_country("Egypt"), "مصر أخبار اليوم الرئيسية");
+        assert_eq!(news_query_for_country("Iran"), "ایران اخبار امروز اصلی");
+        assert_eq!(locale_for_country("Ukraine"), (Some("ua"), Some("uk")));
+        assert_eq!(locale_for_country("Egypt"), (Some("eg"), Some("ar")));
+        assert_eq!(locale_for_country("Iran"), (Some("ir"), Some("fa")));
+    }
+
+    #[test]
+    fn news_query_for_country_covers_english_and_japanese_editions_for_major_countries() {
+        // 2026-09-30追加(ユーザー指示「その国の言語ではなく、その国の
+        // ニュースを英語と日本語でニュース配信されていればそれも自動収集
+        // して」)。
+        for country in ["China", "Russia", "France", "Ukraine", "Egypt", "Iran"] {
+            let en = format!("{country} (English)");
+            let ja = format!("{country} (Japanese)");
+            assert_eq!(news_query_for_country(&en), format!("{country} news today headlines"));
+            assert_ne!(news_query_for_country(&ja), format!("{country} news today headlines"));
+            assert_eq!(locale_for_country(&en), (locale_for_country(country).0, Some("en")));
+            assert_eq!(locale_for_country(&ja), (locale_for_country(country).0, Some("ja")));
         }
     }
 
