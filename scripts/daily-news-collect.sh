@@ -39,6 +39,12 @@ COUNTRIES=(
   "Philippines" "Cambodia" "Thailand" "Malaysia"
   "United Kingdom" "Germany" "Italy" "France" "Austria" "Switzerland"
   "India" "Russia" "Ukraine" "Israel" "Egypt" "Iran"
+  # 2026-09-30追加(ユーザー指示「アフリカとアフガニスタンとタジキスタンも
+  # 追加して」): Afghanistan(パシュトー語)・Tajikistan(タジク語)は現地語。
+  # 「アフリカ」は多言語な大陸のため、このアプリの既存資料
+  # (world-language-regions.json)で最頻出のSouth Africa(南アフリカ、英語)
+  # を代表国として採用。
+  "Afghanistan" "Tajikistan" "South Africa"
   # 2026-09-23追加(ユーザー指示「ブラジルとミャンマーの毎日のネット
   # ニュースも現地語と英語と日本語も追加して」): この2ヶ国のみ、現地語・
   # 英語・日本語の3言語分を別エントリとして収集する。
@@ -61,6 +67,8 @@ COUNTRIES=(
   "Ukraine (English)" "Ukraine (Japanese)"
   "Egypt (English)" "Egypt (Japanese)"
   "Iran (English)" "Iran (Japanese)"
+  "Afghanistan (English)" "Afghanistan (Japanese)"
+  "Tajikistan (English)" "Tajikistan (Japanese)"
 )
 
 echo "[daily-news-collect] collecting news for ${#COUNTRIES[@]} countries via ${ARUARU_LLM_BASE_URL}/v1/news/for"

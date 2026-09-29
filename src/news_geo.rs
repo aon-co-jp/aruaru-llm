@@ -186,6 +186,17 @@ pub(crate) fn news_query_for_country(country: &str) -> String {
         "Ukraine" => "Україна новини сьогодні головні".to_string(),
         "Egypt" => "مصر أخبار اليوم الرئيسية".to_string(),
         "Iran" => "ایران اخبار امروز اصلی".to_string(),
+        // 2026-09-30追加(ユーザー指示「アフリカとアフガニスタンとタジキス
+        // タンも追加して」):
+        //   Afghanistan(افغانستان)= پښتو(Pashto、パシュトー語)
+        //   Tajikistan(Тоҷикистон)= тоҷикӣ(Tajik、タジク語)
+        //   Africa: アフリカ大陸は多言語(11の公用語を持つ南アフリカが
+        //     代表例)のため、このアプリ既存のworld-language-regions.jsonで
+        //     最も頻出するSouth Africa(南アフリカ)を代表国として採用し、
+        //     国内で最も広く報道に使われる英語で収集する
+        //     (South Africa = English、南アフリカ英語圏)。
+        "Afghanistan" => "افغانستان خبرونه نن ورځ مهمې".to_string(),
+        "Tajikistan" => "Тоҷикистон хабарҳои имрӯз муҳим".to_string(),
         // 2026-09-23追加(ユーザー指示「ブラジルとミャンマーの毎日のネット
         // ニュースも現地語と英語と日本語も追加して」): この2ヶ国だけは
         // 現地語に加えて英語版・日本語版も別途収集する。既存の「1国=1
@@ -213,7 +224,7 @@ pub(crate) fn news_query_for_country(country: &str) -> String {
         "Japan (English)" | "China (English)" | "Taiwan (English)" | "South Korea (English)"
         | "Thailand (English)" | "Germany (English)" | "Austria (English)" | "Italy (English)"
         | "France (English)" | "Switzerland (English)" | "Russia (English)" | "Ukraine (English)"
-        | "Egypt (English)" | "Iran (English)" => {
+        | "Egypt (English)" | "Iran (English)" | "Afghanistan (English)" | "Tajikistan (English)" => {
             let base = country.split(" (").next().unwrap_or(country);
             format!("{base} news today headlines")
         }
@@ -229,8 +240,10 @@ pub(crate) fn news_query_for_country(country: &str) -> String {
         "Ukraine (Japanese)" => "ウクライナ ニュース 今日 主要".to_string(),
         "Egypt (Japanese)" => "エジプト ニュース 今日 主要".to_string(),
         "Iran (Japanese)" => "イラン ニュース 今日 主要".to_string(),
-        // India/Israel/United States/United Kingdom等はユーザー指示・
-        // 実情により英語のまま(上記doc参照)。
+        "Afghanistan (Japanese)" => "アフガニスタン ニュース 今日 主要".to_string(),
+        "Tajikistan (Japanese)" => "タジキスタン ニュース 今日 主要".to_string(),
+        // India/Israel/United States/United Kingdom/South Africa等は
+        // ユーザー指示・実情により英語のまま(上記doc参照)。
         _ => format!("{country} news today headlines"),
     }
 }
@@ -277,6 +290,11 @@ fn locale_for_country(country: &str) -> (Option<&'static str>, Option<&'static s
         // 2026-09-30追加(同上ユーザー指示、アラビア語圏の代表国・イラン)。
         "Egypt" => (Some("eg"), Some("ar")),
         "Iran" => (Some("ir"), Some("fa")),
+        // 2026-09-30追加(ユーザー指示「アフリカとアフガニスタンとタジキス
+        // タンも追加して」)。
+        "Afghanistan" => (Some("af"), Some("ps")),
+        "Tajikistan" => (Some("tj"), Some("tg")),
+        "South Africa" => (Some("za"), Some("en")),
         _ => (None, None),
     }
 }
@@ -693,6 +711,19 @@ mod tests {
         assert_eq!(locale_for_country("Ukraine"), (Some("ua"), Some("uk")));
         assert_eq!(locale_for_country("Egypt"), (Some("eg"), Some("ar")));
         assert_eq!(locale_for_country("Iran"), (Some("ir"), Some("fa")));
+    }
+
+    #[test]
+    fn news_query_for_country_covers_afghanistan_tajikistan_and_south_africa() {
+        // 2026-09-30追加(ユーザー指示「アフリカとアフガニスタンとタジキス
+        // タンも追加して」)。
+        assert_eq!(news_query_for_country("Afghanistan"), "افغانستان خبرونه نن ورځ مهمې");
+        assert_eq!(news_query_for_country("Tajikistan"), "Тоҷикистон хабарҳои имрӯз муҳим");
+        assert_eq!(locale_for_country("Afghanistan"), (Some("af"), Some("ps")));
+        assert_eq!(locale_for_country("Tajikistan"), (Some("tj"), Some("tg")));
+        assert_eq!(locale_for_country("South Africa"), (Some("za"), Some("en")));
+        // South Africaは代表国として英語で収集する(既存の既定フォールバック経由)。
+        assert_eq!(news_query_for_country("South Africa"), "South Africa news today headlines");
     }
 
     #[test]
