@@ -178,6 +178,11 @@ pub(crate) fn news_query_for_country(country: &str) -> String {
         // ウクライナを現地語(ウクライナ語)へ変更。アラビア語圏の代表国は
         // このアプリの他箇所(world-language-regions.json)でもエジプトを
         // 筆頭に挙げている慣例に合わせ「Egypt」を採用。
+        // 表記は本アプリ既存の「英語名(現地呼称) = ネイティブ表記」慣例
+        // (open-tv-chat/CLAUDE.md等)に合わせる:
+        //   Ukraine(Україна)= українська мова(Ukrainian、ウクライナ語)
+        //   Egypt(مصر)= العربية(Arabic、アラビア語)
+        //   Iran(Persia)= فارسی(Farsi、ファルシ/ペルシャ語)
         "Ukraine" => "Україна новини сьогодні головні".to_string(),
         "Egypt" => "مصر أخبار اليوم الرئيسية".to_string(),
         "Iran" => "ایران اخبار امروز اصلی".to_string(),

@@ -28,7 +28,11 @@ ARUARU_LLM_BASE_URL="${ARUARU_LLM_BASE_URL:-http://127.0.0.1:4600}"
 # 日本語/英語圏以外は現地のネイティブ言語で検索される(news_geo.rs::news_query_for_country)。
 # India/Israelは英語のまま(ユーザー指示により意図的)。北朝鮮は上記の理由で対象外。
 # 2026-09-30変更: ウクライナは英語→現地語(ウクライナ語)へ。アラビア語圏の
-# 代表国としてEgypt、ペルシャ語のIranを追加。
+# 代表国としてEgypt、ペルシャ語のIranを追加。表記は本アプリ既存の
+# 「英語名(現地呼称) = ネイティブ表記」慣例に合わせる:
+#   Ukraine(Україна)= українська мова(Ukrainian、ウクライナ語)
+#   Egypt(مصر)= العربية(Arabic、アラビア語)
+#   Iran(Persia)= فارسی(Farsi、ファルシ/ペルシャ語)
 COUNTRIES=(
   "Japan" "United States"
   "China" "Taiwan" "South Korea"
