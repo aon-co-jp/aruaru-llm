@@ -4632,3 +4632,22 @@ Per user instruction, the search fallback order is now `SerpApi -> Brave -> Goog
 The fallback order is now `SerpApi -> Tavily -> Exa -> Brave -> Google`. Both have no-credit-card-required free tiers, tracked with the same "monthly free allowance / 30 days, daily reset" quota pattern as SerpApi
 (Tavily: 1000 credits/month -> 33/day; Exa: based on the ~$10/month recurring credit at ~$0.007/request -> ~47/day — the one-time $20 signup bonus is intentionally not used as the basis, since it would make the daily budget cliff once spent).
 **Not configured yet — needs the user**: `ARUARU_LLM_TAVILY_KEY` (from [tavily.com](https://www.tavily.com/)) and `ARUARU_LLM_EXA_KEY` (from [exa.ai](https://exa.ai/)) are not held anywhere in this repo — the user needs to set them on the VPS's `.env.google-search` or similar.
+
+## 音声・音質の研究の成果(maid-cafe-se由来、2026-09-30)
+
+ユーザー指示(2026-09-30)「この音質研究はaruaru-llmにもopen-englishにもmaidcafe-programming-schoolにもmake-diskにもmaid-cafe-seにも影響させて」に基づく。
+正本は[`aon-co-jp/maid-cafe-se`](https://github.com/aon-co-jp/maid-cafe-se)の`PORTING.md`「音質向上の研究」節。ここには、このリポジトリに関係する要点だけを書く。
+
+| 項目 | 結果(すべて実測。聴感ではなく数値・テストでの検証) |
+|---|---|
+| 音程と声の太さ(フォルマント)を独立に制御 | リサンプリング方式は音程を動かすと声の太さも同じ比率で動く(音程を下げると「怪物っぽい声」)。FFT+ケプストラム包絡の周波数伸縮補正で独立に制御できた。直接合成した正解の母音との包絡距離: 新方式1.6dB、旧方式10.3dB(音程0.72倍・声の太さ据え置き)。補正ゲイン上限は±12dBだと鋭いフォルマントを動かせず、±24dBで解決 |
+| AI帯域拡張(LavaSR、Apache-2.0、学習データVCTK) | make-diskの設計(入力の帯域は変えず、高域だけを頭打ちつきで足す)が声にも有効。ただし**声は高域が「崖」でなくなだらかに減衰する**ため、音楽向けの崖検出は12.4kHzを返し可聴域に何も足さなかった。声向けのロールオフ検出を新設。Windows音声Harukaで7.5kHzを検出、自己教師あり評価(6kHzで帯域制限→拡張→元の音声とのLSD、6〜9.5kHz)46.8dB→12.9dB、入力の帯域は変化なし。**LSDはスペクトル包絡の近さで聴感品質ではない。拡張前は帯域が無音のため差の大部分は「何か入れれば縮む」分** |
+| 日本語ニューラルTTS | 安全に配布アプリへ同梱できるモデルは未発見。sherpa-onnx公式に日本語TTSモデルは無い/piper-plus系は日本語の学習データがMOE-Speech(ゲーム音声、機械学習解析目的のみ・再配布禁止)由来で配布不可/Kokoro日本語は作者評価がC+〜C-でG2Pの移植が重い |
+| Rust化と音質 | Rust化そのものは音質を変えない。Kotlin版とRust版の出力は数値的に同一(最大誤差0.00000)、速度もウォーム時はほぼ同じ(4秒の音声を、Kotlin 36ms/126ms、Rust 34ms/68ms、単独/ハモり) |
+
+実装: `maid-cafe-se`の`crates/maid-cafe-core/src/audio/`(依存クレート無しの純Rust。wasm32-unknown-unknown向けのコンパイルは確認済み、ブラウザでの実行は未検証)と`crates/maid-cafe-enhance`(tract+ONNX、モデル約56MBは固定リビジョン+SHA-256で取得/同梱)。
+
+### このリポジトリへの影響
+
+- **コード変更なし**。aruaru-llmには音声の入出力(TTS/ASR)の実装が無い(`speechSynthesis`・TTS・音声合成の実装を検索して該当なしを確認)。文章を返す側であり、声で読み上げるのは利用者の画面(open-english)側。
+- 将来「AIの回答を声で返す」機能を付けるときの前提: (1)読み上げ向けの文の整形が要る(TTSが読み間違えやすい記号を避け、長音・かなで書く。`maid-cafe-core`の`SpeechText`が実例)、(2)声質を自前で作るなら、OS/ブラウザのTTS出力を取り出して後処理できる構成が必要(Web Speech APIは出力を取り出せない)、(3)日本語ニューラルTTSは上記のとおり採用可能なモデルが現状無い。
