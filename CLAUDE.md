@@ -4645,7 +4645,7 @@ The fallback order is now `SerpApi -> Tavily -> Exa -> Brave -> Google`. Both ha
 | 日本語ニューラルTTS | 安全に配布アプリへ同梱できるモデルは未発見。sherpa-onnx公式に日本語TTSモデルは無い/piper-plus系は日本語の学習データがMOE-Speech(ゲーム音声、機械学習解析目的のみ・再配布禁止)由来で配布不可/Kokoro日本語は作者評価がC+〜C-でG2Pの移植が重い |
 | Rust化と音質 | Rust化そのものは音質を変えない。Kotlin版とRust版の出力は数値的に同一(最大誤差0.00000)、速度もウォーム時はほぼ同じ(4秒の音声を、Kotlin 36ms/126ms、Rust 34ms/68ms、単独/ハモり) |
 
-実装: `maid-cafe-se`の`crates/maid-cafe-core/src/audio/`(依存クレート無しの純Rust。wasm32-unknown-unknown向けのコンパイルは確認済み、ブラウザでの実行は未検証)と`crates/maid-cafe-enhance`(tract+ONNX、モデル約56MBは固定リビジョン+SHA-256で取得/同梱)。
+実装: **RPoemの共有クレート`open-runo-voice`**(`RPoem/crates/open-runo-voice`、`docs/voice.md`。依存クレート無しの純Rust。wasm32-unknown-unknown向けのコンパイルは確認済み、ブラウザでの実行は未検証)。AI帯域拡張は`maid-cafe-se`の`crates/maid-cafe-enhance`(tract+ONNX、モデル約56MBは固定リビジョン+SHA-256で取得/同梱。重い依存をRPoem本体へ持ち込まないため別置き)。
 
 ### このリポジトリへの影響
 
