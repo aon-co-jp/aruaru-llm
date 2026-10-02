@@ -338,7 +338,13 @@ fn save_news_by_country(country: &str, db: &NewsDb) {
 /// VPSのディスク容量を圧迫しないよう、この期間より古いエントリは生きているDATABASEから
 /// 追い出す(2026-09-22追加、ユーザー指示「8日間以上前のニュース記事などは...GitHubへ
 /// pushして...ストックして置いてそこにアクセスして」)。
-const NEWS_ARCHIVE_AGE_SECS: u64 = 8 * 24 * 3600;
+///
+/// 2026-10-02変更(ユーザー指示「ニュースは…DATABASEにため過ぎずに、すぐにGithubの
+/// …公開で」): 8日→20時間へ短縮。24時間ちょうどにしないのは、毎朝02:00の収集
+/// (`daily-news-collect.timer`)が同じ国のエントリを24時間後に上書きするため、
+/// ちょうど24時間だと古い版がアーカイブされる前に上書きされて失われるから。
+/// 20時間なら、翌朝の収集より前(毎時のpush)に必ず追い出されて公開リポジトリへ届く。
+const NEWS_ARCHIVE_AGE_SECS: u64 = 20 * 3600;
 
 /// 「古くなった国別ニュースを、生きているDATABASEから取り除いてMarkdown形式で書き出す」
 /// 純粋関数(副作用無し、テストしやすい形に分離)。戻り値は(残す新しいDB, 追い出した
@@ -838,7 +844,7 @@ mod tests {
     /// ...ストックして置いて」): 8日以上前のエントリだけが追い出され、8日未満は
     /// 生きているDATABASEに残ることを確認する。
     #[test]
-    fn split_stale_entries_uses_eight_day_boundary() {
+    fn split_stale_entries_uses_archive_age_boundary() {
         let now = 1_000_000_000u64;
         let mut map = std::collections::HashMap::new();
         map.insert(
@@ -850,9 +856,9 @@ mod tests {
             NewsDb { country: None, items: vec![], fetched_at_unix: Some(now - NEWS_ARCHIVE_AGE_SECS + 1), last_error: None },
         );
         let (fresh, stale) = split_stale_entries(&map, now);
-        assert_eq!(fresh.len(), 1, "an entry just under 8 days old must stay in the live DB");
+        assert_eq!(fresh.len(), 1, "an entry just under the archive age must stay in the live DB");
         assert!(fresh.contains_key("United States"));
-        assert_eq!(stale.len(), 1, "an entry over 8 days old must be archived");
+        assert_eq!(stale.len(), 1, "an entry over the archive age must be archived");
         assert_eq!(stale[0].0, "Japan");
     }
 
