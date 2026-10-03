@@ -213,6 +213,50 @@ pub fn clear_runtime_credentials() {
     set_runtime_credentials(String::new(), String::new());
 }
 
+/// ログに書き出す検索語を作る(2026-10-03、ユーザー指示「aruaru-llmのログに、利用者の質問由来の
+/// 検索語が残りうるため…質問から個人を特定出来ない様に考慮して…上手く削除して」への対応)。
+///
+/// 検索語は利用者の質問から作られるため、氏名・住所・電話番号・メールアドレス等の個人情報が
+/// 含まれうる。氏名などは正規表現では確実に検出できないので、「一部を伏せる」方式ではなく、
+/// **既定では本文を一切ログに書かず、文字数だけを残す**。AIに判定させる方式は採らない
+/// (個人情報を含みうる文をログ経路でもう一度処理することになり、判定も不確実なため)。
+///
+/// 不具合調査でどうしても本文が要る場合だけ、環境変数`ARUARU_LLM_LOG_QUERIES=1`で、
+/// 数字(4桁以上の連なり)と`@`以降を伏せ、先頭40文字に切り詰めた形で出す
+/// (氏名などは伏せられない。常用しないこと)。
+fn loggable_query(query: &str) -> String {
+    let chars = query.chars().count();
+    if std::env::var("ARUARU_LLM_LOG_QUERIES").map(|v| v == "1").unwrap_or(false) {
+        let mut out = String::new();
+        let mut digit_run = 0usize;
+        let mut skipping_domain = false;
+        for c in query.chars() {
+            if skipping_domain {
+                if c.is_whitespace() {
+                    skipping_domain = false;
+                } else {
+                    continue;
+                }
+            }
+            if c == '@' {
+                skipping_domain = true;
+                out.push_str("@…");
+                continue;
+            }
+            if c.is_ascii_digit() || c == '-' && digit_run > 0 {
+                digit_run += 1;
+                out.push(if digit_run >= 4 { '#' } else { c });
+                continue;
+            }
+            digit_run = 0;
+            out.push(c);
+        }
+        let head: String = out.chars().take(40).collect();
+        return format!("(デバッグ表示・一部伏せ字・{chars}文字) {head}");
+    }
+    format!("(非表示・{chars}文字)")
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SearchResult {
     pub title: String,
@@ -329,7 +373,7 @@ async fn search_via_aruaru_search(query: &str, max_results: u8, gl: Option<&str>
     if results.is_empty() {
         return None;
     }
-    tracing::info!(backend = "aruaru-search", query, count = results.len(), "web_search: served by");
+    tracing::info!(backend = "aruaru-search", query = %loggable_query(query), count = results.len(), "web_search: served by");
     Some(results)
 }
 
@@ -395,7 +439,7 @@ pub async fn search_with_locale(query: &str, max_results: u8, gl: Option<&str>, 
         if try_consume_serpapi_quota() {
             match search_serpapi_localized(query, max_results, &key, gl, hl).await {
                 Ok(results) if !results.is_empty() => {
-                    tracing::info!(backend = "serpapi", query, count = results.len(), "web_search: served by");
+                    tracing::info!(backend = "serpapi", query = %loggable_query(query), count = results.len(), "web_search: served by");
                     return Ok(results);
                 }
                 Ok(_) => errors.push("serpapi: 0 results".to_string()),
@@ -412,7 +456,7 @@ pub async fn search_with_locale(query: &str, max_results: u8, gl: Option<&str>, 
         if try_consume_tavily_quota() {
             match search_tavily(query, max_results, &key).await {
                 Ok(results) if !results.is_empty() => {
-                    tracing::info!(backend = "tavily", query, count = results.len(), "web_search: served by");
+                    tracing::info!(backend = "tavily", query = %loggable_query(query), count = results.len(), "web_search: served by");
                     return Ok(results);
                 }
                 Ok(_) => errors.push("tavily: 0 results".to_string()),
@@ -426,7 +470,7 @@ pub async fn search_with_locale(query: &str, max_results: u8, gl: Option<&str>, 
         if try_consume_exa_quota() {
             match search_exa(query, max_results, &key).await {
                 Ok(results) if !results.is_empty() => {
-                    tracing::info!(backend = "exa", query, count = results.len(), "web_search: served by");
+                    tracing::info!(backend = "exa", query = %loggable_query(query), count = results.len(), "web_search: served by");
                     return Ok(results);
                 }
                 Ok(_) => errors.push("exa: 0 results".to_string()),
@@ -446,7 +490,7 @@ pub async fn search_with_locale(query: &str, max_results: u8, gl: Option<&str>, 
         if try_consume_jina_quota() {
             match search_jina(query, max_results, &key).await {
                 Ok(results) if !results.is_empty() => {
-                    tracing::info!(backend = "jina", query, count = results.len(), "web_search: served by");
+                    tracing::info!(backend = "jina", query = %loggable_query(query), count = results.len(), "web_search: served by");
                     return Ok(results);
                 }
                 Ok(_) => errors.push("jina: 0 results".to_string()),
@@ -461,7 +505,7 @@ pub async fn search_with_locale(query: &str, max_results: u8, gl: Option<&str>, 
     if let Some(key) = brave_key {
         match search_brave(query, max_results, &key).await {
             Ok(results) if !results.is_empty() => {
-                tracing::info!(backend = "brave", query, count = results.len(), "web_search: served by");
+                tracing::info!(backend = "brave", query = %loggable_query(query), count = results.len(), "web_search: served by");
                 return Ok(results);
             }
             Ok(_) => errors.push("brave: 0 results".to_string()),
@@ -471,7 +515,7 @@ pub async fn search_with_locale(query: &str, max_results: u8, gl: Option<&str>, 
     if let Some((api_key, cx)) = google {
         match search_with_credentials(query, max_results, &api_key, &cx).await {
             Ok(results) => {
-                tracing::info!(backend = "google", query, count = results.len(), "web_search: served by");
+                tracing::info!(backend = "google", query = %loggable_query(query), count = results.len(), "web_search: served by");
                 return Ok(results);
             }
             Err(err) => errors.push(format!("google: {err:#}")),
@@ -938,6 +982,29 @@ Answer:"
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn loggable_query_never_contains_the_query_text_by_default() {
+        let _guard = ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("ARUARU_LLM_LOG_QUERIES");
+        let q = "山田太郎 東京都千代田区1-2-3 090-1234-5678 taro@example.com";
+        let logged = loggable_query(q);
+        assert!(!logged.contains("山田"), "got {logged}");
+        assert!(!logged.contains("090"), "got {logged}");
+        assert!(!logged.contains("example.com"), "got {logged}");
+        assert!(logged.contains(&format!("{}", q.chars().count())), "文字数だけは残る: {logged}");
+    }
+
+    #[test]
+    fn loggable_query_debug_mode_masks_digits_and_at_signs_and_truncates() {
+        let _guard = ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("ARUARU_LLM_LOG_QUERIES", "1");
+        let logged = loggable_query("call 090-1234-5678 or mail taro@example.com about the festival schedule please");
+        std::env::remove_var("ARUARU_LLM_LOG_QUERIES");
+        assert!(!logged.contains("1234"), "got {logged}");
+        assert!(!logged.contains("example"), "got {logged}");
+        assert!(logged.chars().count() <= 60, "got {logged}");
+    }
 
     /// `std::env::set_var`/`remove_var`はプロセス全体で共有される状態であり、
     /// `cargo test`はデフォルトで並列実行するため、環境変数を触るテスト同士が
