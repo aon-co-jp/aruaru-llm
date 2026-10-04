@@ -28,6 +28,8 @@ mod chat_providers;
 mod device_pool;
 mod generic_classify;
 mod geo_content;
+mod knowledge;
+mod persona;
 mod github_search;
 mod referrals;
 mod web_search;
@@ -1760,6 +1762,7 @@ async fn select_model(req: Request) -> Response {
         Ok(v) => v,
         Err(resp) => return resp,
     };
+    knowledge::snapshot(); // 知識はモデルと別置き。念のため切替前に世代バックアップ
     let dest_dir = model_catalog::models_root().join(&req.id);
     let dir_for_task = dest_dir.clone();
     let result = tokio::task::spawn_blocking(move || generation::select_model(dir_for_task)).await;
@@ -1834,6 +1837,7 @@ async fn select_qwen_model_http(req: Request) -> Response {
         Ok(v) => v,
         Err(resp) => return resp,
     };
+    knowledge::snapshot(); // 知識はモデルと別置き。念のため切替前に世代バックアップ
     let dest_dir = model_catalog::models_root().join(&req.id);
     let dir_for_task = dest_dir.clone();
     let result = tokio::task::spawn_blocking(move || qwen_generation::select_qwen_model(dir_for_task)).await;
@@ -3130,6 +3134,67 @@ async fn geo_lookup(req: Request) -> Response {
     json_response(StatusCode::OK, &geo_content::lookup_country(&body.country).await)
 }
 
+/// `POST /v1/persona/prompt`(`{"gender":"female"|"male","country":"Japan"}`):
+/// 女性=メイドの先生/男性=執事の先生の応対方針+国別の話題ヒント(地理DB+収集済みニュース見出し)。
+async fn persona_prompt(req: Request) -> Response {
+    let Json(body): Json<persona::PersonaRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let mut hints: Vec<String> = Vec::new();
+    if let Some(country) = body.country.as_deref().filter(|c| !c.trim().is_empty()) {
+        let geo = geo_content::lookup_country(country).await;
+        if let Some(c) = geo.capital {
+            hints.push(format!("capital {}, landmark {}, food {}", c.capital_en, c.landmark_en, c.food_en));
+        }
+        // ニュースは未取得なら待たない(会話開始を遅らせない)。取得済みキャッシュ/短時間で返る場合のみ使う。
+        if let Ok(db) = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            crate::news_geo::fetch_for_country_cached(country),
+        )
+        .await
+        {
+            if let Some(i) = db.items.first() {
+                hints.push(format!("today's headline: {}", i.title));
+            }
+        }
+    }
+    if let Some(k) = knowledge::context_for(&format!("{} {}", body.country.as_deref().unwrap_or(""), body.gender)) {
+        hints.push(k);
+    }
+    match persona::build(&body, hints) {
+        Some(p) => json_response(StatusCode::OK, &p),
+        None => json_response(StatusCode::BAD_REQUEST, &serde_json::json!({"error": "gender must be \"female\" (maid) or \"male\" (butler)"})),
+    }
+}
+
+/// `POST /v1/knowledge/add` — モデル非依存の知識を1件追加(`knowledge.rs`参照)。
+async fn knowledge_add(req: Request) -> Response {
+    let Json(body): Json<knowledge::AddRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    match knowledge::add(body) {
+        Ok(e) => json_response(StatusCode::OK, &e),
+        Err(msg) => json_response(StatusCode::BAD_REQUEST, &serde_json::json!({"error": msg})),
+    }
+}
+
+/// `GET /v1/knowledge/search?q=...` — `q`省略時は全件(エクスポート兼用)。
+async fn knowledge_search(req: Request) -> Response {
+    let q = req.uri().query().and_then(|q| {
+        q.split('&').find_map(|pair| {
+            let (k, v) = pair.split_once('=')?;
+            if k == "q" { urlencoding_decode(v) } else { None }
+        })
+    });
+    let items = match q {
+        Some(q) if !q.is_empty() => knowledge::search(&q, 10),
+        _ => knowledge::list(),
+    };
+    json_response(StatusCode::OK, &serde_json::json!({"count": items.len(), "items": items}))
+}
+
 /// 引数を取らないハンドラを`handler_fn`のシグネチャへ橋渡しする。
 fn plain(f: impl Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = Response> + Send>> + Send + Sync + 'static) -> Handler {
     handler_fn(move |_req, _params| f())
@@ -3378,6 +3443,9 @@ async fn main() -> anyhow::Result<()> {
         .at("/v1/news/ai-refresh", post(plain(|| Box::pin(ai_news_refresh()))))
         .at("/v1/news/ai-latest", get(plain(|| Box::pin(ai_news_latest()))))
         .at("/v1/geo/lookup", post(handler_fn(|req, _p| Box::pin(geo_lookup(req)))))
+        .at("/v1/knowledge/add", post(handler_fn(|req, _p| Box::pin(knowledge_add(req)))))
+        .at("/v1/knowledge/search", get(handler_fn(|req, _p| Box::pin(knowledge_search(req)))))
+        .at("/v1/persona/prompt",post(handler_fn(|req, _p| Box::pin(persona_prompt(req)))))
         .at(
             "/v1/settings/google-search",
             post(handler_fn(|req, _p| Box::pin(set_google_search_settings(req))))

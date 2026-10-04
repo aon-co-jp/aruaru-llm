@@ -1,0 +1,12 @@
+{
+  "Japan": {
+    "country": {
+      "country": "Japan",
+      "country_code": "",
+      "query_ip": ""
+    },
+    "items": [],
+    "fetched_at_unix": 1791151938,
+    "last_error": "Google Custom Search is not configured (set ARUARU_LLM_GOOGLE_SEARCH_API_KEY / ARUARU_LLM_GOOGLE_SEARCH_CX) — no news fetched"
+  }
+}
