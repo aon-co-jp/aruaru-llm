@@ -4651,3 +4651,9 @@ The fallback order is now `SerpApi -> Tavily -> Exa -> Brave -> Google`. Both ha
 
 - **コード変更なし**。aruaru-llmには音声の入出力(TTS/ASR)の実装が無い(`speechSynthesis`・TTS・音声合成の実装を検索して該当なしを確認)。文章を返す側であり、声で読み上げるのは利用者の画面(open-english)側。
 - 将来「AIの回答を声で返す」機能を付けるときの前提: (1)読み上げ向けの文の整形が要る(TTSが読み間違えやすい記号を避け、長音・かなで書く。`maid-cafe-core`の`SpeechText`が実例)、(2)声質を自前で作るなら、OS/ブラウザのTTS出力を取り出して後処理できる構成が必要(Web Speech APIは出力を取り出せない)、(3)日本語ニューラルTTSは上記のとおり採用可能なモデルが現状無い。
+
+## 先生キャラ(メイド/執事)とモデル非依存の知識ストア(2026-10-05)
+
+- `src/persona.rs` + `POST /v1/persona/prompt`(`{"gender":"female"|"male","country":"Japan"}`): 女性=メイドの先生(さくら)/男性=執事の先生(トラ)の応対方針を返す。参考記事(PRESIDENT Online「訪日客に人気な秋葉原のメイドカフェ、カタコトでも単語を軸に話しかけ」、livedoor再編集版2018-10-13)の要点(単語を軸に・身振りと笑顔・共通の話題・日本語を少し混ぜる)を**言い換えのみ**で反映(本文転載なし)。国の話題は地理DB(`geo_content`)+収集済みニュース見出し+知識ストアから付与。国はIPジオロケーションではなくブラウザ言語等から呼び出し側が渡す(IP照会は不採用の既存方針)。
+- `src/knowledge.rs` + `POST /v1/knowledge/add` / `GET /v1/knowledge/search?q=`: **モデル非依存の「賢さ」**。GPT-2/Qwenの重みは学習で変わらないため、賢くなる実体は平文の知識(`ARUARU_LLM_KNOWLEDGE_DIR`、既定`data/knowledge/knowledge.json`)。`models/`と完全に別置きで、モデル切替(`/v1/models/select`・`/v1/qwen/select`)は触れず、切替直前に世代バックアップ(直近10世代)を取る。埋め込み等モデル固有物は保存しない。
+- 未実施: 生成プロンプトへ知識を常時差し込む配線(現状はpersona経由のみ)、VPSへのデプロイ。open-english側は`/v1/public/persona/prompt`プロキシ+`app.js`の`personaPromptText()`を追加済み(Android webroot版`app.js`は未同期)。
