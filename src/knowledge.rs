@@ -130,6 +130,16 @@ pub fn context_for(query: &str) -> Option<String> {
     Some(format!("Known facts: {}", hits.iter().map(|e| e.text.as_str()).collect::<Vec<_>>().join(" | ")))
 }
 
+/// 生成プロンプト全体から(最後の`Student:`以降、無ければ全体を検索語として)文脈を作る。
+/// 既に`Known facts:`が入っている(persona経由)場合は二重に足さない。
+pub fn context_for_prompt(prompt: &str) -> Option<String> {
+    if prompt.contains("Known facts:") {
+        return None;
+    }
+    let query = prompt.rsplit_once("Student:").map(|(_, s)| s).unwrap_or(prompt);
+    context_for(query)
+}
+
 /// モデル切替の直前に呼ぶ世代バックアップ(失敗してもモデル切替は止めない)。
 pub fn snapshot() {
     let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
