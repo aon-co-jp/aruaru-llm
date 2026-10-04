@@ -534,7 +534,10 @@ async fn generate(req: Request, device: Arc<dyn GpuDevice>, registry: Arc<Tenant
         "generate: dispatch start device={device_name} thread={:?}",
         std::thread::current().id()
     );
-    let prompt = req.prompt.clone();
+    let prompt = match knowledge::context_for_prompt(&req.prompt) {
+        Some(k) => format!("{k}\n{}", req.prompt),
+        None => req.prompt.clone(),
+    };
     let device_for_task = Arc::clone(&device);
     let generate_result = tokio::task::spawn_blocking(move || {
         let thread_id = std::thread::current().id();
@@ -1330,6 +1333,10 @@ async fn chat_provider_complete_priority(req: Request) -> Response {
         }
     }
 
+    // モデル非依存の知識ストア(knowledge.rs)を常時差し込む。使うモデルが変わっても同じ知識が効く。
+    if let Some(k) = knowledge::context_for_prompt(&req.prompt) {
+        context_blocks.push(k);
+    }
     let augmented_prompt = if context_blocks.is_empty() { req.prompt.clone() } else { format!("{}\n\n{}", context_blocks.join("\n\n"), req.prompt) };
     if chat_provider_prompt_too_long(&augmented_prompt) {
         return json_response(
