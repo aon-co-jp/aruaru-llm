@@ -20,7 +20,7 @@ curl -fsS --max-time 20 "$BASE/v1/knowledge/search" | jq '.items' > "$TMP"
 [ "$(jq 'length' "$TMP")" -gt 0 ] || { echo "empty knowledge; skip"; rm -f "$TMP"; exit 0; }
 if ! cmp -s "$TMP" data/knowledge/knowledge.json 2>/dev/null; then
   mv "$TMP" data/knowledge/knowledge.json
-  git add data/knowledge/knowledge.json
+  git add -f data/knowledge/knowledge.json
   git -c user.name="aruaru-llm knowledge sync" -c user.email="noreply@aon-co-jp" commit -q -m "data: knowledge snapshot $(date -u +%Y-%m-%dT%H:%MZ)"
   git push -q origin HEAD:master
   echo "pushed"
