@@ -801,6 +801,12 @@ async fn generate_with_search(req: Request, device: Arc<dyn GpuDevice>, registry
         }
     };
 
+    // モデル非依存の知識ストアも常に差し込む(検索結果の有無にかかわらず)。
+    let augmented_prompt = match knowledge::context_for_prompt(&req.prompt) {
+        Some(k) => format!("{k}
+{augmented_prompt}"),
+        None => augmented_prompt,
+    };
     let max_new_tokens = req.max_new_tokens.clamp(1, MAX_NEW_TOKENS_LIMIT);
     match generation::generate(&device, &augmented_prompt, max_new_tokens) {
         Ok(completion) => json_response(
