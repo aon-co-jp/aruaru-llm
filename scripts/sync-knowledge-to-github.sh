@@ -21,7 +21,7 @@ curl -fsS --max-time 20 "$BASE/v1/knowledge/search" | jq '.items' > "$TMP"
 mv "$TMP" data/knowledge/knowledge.json
 git add -f data/knowledge/knowledge.json
 if git diff --cached --quiet; then
-  echo "no change"
+  git push -q origin HEAD:master && echo "no new change (unpushed commits, if any, pushed)"
 else
   git -c user.name="aruaru-llm knowledge sync" -c user.email="noreply@aon-co-jp" commit -q -m "data: knowledge snapshot $(date -u +%Y-%m-%dT%H:%MZ)"
   git push -q origin HEAD:master
