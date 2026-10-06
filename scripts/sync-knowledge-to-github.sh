@@ -18,12 +18,12 @@ TMP="$(mktemp)"
 curl -fsS --max-time 20 "$BASE/v1/knowledge/search" | jq '.items' > "$TMP"
 # 空・壊れた応答では既存を上書きしない(復元元を守る)
 [ "$(jq 'length' "$TMP")" -gt 0 ] || { echo "empty knowledge; skip"; rm -f "$TMP"; exit 0; }
-if ! cmp -s "$TMP" data/knowledge/knowledge.json 2>/dev/null; then
-  mv "$TMP" data/knowledge/knowledge.json
-  git add -f data/knowledge/knowledge.json
+mv "$TMP" data/knowledge/knowledge.json
+git add -f data/knowledge/knowledge.json
+if git diff --cached --quiet; then
+  echo "no change"
+else
   git -c user.name="aruaru-llm knowledge sync" -c user.email="noreply@aon-co-jp" commit -q -m "data: knowledge snapshot $(date -u +%Y-%m-%dT%H:%MZ)"
   git push -q origin HEAD:master
-  echo "pushed"
-else
-  rm -f "$TMP"; echo "no change"
+  echo pushed
 fi
