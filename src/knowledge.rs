@@ -131,7 +131,7 @@ pub fn seed() -> usize {
 fn sync_urls() -> Vec<String> {
     match std::env::var("ARUARU_LLM_KNOWLEDGE_SYNC_URL") {
         Ok(v) if v.eq_ignore_ascii_case("off") => Vec::new(),
-        Ok(v) if !v.trim().is_empty() => vec![v],
+        Ok(v) if !v.trim().is_empty() => v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
         _ => vec![
             "https://easy-web.tokyo/open-english/v1/public/knowledge/export".to_string(),
             "https://raw.githubusercontent.com/aon-co-jp/open-english/master/data/knowledge/knowledge.json".to_string(),
