@@ -102,6 +102,82 @@ fn words(s: &str) -> HashSet<String> {
         .collect()
 }
 
+/// 同じ`text`が無いものだけ追加して、追加件数を返す(IDは各インスタンスで振り直す)。
+pub fn merge(incoming: Vec<Entry>) -> usize {
+    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut all = load_unlocked();
+    let mut added = 0;
+    for e in incoming {
+        let text = e.text.trim().to_string();
+        if text.is_empty() || text.chars().count() > MAX_TEXT_CHARS || all.iter().any(|x| x.text == text) {
+            continue;
+        }
+        let id = all.iter().map(|x| x.id).max().unwrap_or(0) + 1;
+        all.push(Entry { id, text, tags: e.tags, source: e.source, created_unix: e.created_unix });
+        added += 1;
+    }
+    if added > 0 {
+        let _ = save_unlocked(&all);
+    }
+    added
+}
+
+/// 同梱の種知識(接客技法の言い換え・先生キャラ方針)を取り込む。何度呼んでも重複しない。
+pub fn seed() -> usize {
+    serde_json::from_str::<Vec<Entry>>(include_str!("../data/knowledge_seed.json")).map(merge).unwrap_or(0)
+}
+
+/// 既定の取得元(公開WEB→GitHubの順)。`ARUARU_LLM_KNOWLEDGE_SYNC_URL`で1つに上書き、`off`で無効。
+fn sync_urls() -> Vec<String> {
+    match std::env::var("ARUARU_LLM_KNOWLEDGE_SYNC_URL") {
+        Ok(v) if v.eq_ignore_ascii_case("off") => Vec::new(),
+        Ok(v) if !v.trim().is_empty() => vec![v],
+        _ => vec![
+            "https://easy-web.tokyo/open-english/v1/public/knowledge/export".to_string(),
+            "https://raw.githubusercontent.com/aon-co-jp/open-english/master/data/knowledge/knowledge.json".to_string(),
+        ],
+    }
+}
+
+/// 公開WEB(失敗時はGitHub)から知識を取得して手元へ統合する。アプリを入れ直した直後でも、
+/// 次回起動時にここで知識が自動で戻る。取得できなくても手元の知識はそのまま使える。
+pub async fn sync_from_remote() -> usize {
+    let Ok(client) = reqwest::Client::builder().timeout(std::time::Duration::from_secs(20)).build() else {
+        return 0;
+    };
+    for url in sync_urls() {
+        let Ok(resp) = client.get(&url).send().await else { continue };
+        if !resp.status().is_success() {
+            continue;
+        }
+        let Ok(body) = resp.text().await else { continue };
+        // 形式は`{"items":[...]}`(APIの返り値)か、配列そのもの(GitHub上のファイル)のどちらでもよい
+        let entries: Option<Vec<Entry>> = serde_json::from_str::<Vec<Entry>>(&body).ok().or_else(|| {
+            serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| v.get("items").cloned())
+                .and_then(|v| serde_json::from_value(v).ok())
+        });
+        if let Some(entries) = entries {
+            let n = merge(entries);
+            tracing::info!("knowledge sync from {url}: {n} new entr(ies) merged");
+            return n;
+        }
+    }
+    0
+}
+
+/// 起動時に種知識を入れ、以後6時間ごとに公開WEB/GitHubから最新の知識を取り込む。
+pub fn spawn_background_sync() {
+    seed();
+    tokio::spawn(async {
+        loop {
+            sync_from_remote().await;
+            tokio::time::sleep(std::time::Duration::from_secs(6 * 3600)).await;
+        }
+    });
+}
+
 /// 単語の重なり(タグ一致は加点)で上位`limit`件を返す。モデル非依存。
 pub fn search(query: &str, limit: usize) -> Vec<Entry> {
     let q = words(query);
