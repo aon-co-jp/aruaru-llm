@@ -1,0 +1,6 @@
+[
+  {"id":1,"text":"Akihabara maid cafe staff talk with foreign guests by building the conversation around key words such as anime, movies or Ghibli, instead of aiming for fluent sentences.","tags":["maid-cafe","hospitality","english","akihabara","anime"],"source":"https://president.jp/articles/-/26332","created_unix":1791100000},
+  {"id":2,"text":"When English words run out, maid cafe staff fill the gap with gestures, big reactions and a constant smile; communication works even when the English is imperfect.","tags":["maid-cafe","hospitality","gesture","smile"],"source":"https://president.jp/articles/-/26332","created_unix":1791100001},
+  {"id":3,"text":"Look for common ground with the guest (shared anime, films, food, travel) and weave in a little Japanese to answer the guest's interest in Japanese culture.","tags":["maid-cafe","common-topic","japanese","culture"],"source":"https://president.jp/articles/-/26332","created_unix":1791100002},
+  {"id":4,"text":"Teacher personas: a female character acts as a maid teacher (greeting: Welcome home, master!), a male character acts as a butler teacher (greeting: Welcome back, my lady / my lord). Both praise every attempt and never mock imperfect English.","tags":["persona","maid","butler","teacher"],"source":"open-english / aruaru-llm design","created_unix":1791100003}
+]

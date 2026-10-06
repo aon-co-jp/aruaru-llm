@@ -3319,6 +3319,8 @@ async fn main() -> anyhow::Result<()> {
     // 投入する(接続できない/未設定ならログのみで正常起動を継続、
     // geo_content.rsのモジュールdoc参照)。
     geo_content::seed_database_if_configured().await;
+    // モデル非依存の知識: 種知識を入れ、公開WEB/GitHubから自動で取り込む(アンインストール後の復元用)。
+    knowledge::spawn_background_sync();
 
     // 2026-07-27追記(使いやすさ改善): GPU検出feature(hw-detect-vulkan/
     // hw-detect-directx)はいずれも既定offのため、何も知らずにビルドした
