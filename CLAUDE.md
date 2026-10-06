@@ -4657,3 +4657,9 @@ The fallback order is now `SerpApi -> Tavily -> Exa -> Brave -> Google`. Both ha
 - `src/persona.rs` + `POST /v1/persona/prompt`(`{"gender":"female"|"male","country":"Japan"}`): 女性=メイドの先生(さくら)/男性=執事の先生(トラ)の応対方針を返す。参考記事(PRESIDENT Online「訪日客に人気な秋葉原のメイドカフェ、カタコトでも単語を軸に話しかけ」、livedoor再編集版2018-10-13)の要点(単語を軸に・身振りと笑顔・共通の話題・日本語を少し混ぜる)を**言い換えのみ**で反映(本文転載なし)。国の話題は地理DB(`geo_content`)+収集済みニュース見出し+知識ストアから付与。国はIPジオロケーションではなくブラウザ言語等から呼び出し側が渡す(IP照会は不採用の既存方針)。
 - `src/knowledge.rs` + `POST /v1/knowledge/add` / `GET /v1/knowledge/search?q=`: **モデル非依存の「賢さ」**。GPT-2/Qwenの重みは学習で変わらないため、賢くなる実体は平文の知識(`ARUARU_LLM_KNOWLEDGE_DIR`、既定`data/knowledge/knowledge.json`)。`models/`と完全に別置きで、モデル切替(`/v1/models/select`・`/v1/qwen/select`)は触れず、切替直前に世代バックアップ(直近10世代)を取る。埋め込み等モデル固有物は保存しない。
 - 未実施: 生成プロンプトへ知識を常時差し込む配線(現状はpersona経由のみ)、VPSへのデプロイ。open-english側は`/v1/public/persona/prompt`プロキシ+`app.js`の`personaPromptText()`を追加済み(Android webroot版`app.js`は未同期)。
+
+### 知識の自動復元と GitHub 退避(2026-10-06)
+- 種知識`data/knowledge_seed.json`(PRESIDENT Onlineの記事の要点の言い換え+先生キャラ方針、出典URL付き)を起動時に取り込む。
+- 起動時と6時間ごとに、公開WEB`https://easy-web.tokyo/open-english/v1/public/knowledge/export`→失敗時はGitHub`aon-co-jp/open-english/master/data/knowledge/knowledge.json`から不足分だけ統合(`knowledge::sync_from_remote`、`ARUARU_LLM_KNOWLEDGE_SYNC_URL`で上書き、`off`で無効)。ローカルPC版をアンインストール→再インストールしても、初回起動で知識が戻る。
+- VPS: `knowledge-sync-push.timer`(6時間ごと、`scripts/sync-knowledge-to-github.sh`)が知識をGitHubの公開リポジトリへpush。VPSを作り直してもaruaru-llmが起動時にGitHubから復元する。公開してよい内容(言い換え+出典)のみを入れる前提で、個人情報・会話は入れない。
+- 正直な開示: GitHub側からの復元経路(WEBが落ちている場合)は、取得URLの形式一致までは確認したが、WEB停止状態での実機復元試験は未実施。スマホ/タブレット版は端末側に知識ストアを持たず、WEB版のVPSを使うため再インストールで失うものはない。realdata.proの収集データは非公開GitHub(realdata-archive)に既に保管済みで、今回は変更していない。
