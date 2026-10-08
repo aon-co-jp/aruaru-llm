@@ -30,6 +30,7 @@ mod generic_classify;
 mod geo_content;
 mod knowledge;
 mod persona;
+mod pii;
 mod github_search;
 mod referrals;
 mod web_search;
@@ -403,6 +404,49 @@ async fn classify_traffic(req: Request, device: Arc<dyn GpuDevice>, registry: Ar
                     is_suspicious: false,
                     engine: format!("embedding-cosine-heuristic-v0-open-cuda-bert{suffix}-error"),
                 },
+            )
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct ClassifyPiiRequest {
+    /// 呼び出し側でマスク済みの断片(周辺の文脈)。値そのものは送らない運用。
+    snippets: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct ClassifyPiiResponse {
+    verdict: &'static str,
+    pii_votes: usize,
+    benign_votes: usize,
+    engine: &'static str,
+}
+
+/// `POST /v1/classify-pii`(要`x-admin-token`、トークン未設定のサーバーでは無効)。
+/// 詳細・限界は`pii.rs`冒頭の開示を参照。
+async fn classify_pii(req: Request, device: Arc<dyn GpuDevice>) -> Response {
+    if std::env::var("E_GOV_LLM_ADMIN_TOKEN").is_err() {
+        return text_response(StatusCode::FORBIDDEN, "classify-pii requires E_GOV_LLM_ADMIN_TOKEN to be set");
+    }
+    if !check_admin_token(&req) {
+        return text_response(StatusCode::UNAUTHORIZED, "invalid admin token");
+    }
+    let Json(body): Json<ClassifyPiiRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    match pii::classify_pii(&device, &body.snippets) {
+        Ok((v, p, b)) => json_response(
+            StatusCode::OK,
+            &ClassifyPiiResponse { verdict: v.as_str(), pii_votes: p, benign_votes: b, engine: "embedding-cosine-heuristic-v0-pii" },
+        ),
+        Err(err) => {
+            tracing::warn!("classify_pii failed: {err}");
+            // 判定不能なときは黙って「問題なし」とは言わない。
+            json_response(
+                StatusCode::OK,
+                &ClassifyPiiResponse { verdict: "unsure", pii_votes: 0, benign_votes: 0, engine: "embedding-cosine-heuristic-v0-pii-error" },
             )
         }
     }
@@ -3381,6 +3425,7 @@ async fn main() -> anyhow::Result<()> {
     let admin_remove_registry = Arc::clone(&registry);
 
     let app = Route::new()
+        .at("/v1/classify-pii", post(handler_fn({ let pool = Arc::clone(&chat_pool); move |req, _p| { let device = pool.next_device(); async move { classify_pii(req, device).await } } })))
         .at("/v1/rerank", post(handler_fn({ let pool = Arc::clone(&chat_pool); move |req, _p| { let device = pool.next_device(); async move { rerank(req, device).await } } })))
         .at("/v1/chat", post(handler_fn(move |req, _p| { let device = chat_pool.next_device(); let registry = Arc::clone(&chat_registry); async move { chat(req, device, registry).await } })))
         .at(
