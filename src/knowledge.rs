@@ -94,12 +94,48 @@ pub fn add(req: AddRequest) -> Result<Entry, String> {
     Ok(entry)
 }
 
+/// 日本語・中国語・韓国語の文字か(ひらがな・カタカナ・漢字・ハングル・半角カナ)。
+fn is_cjk(c: char) -> bool {
+    matches!(c as u32,
+        0x3040..=0x30FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF | 0xAC00..=0xD7AF | 0xFF66..=0xFF9F)
+}
+
+/// 検索用の語に分ける。英数字は空白・記号区切りの2文字以上の語、日本語などは空白で単語が
+/// 区切られないため、連続するCJK文字を**2文字ずつ重ねた断片(バイグラム)**にして比べる
+/// (2026-10-08: 日本語の知識がほぼ拾われなかった問題の対策。形態素解析器などの依存は増やさない)。
 fn words(s: &str) -> HashSet<String> {
-    s.to_lowercase()
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|w| w.chars().count() >= 2)
-        .map(str::to_string)
-        .collect()
+    let lower = s.to_lowercase();
+    let mut out = HashSet::new();
+    for token in lower.split(|c: char| !c.is_alphanumeric()) {
+        let mut run: Vec<char> = Vec::new();
+        let mut flush = |run: &mut Vec<char>, cjk: bool, out: &mut HashSet<String>| {
+            if run.is_empty() {
+                return;
+            }
+            if cjk {
+                if run.len() == 1 {
+                    return; // 1文字だけの助詞などは雑音になるので使わない
+                }
+                for w in run.windows(2) {
+                    out.insert(w.iter().collect());
+                }
+            } else if run.len() >= 2 {
+                out.insert(run.iter().collect());
+            }
+            run.clear();
+        };
+        let mut cur_cjk = false;
+        for c in token.chars() {
+            let c_cjk = is_cjk(c);
+            if !run.is_empty() && c_cjk != cur_cjk {
+                flush(&mut run, cur_cjk, &mut out);
+            }
+            cur_cjk = c_cjk;
+            run.push(c);
+        }
+        flush(&mut run, cur_cjk, &mut out);
+    }
+    out
 }
 
 /// 同じ`text`が無いものだけ追加して、追加件数を返す(IDは各インスタンスで振り直す)。
@@ -241,8 +277,12 @@ pub fn snapshot() {
 mod tests {
     use super::*;
 
+    /// 保存先は環境変数(プロセス全体で共有)なので、保存先を触るテストは同時に走らせない。
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
     #[test]
     fn knowledge_survives_independent_of_models_dir() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = std::env::temp_dir().join(format!("aruaru-knowledge-test-{}", now()));
         std::env::set_var("ARUARU_LLM_KNOWLEDGE_DIR", &tmp);
         add(AddRequest { text: "Guests love anime topics".into(), tags: vec!["anime".into()], source: "test".into() }).unwrap();
@@ -251,6 +291,32 @@ mod tests {
         assert_eq!(search("anime", 3).len(), 1);
         assert!(context_for("tell me about anime").is_some());
         assert!(tmp.join("backups").exists());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn words_splits_japanese_into_bigrams_and_keeps_english_words() {
+        let w = words("ドットインストールの料金はProgate 1480円");
+        assert!(w.contains("ドッ") && w.contains("トイ") && w.contains("料金"), "{w:?}");
+        assert!(w.contains("progate") && w.contains("1480"), "{w:?}");
+        // 英数字の語と日本語の断片が混ざっても、境界でちゃんと切れる
+        assert!(!w.iter().any(|x| x.contains('p') && x.chars().any(|c| is_cjk(c))), "{w:?}");
+        // 1文字だけの日本語(助詞など)は雑音になるので入れない
+        assert!(!words("の").contains("の"));
+    }
+
+    #[test]
+    fn japanese_question_finds_japanese_fact() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = std::env::temp_dir().join(format!("aruaru-knowledge-ja-{}", now()));
+        std::env::set_var("ARUARU_LLM_KNOWLEDGE_DIR", &tmp);
+        add(AddRequest { text: "ドットインストールの月額プランは1480円（税込）。".into(), tags: vec![], source: "test".into() }).unwrap();
+        add(AddRequest { text: "paizaラーニングの無料講座はPython入門を含む。".into(), tags: vec![], source: "test".into() }).unwrap();
+        // 日本語の質問(語順・助詞が違っても)で、日本語の事実が拾える
+        let hits = search("ドットインストールの料金を教えて", 3);
+        assert_eq!(hits.first().map(|e| e.text.contains("ドットインストール")), Some(true), "{hits:?}");
+        // 無関係な質問では拾わない
+        assert!(search("天気予報", 3).is_empty());
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }
