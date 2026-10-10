@@ -81,20 +81,16 @@ pub const LANGUAGES: &[LangInfo] = langs![
     ("hin", "ヒンディー語", "Hindi"),
 ];
 
-/// 書体フォント(`tessdata-jpn/fonts/` と同名)。
+/// 書体フォント(`tessdata-jpn/fonts/` と同名)。CJK は PDF に埋め込みやすい TrueType(glyf)の可変フォント Subset 版。
 pub const FONTS: &[(&str, &str)] = &[
-    ("NotoSansCJKjp-Regular.otf", "https://github.com/notofonts/noto-cjk/raw/main/Sans/OTF/Japanese/NotoSansCJKjp-Regular.otf"),
-    ("NotoSansCJKjp-Bold.otf", "https://github.com/notofonts/noto-cjk/raw/main/Sans/OTF/Japanese/NotoSansCJKjp-Bold.otf"),
-    ("NotoSerifCJKjp-Regular.otf", "https://github.com/notofonts/noto-cjk/raw/main/Serif/OTF/Japanese/NotoSerifCJKjp-Regular.otf"),
-    ("NotoSansCJKsc-Regular.otf", "https://github.com/notofonts/noto-cjk/raw/main/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf"),
-    ("NotoSansCJKsc-Bold.otf", "https://github.com/notofonts/noto-cjk/raw/main/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Bold.otf"),
-    ("NotoSerifCJKsc-Regular.otf", "https://github.com/notofonts/noto-cjk/raw/main/Serif/OTF/SimplifiedChinese/NotoSerifCJKsc-Regular.otf"),
-    ("NotoSansCJKtc-Regular.otf", "https://github.com/notofonts/noto-cjk/raw/main/Sans/OTF/TraditionalChinese/NotoSansCJKtc-Regular.otf"),
-    ("NotoSansCJKtc-Bold.otf", "https://github.com/notofonts/noto-cjk/raw/main/Sans/OTF/TraditionalChinese/NotoSansCJKtc-Bold.otf"),
-    ("NotoSerifCJKtc-Regular.otf", "https://github.com/notofonts/noto-cjk/raw/main/Serif/OTF/TraditionalChinese/NotoSerifCJKtc-Regular.otf"),
-    ("NotoSansCJKkr-Regular.otf", "https://github.com/notofonts/noto-cjk/raw/main/Sans/OTF/Korean/NotoSansCJKkr-Regular.otf"),
-    ("NotoSansCJKkr-Bold.otf", "https://github.com/notofonts/noto-cjk/raw/main/Sans/OTF/Korean/NotoSansCJKkr-Bold.otf"),
-    ("NotoSerifCJKkr-Regular.otf", "https://github.com/notofonts/noto-cjk/raw/main/Serif/OTF/Korean/NotoSerifCJKkr-Regular.otf"),
+    ("NotoSansJP-VF.ttf", "https://github.com/notofonts/noto-cjk/raw/main/Sans/Variable/TTF/Subset/NotoSansJP-VF.ttf"),
+    ("NotoSerifJP-VF.ttf", "https://github.com/notofonts/noto-cjk/raw/main/Serif/Variable/TTF/Subset/NotoSerifJP-VF.ttf"),
+    ("NotoSansSC-VF.ttf", "https://github.com/notofonts/noto-cjk/raw/main/Sans/Variable/TTF/Subset/NotoSansSC-VF.ttf"),
+    ("NotoSerifSC-VF.ttf", "https://github.com/notofonts/noto-cjk/raw/main/Serif/Variable/TTF/Subset/NotoSerifSC-VF.ttf"),
+    ("NotoSansTC-VF.ttf", "https://github.com/notofonts/noto-cjk/raw/main/Sans/Variable/TTF/Subset/NotoSansTC-VF.ttf"),
+    ("NotoSerifTC-VF.ttf", "https://github.com/notofonts/noto-cjk/raw/main/Serif/Variable/TTF/Subset/NotoSerifTC-VF.ttf"),
+    ("NotoSansKR-VF.ttf", "https://github.com/notofonts/noto-cjk/raw/main/Sans/Variable/TTF/Subset/NotoSansKR-VF.ttf"),
+    ("NotoSerifKR-VF.ttf", "https://github.com/notofonts/noto-cjk/raw/main/Serif/Variable/TTF/Subset/NotoSerifKR-VF.ttf"),
     ("NotoSans-Regular.ttf", "https://github.com/notofonts/notofonts.github.io/raw/main/fonts/NotoSans/hinted/ttf/NotoSans-Regular.ttf"),
     ("NotoSans-Bold.ttf", "https://github.com/notofonts/notofonts.github.io/raw/main/fonts/NotoSans/hinted/ttf/NotoSans-Bold.ttf"),
     ("NotoSerif-Regular.ttf", "https://github.com/notofonts/notofonts.github.io/raw/main/fonts/NotoSerif/hinted/ttf/NotoSerif-Regular.ttf"),
