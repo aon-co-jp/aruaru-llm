@@ -354,20 +354,18 @@ penalty`(CTRL方式、penalty>1.0で既に登場したトークンのlogitを弱
 (13) เปิดใช้การค้นหา Google/GitHub อัตโนมัติเมื่อตรวจพบความต้องการ "ข้อมูลล่าสุด"
 **ยังไม่เสร็จ**: การ push คลังข่าวจริงไปยัง GitHub และระบบอัตโนมัติ/ตั้งเวลาสำหรับ `news_prune_archive`
 
-## 2026-10-10 開発停止時点の記録(OCR かすれ補正・AI 文脈補完) / Status at stop (faded-text rescue & AI context completion)
+## v1.3.0(2026-10-10): かすれ補正・字形照合・AI文脈補完の拡張 / v1.3.0: faded-text rescue, glyph matching, extended AI context completion
 
 ### 日本語
-
-**サーバー(aruaru-llm)の追加 API**: `POST /v1/ocr/scan`(不自然な箇所の検出)、`POST /v1/ocr/propose`(1 文字候補の提案)、`POST /v1/ocr/fill`(候補の採点・置換。`return_all` / `use_web` / `lm_candidates`)、`GET /v1/ocr/charset?n=`(頻出の漢字・かな)、`POST /v1/ocr/glyph-rank`(字形の照合、sgemm)。いずれも言語モデル(`/v1/qwen/install` → `/v1/qwen/select`)が必要(無いとき 503。`glyph-rank` は文書内の字だけで動く)。検索は `ARUARU_LLM_SEARCH_URL`(既定 `http://127.0.0.1:4610` = `aruaru-search`、VPS 内からは回数制限なし。ローカルで試すときは SSH 中継 `-L 14610:127.0.0.1:4610`)。
-
-- 実装: `src/ocr_fill.rs`(走査・提案・採点・検索・連続文字)、`src/ocr_glyph.rs`(字形の照合 = `opencuda_blas::sgemm`)、`src/qwen_generation.rs`(`score_texts` / `top_next_texts` / `scan_text` / `common_chars`)、`src/web_search.rs`(`snippets_via_aruaru_search`)。
-- 試験: `cargo test --bin aruaru-llm ocr_`(20 件)。速度の測定: `cargo test --release --bin aruaru-llm bench_sgemm -- --ignored --nocapture`。
-- **VPS 本番**: `/v1/ocr`・`/v1/ocr/fill` は反映済み。今回の追加分は 2026-10-10 に反映(言語モデル未導入のため 503 が正常。VPS は 4 コア・RAM 3.6GB なので、補完は手元 PC の `aruaru-llm` を `fill_server_url` で指定する運用)。
+- OCR の補完・字形照合の API を追加: `POST /v1/ocr/scan` / `propose` / `fill`(`return_all` / `use_web` / `lm_candidates`)/ `glyph-rank`、`GET /v1/ocr/charset?n=`。いずれも言語モデル(`/v1/qwen/install` → `/v1/qwen/select`)が必要(無いとき 503。`glyph-rank` は `extra_chars` だけでも動く)。
+- 実装: `src/ocr_fill.rs`(走査・提案・採点・検索・連続 1〜4 文字。採点は最大 8 候補・後ろ文脈 8 文字)、`src/ocr_glyph.rs`(字形の照合 = `opencuda_blas::sgemm`、共有クレート `RPoem/open-runo-glyph`)、`src/qwen_generation.rs`(`score_texts` / `top_next_texts` / `scan_text` / `common_chars`)、`src/web_search.rs`(`snippets_via_aruaru_search`)。
+- 検索: `ARUARU_LLM_SEARCH_URL`(既定 `http://127.0.0.1:4610` = `aruaru-search`)。試験は `cargo test --bin aruaru-llm ocr_`(20 件)、速度は `cargo test --release --bin aruaru-llm bench_sgemm -- --ignored --nocapture`(字形 1 升 約 14 ms)。
+- 測定: 補完はこれまでの試験で「害はないが上積みも無く遅い」(1 か所 10〜20 秒、Qwen2.5-1.5B・CPU)。既定オフ・実験的。詳細は `pdf-r2l-rs/PORTING.md`。
+- **VPS 本番**: `/v1/ocr`・`/v1/ocr/fill` は反映済み。v1.3.0 の追加分(`/scan`・`/propose`・`/glyph-rank`・`/charset`)も 2026-10-10 に反映(Qwen 未導入のため補完系は 503 が正常。VPS は 4 コア・RAM 3.6GB)。バックアップ: `/root/aruaru-llm.bin.bak-20261010`。トークンは `/root/aruaru-llm/.env.ocr`(git 管理外)。
 
 ### English
-
-**New server APIs (aruaru-llm)**: `POST /v1/ocr/scan` (detect unnatural spans), `POST /v1/ocr/propose` (single-character candidates), `POST /v1/ocr/fill` (score and replace; `return_all` / `use_web` / `lm_candidates`), `GET /v1/ocr/charset?n=` (frequent kanji/kana), `POST /v1/ocr/glyph-rank` (glyph matching via sgemm). All need a language model (`/v1/qwen/install` then `/v1/qwen/select`; 503 without one — `glyph-rank` works with the characters found in the document alone). Search goes through `ARUARU_LLM_SEARCH_URL` (default `http://127.0.0.1:4610` = `aruaru-search`, unlimited from inside the VPS; for local tests use an SSH forward `-L 14610:127.0.0.1:4610`).
-
-- Code: `src/ocr_fill.rs` (scan / propose / score / search / multi-character), `src/ocr_glyph.rs` (glyph matching = `opencuda_blas::sgemm`), `src/qwen_generation.rs` (`score_texts` / `top_next_texts` / `scan_text` / `common_chars`), `src/web_search.rs` (`snippets_via_aruaru_search`).
-- Tests: `cargo test --bin aruaru-llm ocr_` (20 tests). Speed: `cargo test --release --bin aruaru-llm bench_sgemm -- --ignored --nocapture`.
-- **Production VPS**: `/v1/ocr` and `/v1/ocr/fill` were deployed earlier; this batch was deployed on 2026-10-10 (503 is expected without a language model; the VPS has 4 cores / 3.6 GB RAM, so run completion on your own PC's `aruaru-llm` via `fill_server_url`).
+- Added OCR completion / glyph-matching APIs: `POST /v1/ocr/scan` / `propose` / `fill` (`return_all` / `use_web` / `lm_candidates`) / `glyph-rank`, `GET /v1/ocr/charset?n=`. All need a language model (`/v1/qwen/install` then `/v1/qwen/select`; 503 without one — `glyph-rank` works with just `extra_chars`).
+- Code: `src/ocr_fill.rs` (scan / propose / score / search / 1–4 character spans; scoring uses at most 8 candidates and 8 characters of following context), `src/ocr_glyph.rs` (glyph matching = `opencuda_blas::sgemm`, shared crate `RPoem/open-runo-glyph`), `src/qwen_generation.rs` (`score_texts` / `top_next_texts` / `scan_text` / `common_chars`), `src/web_search.rs` (`snippets_via_aruaru_search`).
+- Search: `ARUARU_LLM_SEARCH_URL` (default `http://127.0.0.1:4610` = `aruaru-search`). Tests: `cargo test --bin aruaru-llm ocr_` (20 tests); speed: `cargo test --release --bin aruaru-llm bench_sgemm -- --ignored --nocapture` (~14 ms per glyph cell).
+- Measurements: in our tests completion does no harm but adds nothing and is slow (10–20 s per spot, Qwen2.5-1.5B on CPU). Off by default, experimental. See `pdf-r2l-rs/PORTING.md`.
+- **Production VPS**: `/v1/ocr` and `/v1/ocr/fill` were deployed earlier; the v1.3.0 additions (`/scan`, `/propose`, `/glyph-rank`, `/charset`) were deployed on 2026-10-10 (503 is expected without a model; the VPS has 4 cores / 3.6 GB RAM). Backup: `/root/aruaru-llm.bin.bak-20261010`. The token is in `/root/aruaru-llm/.env.ocr` (not in git).
