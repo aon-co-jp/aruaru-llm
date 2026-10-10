@@ -54,6 +54,7 @@ mod signatures;
 mod tenants;
 mod ocr;
 mod ocr_correct;
+mod ocr_fill;
 mod ocr_data;
 mod transcribe;
 
@@ -1822,6 +1823,67 @@ async fn ocr_correct_endpoint(req: Request, device: Arc<dyn GpuDevice>) -> Respo
         Err(e) => ocr_err(StatusCode::INTERNAL_SERVER_ERROR, format!("correction task failed: {e}")),
     }
 }
+#[derive(Debug, Deserialize)]
+struct OcrFillRequest {
+    items: Vec<ocr_fill::FillItem>,
+    /// 採用に必要な対数尤度の差(既定 3.0 = 約20倍)。
+    #[serde(default)]
+    margin: Option<f32>,
+    /// 1 か所で変える最大の文字数(既定 2、1〜3)。
+    #[serde(default)]
+    max_chars: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct OcrFillResponse {
+    results: Vec<ocr_fill::FillResult>,
+    changed: usize,
+    model: String,
+    disclosure: &'static str,
+}
+
+/// `POST /v1/ocr/fill` — OCR で読めない・自信が低い 1〜2 文字を、前後の文脈から言語モデルで穴埋めする(`src/ocr_fill.rs`)。
+/// アクティブな Qwen モデル(`/v1/qwen/install` → `/v1/qwen/select`)が必要。無ければ 503。
+async fn ocr_fill_endpoint(req: Request, device: Arc<dyn GpuDevice>) -> Response {
+    idle_background_fold::touch_activity();
+    let Json(req): Json<OcrFillRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    if req.items.is_empty() || req.items.len() > ocr_fill::MAX_ITEMS {
+        return ocr_err(StatusCode::BAD_REQUEST, format!("1..={} items are required (got {})", ocr_fill::MAX_ITEMS, req.items.len()));
+    }
+    let Some(dir) = qwen_generation::active_qwen_model_dir() else {
+        return ocr_err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "no language model is active. Install one with POST /v1/qwen/install {\"id\":\"qwen2.5-0.5b-instruct\"} and POST /v1/qwen/select.",
+        );
+    };
+    let margin = req.margin.unwrap_or(3.0).clamp(0.0, 20.0);
+    let max_chars = req.max_chars.unwrap_or(2).clamp(1, 3);
+    let items = req.items;
+    let result = tokio::task::spawn_blocking(move || {
+        let lm = ocr_fill::QwenLm { device };
+        ocr_fill::fill_items(&lm, &items, margin, max_chars)
+    })
+    .await;
+    match result {
+        Ok(results) => {
+            let changed = results.iter().filter(|r| r.changed).count();
+            json_response(
+                StatusCode::OK,
+                &OcrFillResponse {
+                    results,
+                    changed,
+                    model: dir.to_string_lossy().to_string(),
+                    disclosure: "Each change replaces one spot by at most a few characters, chosen by a small language model scoring candidates in context. It can be wrong; the original reading, the chosen text and the candidate scores are all returned.",
+                },
+            )
+        }
+        Err(e) => ocr_err(StatusCode::INTERNAL_SERVER_ERROR, format!("fill task failed: {e}")),
+    }
+}
+
 /// `POST /v1/ocr/prepare` — 選んだ言語のデータを先に取得してキャッシュする(OCR 実行前の準備)。
 async fn ocr_prepare(req: Request) -> Response {
     let Json(req): Json<OcrPrepareRequest> = match Json::from_body(req).await {
@@ -3696,6 +3758,7 @@ async fn main() -> anyhow::Result<()> {
     let generate_pool = Arc::clone(&device_pool);
     let generate_qwen_pool = Arc::clone(&device_pool);
     let ocr_correct_pool = Arc::clone(&device_pool);
+    let ocr_fill_pool = Arc::clone(&device_pool);
     let generate_deepseek_pool = Arc::clone(&device_pool);
     let generate_registry = Arc::clone(&registry);
     let generate_speculative_pool = Arc::clone(&device_pool);
@@ -3793,6 +3856,13 @@ async fn main() -> anyhow::Result<()> {
             post(handler_fn(move |req, _p| {
                 let device = ocr_correct_pool.next_device();
                 async move { ocr_correct_endpoint(req, device).await }
+            })),
+        )
+        .at(
+            "/v1/ocr/fill",
+            post(handler_fn(move |req, _p| {
+                let device = ocr_fill_pool.next_device();
+                async move { ocr_fill_endpoint(req, device).await }
             })),
         )
         .at("/v1/ocr/fonts/:name", get(handler_fn(move |_req, p| async move { ocr_font(p).await })))

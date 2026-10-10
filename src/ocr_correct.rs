@@ -75,7 +75,7 @@ fn kind(c: char) -> Kind {
 }
 
 /// 置き換え `a → b` が、誤読として起こり得る範囲か。
-fn plausible_substitution(a: char, b: char) -> bool {
+pub(crate) fn plausible_substitution(a: char, b: char) -> bool {
     let (ka, kb) = (kind(a), kind(b));
     match (ka, kb) {
         (Kind::Han, Kind::Han) | (Kind::Kana, Kind::Kana) | (Kind::Hangul, Kind::Hangul) | (Kind::Punct, Kind::Punct) | (Kind::Digit, Kind::Digit) => true,

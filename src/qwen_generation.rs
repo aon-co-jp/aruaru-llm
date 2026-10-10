@@ -66,3 +66,22 @@ pub fn generate(device: &Arc<dyn GpuDevice>, prompt: &str, max_new_tokens: usize
     loaded.tokenizer.decode(&generated).context("tokenizer decode failed")
 }
 
+/// 文脈 `prefix` のあとに各 `conts[i]` が続く対数尤度(アクティブな Qwen モデル、バッチ prefill)。
+pub fn score_texts(_device: &Arc<dyn GpuDevice>, prefix: &str, conts: &[String]) -> Result<Vec<f32>> {
+    let loaded = ACTIVE_QWEN.read().expect("qwen active model lock poisoned").clone().context("no Qwen model is currently selected")?;
+    let device = _device;
+    let prefix_ids = loaded.tokenizer.encode(prefix).context("tokenizer encode failed")?;
+    let mut ids = Vec::with_capacity(conts.len());
+    for c in conts {
+        ids.push(if c.is_empty() { Vec::new() } else { loaded.tokenizer.encode(c).context("tokenizer encode failed")? });
+    }
+    loaded.model.score_continuations(device, &prefix_ids, &ids).context("QwenModel::score_continuations failed")
+}
+
+/// 文脈 `prefix` の次に来る文字列の上位 `k` 個(文字列, 対数確率)。
+pub fn top_next_texts(device: &Arc<dyn GpuDevice>, prefix: &str, k: usize) -> Result<Vec<(String, f32)>> {
+    let loaded = ACTIVE_QWEN.read().expect("qwen active model lock poisoned").clone().context("no Qwen model is currently selected")?;
+    let prefix_ids = loaded.tokenizer.encode(prefix).context("tokenizer encode failed")?;
+    let top = loaded.model.top_next_tokens(device, &prefix_ids, k).context("QwenModel::top_next_tokens failed")?;
+    Ok(top.into_iter().filter_map(|(id, lp)| loaded.tokenizer.decode(&[id]).ok().map(|t| (t, lp))).collect())
+}
