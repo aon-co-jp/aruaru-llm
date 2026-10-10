@@ -180,6 +180,29 @@ pub async fn recognize_batch(images: &[Vec<u8>], languages: &[String], tessdata_
     if images.is_empty() {
         return Err("no images".into());
     }
+    for img in images {
+        image_ext(img).ok_or("image must be PNG or JPEG")?;
+    }
+    // 同時実行数の上限まで、画像を連続した組に分けて並行に処理する(各組が tesseract を1回起動する)。
+    // 2組以上に分けるのは、組あたり2枚以上あるときだけ(起動と言語データ読み込みの回数を増やしすぎない)。
+    let groups = (images.len() / 2).clamp(1, MAX_CONCURRENT);
+    let per = images.len().div_ceil(groups);
+    let mut set = tokio::task::JoinSet::new();
+    for (gi, chunk) in images.chunks(per).enumerate() {
+        let chunk: Vec<Vec<u8>> = chunk.to_vec();
+        let (languages, dir) = (languages.to_vec(), tessdata_dir.to_path_buf());
+        set.spawn(async move { (gi, recognize_group(&chunk, &languages, &dir).await) });
+    }
+    let mut parts: Vec<(usize, Vec<Vec<OcrLine>>)> = Vec::new();
+    while let Some(r) = set.join_next().await {
+        let (gi, res) = r.map_err(|e| e.to_string())?;
+        parts.push((gi, res?));
+    }
+    parts.sort_by_key(|p| p.0);
+    Ok(parts.into_iter().flat_map(|p| p.1).collect())
+}
+
+async fn recognize_group(images: &[Vec<u8>], languages: &[String], tessdata_dir: &Path) -> Result<Vec<Vec<OcrLine>>, String> {
     let mut exts = Vec::new();
     for img in images {
         exts.push(image_ext(img).ok_or("image must be PNG or JPEG")?);
