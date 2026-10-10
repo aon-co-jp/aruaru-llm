@@ -85,3 +85,62 @@ pub fn top_next_texts(device: &Arc<dyn GpuDevice>, prefix: &str, k: usize) -> Re
     let top = loaded.model.top_next_tokens(device, &prefix_ids, k).context("QwenModel::top_next_tokens failed")?;
     Ok(top.into_iter().filter_map(|(id, lp)| loaded.tokenizer.decode(&[id]).ok().map(|t| (t, lp))).collect())
 }
+
+/// 1 トークンぶんの範囲(文字単位)と、直前までの文脈つきの対数確率。
+#[derive(Debug, Clone, PartialEq)]
+pub struct TokenSpan {
+    pub start: usize,
+    pub len: usize,
+    pub logp: f32,
+}
+
+/// 文章の各トークンの範囲と対数確率(アクティブな Qwen、1 回のバッチ prefill)。OCR の誤読の検出用。
+/// バイト単位のトークン(文字の途中で切れるもの)は、文字が完成するまで次のトークンと合わせて 1 つの範囲にする。
+pub fn scan_text(device: &Arc<dyn GpuDevice>, text: &str) -> Result<Vec<TokenSpan>> {
+    let loaded = ACTIVE_QWEN.read().expect("qwen active model lock poisoned").clone().context("no Qwen model is currently selected")?;
+    let ids = loaded.tokenizer.encode(text).context("tokenizer encode failed")?;
+    if ids.len() < 2 {
+        return Ok(Vec::new());
+    }
+    let lps = loaded.model.token_logprobs(device, &ids).context("QwenModel::token_logprobs failed")?;
+    let mut spans = Vec::new();
+    let mut done_chars = 0usize;
+    let mut pending = 0.0f32;
+    for k in 0..ids.len() {
+        pending += lps[k];
+        let dec = loaded.tokenizer.decode(&ids[..=k]).unwrap_or_default();
+        let chars: Vec<char> = dec.chars().collect();
+        // 末尾の不完全な文字(U+FFFD)は、まだ数えない。
+        let complete = chars.iter().rposition(|&c| c != '\u{FFFD}').map(|p| p + 1).unwrap_or(0);
+        let complete = if chars.last() == Some(&'\u{FFFD}') { complete } else { chars.len() };
+        if complete > done_chars {
+            spans.push(TokenSpan { start: done_chars, len: complete - done_chars, logp: pending });
+            done_chars = complete;
+            pending = 0.0;
+        }
+    }
+    Ok(spans)
+}
+
+/// 頻出順(Qwen の語彙は、頻出の字ほど ID が小さい傾向がある)に並べた、1 文字で 1 トークンの漢字・かなの集合(最大 `n` 字)。
+/// アプリが、残っているインクの形(字形)で候補を探すときの母集団にする。モデルが選ばれていなくても使えない(語彙はモデルのもの)。
+pub fn common_chars(n: usize) -> Result<Vec<char>> {
+    let loaded = ACTIVE_QWEN.read().expect("qwen active model lock poisoned").clone().context("no Qwen model is currently selected")?;
+    let mut out: Vec<char> = Vec::new();
+    for id in 0..120_000u32 {
+        if out.len() >= n {
+            break;
+        }
+        let Ok(t) = loaded.tokenizer.decode(&[id]) else {
+            continue;
+        };
+        let mut it = t.chars();
+        if let (Some(c), None) = (it.next(), it.next()) {
+            let ok = matches!(c as u32, 0x3041..=0x3096 | 0x30A1..=0x30FA | 0x4E00..=0x9FFF);
+            if ok && !out.contains(&c) {
+                out.push(c);
+            }
+        }
+    }
+    Ok(out)
+}
