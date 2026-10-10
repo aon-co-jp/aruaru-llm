@@ -85,6 +85,7 @@ rust-json = { path = "../RS-JSON" }
 # デコードに使う。既存 crate(reqwest 等)が推移的に複数版を持つが、直接
 # 依存として明示しておく。
 base64 = "0.22"
+sha2 = "0.10"
 # 2026-08-29 方針変更: `POST /v1/transcribe` の実装は `whisper-rs`(C++
 # リンクが必要、Windows/MSVC でビルド不能な既知ブロッカーあり)を直接
 # 使うのをやめ、whisper.cpp の**プレビルド CLI を子プロセス起動**する

@@ -7,8 +7,13 @@
 //!
 //! `transcribe.rs`(whisper.cpp CLI)と同じパターン。`tesseract <画像> stdout -l <言語> tsv`
 //! を起動し、TSV(単語ごとの外接矩形・信頼度)を行ごとにまとめて返す。C++リンクは不要で、
-//! 実行ファイル(`tesseract`)と言語データ(`jpn` など)が実在する場合だけ動作する。
-//! 無ければ `503` と導入方法を返す。
+//! 実行ファイル(`tesseract`)と言語データが実在する場合だけ動作する。無ければ `503`。
+//!
+//! # 高速化
+//!
+//! - **ページをまとめて OCR**: 複数ページの画像を画像リスト(`.txt`)にして **1回の tesseract 起動**で
+//!   処理し、起動と言語データ読み込みの回数を減らす(`recognize_batch`)。
+//! - 言語データは必要な言語だけを取得してキャッシュする(`ocr_data.rs`)。`fast` を選べば小さく速い。
 //!
 //! # 資源保護
 //!
@@ -19,10 +24,14 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-/// 画像(デコード後)の上限バイト数。
+/// 画像1枚(デコード後)の上限バイト数。
 pub const MAX_IMAGE_BYTES: usize = 12 * 1024 * 1024;
-/// tesseract の実行時間上限。
-const TIMEOUT: Duration = Duration::from_secs(120);
+/// 1回の要求で受け付ける画像(ページ)数の上限。
+pub const MAX_BATCH_IMAGES: usize = 16;
+/// 1回の要求の画像合計(デコード後)の上限バイト数。
+pub const MAX_BATCH_BYTES: usize = 64 * 1024 * 1024;
+/// tesseract の実行時間上限(バッチ全体)。
+const TIMEOUT: Duration = Duration::from_secs(600);
 /// 同時に走らせる tesseract の数(VPS の CPU を守る)。
 const MAX_CONCURRENT: usize = 2;
 
@@ -50,37 +59,21 @@ pub struct OcrLine {
     pub words: Vec<OcrWord>,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct OcrOutput {
-    pub lines: Vec<OcrLine>,
-}
-
 /// `tesseract` 実行ファイルのパス。`ARUARU_LLM_TESSERACT` で上書き可、既定は PATH 上の `tesseract`。
 pub fn cli_path() -> PathBuf {
     std::env::var("ARUARU_LLM_TESSERACT").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("tesseract"))
 }
 
-/// 言語指定の検証(`jpn+eng` のような英数字と `_` と `+` のみ。コマンド注入防止)。
-pub fn valid_languages(s: &str) -> bool {
-    !s.is_empty()
-        && s.len() <= 40
-        && s.split('+').all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
-}
-
-/// インストール済みの言語データ(`tesseract --list-langs`)。実行できなければ None。
-pub async fn installed_languages() -> Option<Vec<String>> {
-    let out = tokio::process::Command::new(cli_path())
-        .arg("--list-langs")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
+/// `tesseract` が起動できるか。
+pub async fn cli_available() -> bool {
+    tokio::process::Command::new(cli_path())
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
         .await
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let text = String::from_utf8_lossy(&out.stdout);
-    Some(text.lines().skip(1).map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 /// 画像のマジックバイトで形式を判定(PNG / JPEG のみ受理)。
@@ -94,11 +87,28 @@ pub fn image_ext(bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
-/// tesseract の TSV 出力を行(block/par/line 単位)にまとめる。
+/// 複数画像の TSV をページごとに分けて行にまとめる。`page_num` 列(2列目)がページ番号。
 /// 列: level page block par line word left top width height conf text
-pub fn parse_tsv(tsv: &str) -> Vec<OcrLine> {
-    let mut lines: Vec<((i32, i32, i32), OcrLine)> = Vec::new();
+pub fn parse_tsv_pages(tsv: &str) -> Vec<Vec<OcrLine>> {
+    let mut pages: Vec<(i32, Vec<&str>)> = Vec::new();
     for row in tsv.lines().skip(1) {
+        let page = row.split('\t').nth(1).and_then(|p| p.trim().parse::<i32>().ok()).unwrap_or(1);
+        match pages.last_mut() {
+            Some((p, rows)) if *p == page => rows.push(row),
+            _ => pages.push((page, vec![row])),
+        }
+    }
+    pages.into_iter().map(|(_, rows)| parse_rows(&rows)).collect()
+}
+
+/// 1ページぶんの TSV を行にまとめる(ヘッダー付き)。
+pub fn parse_tsv(tsv: &str) -> Vec<OcrLine> {
+    parse_tsv_pages(tsv).into_iter().next().unwrap_or_default()
+}
+
+fn parse_rows(rows: &[&str]) -> Vec<OcrLine> {
+    let mut lines: Vec<((i32, i32, i32), OcrLine)> = Vec::new();
+    for row in rows {
         let c: Vec<&str> = row.splitn(12, '\t').collect();
         if c.len() < 12 || c[0] != "5" {
             continue;
@@ -131,7 +141,7 @@ pub fn parse_tsv(tsv: &str) -> Vec<OcrLine> {
             l.w = x1 - x0;
             l.h = y1 - y0;
             l.conf = l.words.iter().map(|w| w.conf).sum::<f32>() / l.words.len() as f32;
-            // 日本語は単語間に空白を入れず、英数字どうしが隣り合う所だけ空白で区切る。
+            // 日本語などは単語間に空白を入れず、英数字どうしが隣り合う所だけ空白で区切る。
             let mut text = String::new();
             for w in &l.words {
                 let a = text.chars().last();
@@ -158,26 +168,39 @@ fn scratch_dir() -> std::io::Result<PathBuf> {
     Ok(dir)
 }
 
-/// 画像を OCR する。`languages` は `jpn+eng` のような tesseract の言語指定。
-pub async fn recognize(image: &[u8], languages: &str) -> Result<OcrOutput, String> {
-    if !valid_languages(languages) {
-        return Err(format!("invalid languages: {languages}"));
+/// 複数の画像(ページ)を **1回の tesseract 起動**で OCR する。戻り値は画像と同じ順のページごとの行。
+/// `languages` は検証済みの言語コード、`tessdata_dir` は `--tessdata-dir` に渡す場所。
+pub async fn recognize_batch(images: &[Vec<u8>], languages: &[String], tessdata_dir: &Path) -> Result<Vec<Vec<OcrLine>>, String> {
+    if images.is_empty() {
+        return Err("no images".into());
     }
-    let ext = image_ext(image).ok_or("image must be PNG or JPEG")?;
+    let mut exts = Vec::new();
+    for img in images {
+        exts.push(image_ext(img).ok_or("image must be PNG or JPEG")?);
+    }
     let _permit = SEMAPHORE.acquire().await.map_err(|e| e.to_string())?;
     let dir = scratch_dir().map_err(|e| format!("scratch dir: {e}"))?;
-    let result = run_tesseract(&dir, image, ext, languages).await;
+    let result = run_tesseract(&dir, images, &exts, languages, tessdata_dir).await;
     let _ = std::fs::remove_dir_all(&dir);
     result
 }
 
-async fn run_tesseract(dir: &Path, image: &[u8], ext: &str, languages: &str) -> Result<OcrOutput, String> {
-    let img_path = dir.join(format!("page.{ext}"));
-    std::fs::write(&img_path, image).map_err(|e| format!("write image: {e}"))?;
+async fn run_tesseract(dir: &Path, images: &[Vec<u8>], exts: &[&str], languages: &[String], tessdata_dir: &Path) -> Result<Vec<Vec<OcrLine>>, String> {
+    let mut list = String::new();
+    for (i, (img, ext)) in images.iter().zip(exts).enumerate() {
+        let p = dir.join(format!("page{i:03}.{ext}"));
+        std::fs::write(&p, img).map_err(|e| format!("write image: {e}"))?;
+        list.push_str(&p.to_string_lossy());
+        list.push('\n');
+    }
+    let list_path = dir.join("pages.txt");
+    std::fs::write(&list_path, list).map_err(|e| format!("write list: {e}"))?;
     let child = tokio::process::Command::new(cli_path())
-        .arg(&img_path)
+        .arg(&list_path)
         .arg("stdout")
-        .args(["-l", languages, "--psm", "3", "tsv"])
+        .arg("--tessdata-dir")
+        .arg(tessdata_dir)
+        .args(["-l", &languages.join("+"), "--psm", "3", "tsv"])
         .env("OMP_THREAD_LIMIT", "1")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -192,7 +215,10 @@ async fn run_tesseract(dir: &Path, image: &[u8], ext: &str, languages: &str) -> 
         let err = String::from_utf8_lossy(&out.stderr);
         return Err(format!("tesseract failed: {}", err.lines().next().unwrap_or("unknown error")));
     }
-    Ok(OcrOutput { lines: parse_tsv(&String::from_utf8_lossy(&out.stdout)) })
+    let mut pages = parse_tsv_pages(&String::from_utf8_lossy(&out.stdout));
+    // 文字が1つも見つからなかったページは TSV に行が出ないことがあるため、ページ数を画像数に揃える。
+    pages.resize(images.len(), Vec::new());
+    Ok(pages)
 }
 
 #[cfg(test)]
@@ -204,7 +230,8 @@ mod tests {
 5\t1\t1\t1\t1\t1\t10\t20\t50\t30\t96.5\tHello\n\
 5\t1\t1\t1\t1\t2\t70\t22\t60\t28\t90.0\tworld\n\
 5\t1\t1\t1\t2\t1\t10\t60\t80\t30\t88.0\t日本語\n\
-5\t1\t1\t1\t2\t2\t95\t60\t40\t30\t-1\t\n";
+5\t1\t1\t1\t2\t2\t95\t60\t40\t30\t-1\t\n\
+5\t2\t1\t1\t1\t1\t5\t6\t70\t20\t77.0\tSecond\n";
 
     #[test]
     fn groups_words_into_lines() {
@@ -218,11 +245,16 @@ mod tests {
     }
 
     #[test]
-    fn validates_languages_and_images() {
-        assert!(valid_languages("jpn+eng"));
-        assert!(valid_languages("jpn_vert"));
-        assert!(!valid_languages("jpn;rm -rf"));
-        assert!(!valid_languages(""));
+    fn splits_pages() {
+        let pages = parse_tsv_pages(TSV);
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[0].len(), 2);
+        assert_eq!(pages[1].len(), 1);
+        assert_eq!(pages[1][0].text, "Second");
+    }
+
+    #[test]
+    fn detects_image_formats() {
         assert_eq!(image_ext(&[0x89, b'P', b'N', b'G', 0]), Some("png"));
         assert_eq!(image_ext(&[0xFF, 0xD8, 0xFF, 0xE0]), Some("jpg"));
         assert_eq!(image_ext(b"GIF89a"), None);
