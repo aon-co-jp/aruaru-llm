@@ -52,6 +52,7 @@ mod security;
 mod self_update;
 mod signatures;
 mod tenants;
+mod ocr;
 mod transcribe;
 
 use std::collections::HashMap;
@@ -1579,6 +1580,84 @@ fn transcribe_engine_label() -> &'static str {
     }
 }
 
+
+#[derive(Debug, Deserialize)]
+struct OcrRequest {
+    /// PNG または JPEG の画像を base64 にしたもの(PDF の 1 ページを画像化したものなど)。
+    image_base64: String,
+    /// tesseract の言語指定。既定は `jpn+eng`。
+    #[serde(default)]
+    languages: Option<String>,
+    #[serde(default)]
+    tenant: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct OcrResponse {
+    lines: Vec<ocr::OcrLine>,
+    languages: String,
+    engine: &'static str,
+    disclosure: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct OcrErrorResponse {
+    error: String,
+    engine: &'static str,
+}
+
+/// `POST /v1/ocr` — 画像の文字認識(Tesseract CLI の子プロセス、`src/ocr.rs`)。
+/// 各行・各単語の外接矩形(画像ピクセル座標)と信頼度を返す。`tesseract` と言語データが
+/// 無ければ `503`。画像は処理後すぐ破棄し、保存しない。
+async fn ocr_endpoint(req: Request, registry: Arc<TenantRegistry>) -> Response {
+    idle_background_fold::touch_activity();
+    let Json(req): Json<OcrRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    log_tenant_usage("ocr", &req.tenant, &registry);
+    let err = |status: StatusCode, msg: String| {
+        json_response(status, &OcrErrorResponse { error: msg, engine: "tesseract-cli" })
+    };
+    let languages = req.languages.unwrap_or_else(|| "jpn+eng".to_string());
+    if !ocr::valid_languages(&languages) {
+        return err(StatusCode::BAD_REQUEST, format!("invalid languages: {languages}"));
+    }
+    let image = match base64::engine::general_purpose::STANDARD.decode(req.image_base64.as_bytes()) {
+        Ok(b) => b,
+        Err(e) => return err(StatusCode::BAD_REQUEST, format!("image_base64 is not valid base64: {e}")),
+    };
+    if image.is_empty() || image.len() > ocr::MAX_IMAGE_BYTES {
+        return err(StatusCode::BAD_REQUEST, format!("image must be 1..={} bytes (got {})", ocr::MAX_IMAGE_BYTES, image.len()));
+    }
+    if ocr::image_ext(&image).is_none() {
+        return err(StatusCode::BAD_REQUEST, "image must be PNG or JPEG".to_string());
+    }
+    let Some(installed) = ocr::installed_languages().await else {
+        return err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "tesseract is not available. Install Tesseract OCR (with the jpn language data) or set ARUARU_LLM_TESSERACT.".to_string(),
+        );
+    };
+    if let Some(missing) = languages.split('+').find(|l| !installed.iter().any(|i| i == l)) {
+        return err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!("tesseract language data '{missing}' is not installed (installed: {})", installed.join(", ")),
+        );
+    }
+    match ocr::recognize(&image, &languages).await {
+        Ok(out) => json_response(
+            StatusCode::OK,
+            &OcrResponse {
+                lines: out.lines,
+                languages,
+                engine: "tesseract-cli",
+                disclosure: "OCR by the local Tesseract CLI; the image is processed in memory/temp and deleted immediately. Recognition errors are possible.",
+            },
+        ),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
 /// `POST /v1/transcribe` — whisper.cpp のプレビルド CLI(`whisper-cli`)を
 /// 子プロセス起動して音声を書き起こす(2026-08-29新設・方針変更、
 /// `open-english/docs/SPEECH_RECOGNITION_REDESIGN.md` の P2-β。ブラウザ内
@@ -3420,6 +3499,7 @@ async fn main() -> anyhow::Result<()> {
     let layer_redundancy_pool = Arc::clone(&device_pool);
     let fold_layers_pool = Arc::clone(&device_pool);
     let transcribe_registry = Arc::clone(&registry);
+    let ocr_registry = Arc::clone(&registry);
     let admin_register_registry = Arc::clone(&registry);
     let admin_list_registry = Arc::clone(&registry);
     let admin_remove_registry = Arc::clone(&registry);
@@ -3489,6 +3569,13 @@ async fn main() -> anyhow::Result<()> {
             post(handler_fn(move |req, _p| {
                 let registry = Arc::clone(&transcribe_registry);
                 async move { transcribe(req, registry).await }
+            })),
+        )
+        .at(
+            "/v1/ocr",
+            post(handler_fn(move |req, _p| {
+                let registry = Arc::clone(&ocr_registry);
+                async move { ocr_endpoint(req, registry).await }
             })),
         )
         .at("/v1/models/catalog", get(plain(|| Box::pin(list_model_catalog()))))
