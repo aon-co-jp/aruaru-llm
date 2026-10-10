@@ -151,6 +151,7 @@ dependencies = [
  "rust-json",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tch",
  "tempfile",
  "tokio",

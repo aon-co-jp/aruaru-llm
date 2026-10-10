@@ -53,6 +53,7 @@ mod self_update;
 mod signatures;
 mod tenants;
 mod ocr;
+mod ocr_data;
 mod transcribe;
 
 use std::collections::HashMap;
@@ -1580,22 +1581,54 @@ fn transcribe_engine_label() -> &'static str {
     }
 }
 
+/// `languages` は `"jpn+eng"` 形式の文字列でも `["jpn","eng"]` の配列でもよい。
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum OcrLanguages {
+    Joined(String),
+    List(Vec<String>),
+}
+
+impl OcrLanguages {
+    fn into_codes(self) -> Vec<String> {
+        match self {
+            OcrLanguages::Joined(s) => s.split('+').map(|p| p.trim().to_string()).collect(),
+            OcrLanguages::List(v) => v,
+        }
+    }
+}
 
 #[derive(Debug, Deserialize)]
 struct OcrRequest {
-    /// PNG または JPEG の画像を base64 にしたもの(PDF の 1 ページを画像化したものなど)。
-    image_base64: String,
-    /// tesseract の言語指定。既定は `jpn+eng`。
+    /// PNG または JPEG(base64)。1ページだけの場合。
     #[serde(default)]
-    languages: Option<String>,
+    image_base64: Option<String>,
+    /// 複数ページをまとめて OCR する場合(1回の tesseract 起動で処理して高速化)。最大16枚。
+    #[serde(default)]
+    images_base64: Option<Vec<String>>,
+    /// 言語(1〜12個)。既定は `jpn+eng`。
+    #[serde(default)]
+    languages: Option<OcrLanguages>,
+    /// `"best"`(高精度、既定)または `"fast"`(高速)。
+    #[serde(default)]
+    quality: Option<String>,
     #[serde(default)]
     tenant: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
-struct OcrResponse {
+struct OcrPage {
     lines: Vec<ocr::OcrLine>,
-    languages: String,
+}
+
+#[derive(Debug, Serialize)]
+struct OcrResponse {
+    /// 画像と同じ順のページごとの認識結果。
+    pages: Vec<OcrPage>,
+    languages: Vec<String>,
+    quality: &'static str,
+    /// 今回の要求で新たに取得(キャッシュ)した言語データ。
+    fetched_languages: Vec<String>,
     engine: &'static str,
     disclosure: &'static str,
 }
@@ -1606,9 +1639,14 @@ struct OcrErrorResponse {
     engine: &'static str,
 }
 
+fn ocr_err(status: StatusCode, msg: impl Into<String>) -> Response {
+    json_response(status, &OcrErrorResponse { error: msg.into(), engine: "tesseract-cli" })
+}
+
 /// `POST /v1/ocr` — 画像の文字認識(Tesseract CLI の子プロセス、`src/ocr.rs`)。
-/// 各行・各単語の外接矩形(画像ピクセル座標)と信頼度を返す。`tesseract` と言語データが
-/// 無ければ `503`。画像は処理後すぐ破棄し、保存しない。
+/// 各行・各単語の外接矩形(画像ピクセル座標)と信頼度を返す。複数ページを `images_base64` で
+/// まとめて送ると tesseract の起動が1回で済む。必要な言語データは初回だけ取得してキャッシュする
+/// (`src/ocr_data.rs`)。画像は処理後すぐ破棄し、保存しない。
 async fn ocr_endpoint(req: Request, registry: Arc<TenantRegistry>) -> Response {
     idle_background_fold::touch_activity();
     let Json(req): Json<OcrRequest> = match Json::from_body(req).await {
@@ -1616,46 +1654,158 @@ async fn ocr_endpoint(req: Request, registry: Arc<TenantRegistry>) -> Response {
         Err(resp) => return resp,
     };
     log_tenant_usage("ocr", &req.tenant, &registry);
-    let err = |status: StatusCode, msg: String| {
-        json_response(status, &OcrErrorResponse { error: msg, engine: "tesseract-cli" })
+
+    let codes = req.languages.map(|l| l.into_codes()).unwrap_or_else(|| vec!["jpn".to_string(), "eng".to_string()]);
+    let languages = match ocr_data::normalize_languages(&codes) {
+        Ok(l) => l,
+        Err(e) => return ocr_err(StatusCode::BAD_REQUEST, e),
     };
-    let languages = req.languages.unwrap_or_else(|| "jpn+eng".to_string());
-    if !ocr::valid_languages(&languages) {
-        return err(StatusCode::BAD_REQUEST, format!("invalid languages: {languages}"));
-    }
-    let image = match base64::engine::general_purpose::STANDARD.decode(req.image_base64.as_bytes()) {
-        Ok(b) => b,
-        Err(e) => return err(StatusCode::BAD_REQUEST, format!("image_base64 is not valid base64: {e}")),
+    let quality = match ocr_data::Quality::parse(req.quality.as_deref()) {
+        Ok(q) => q,
+        Err(e) => return ocr_err(StatusCode::BAD_REQUEST, e),
     };
-    if image.is_empty() || image.len() > ocr::MAX_IMAGE_BYTES {
-        return err(StatusCode::BAD_REQUEST, format!("image must be 1..={} bytes (got {})", ocr::MAX_IMAGE_BYTES, image.len()));
+
+    let mut encoded: Vec<String> = req.images_base64.unwrap_or_default();
+    if let Some(one) = req.image_base64 {
+        encoded.insert(0, one);
     }
-    if ocr::image_ext(&image).is_none() {
-        return err(StatusCode::BAD_REQUEST, "image must be PNG or JPEG".to_string());
+    if encoded.is_empty() || encoded.len() > ocr::MAX_BATCH_IMAGES {
+        return ocr_err(StatusCode::BAD_REQUEST, format!("1..={} images are required (got {})", ocr::MAX_BATCH_IMAGES, encoded.len()));
     }
-    let Some(installed) = ocr::installed_languages().await else {
-        return err(
+    let mut images: Vec<Vec<u8>> = Vec::new();
+    let mut total = 0usize;
+    for e in &encoded {
+        let img = match base64::engine::general_purpose::STANDARD.decode(e.as_bytes()) {
+            Ok(b) => b,
+            Err(err) => return ocr_err(StatusCode::BAD_REQUEST, format!("image is not valid base64: {err}")),
+        };
+        if img.is_empty() || img.len() > ocr::MAX_IMAGE_BYTES {
+            return ocr_err(StatusCode::BAD_REQUEST, format!("each image must be 1..={} bytes (got {})", ocr::MAX_IMAGE_BYTES, img.len()));
+        }
+        if ocr::image_ext(&img).is_none() {
+            return ocr_err(StatusCode::BAD_REQUEST, "image must be PNG or JPEG");
+        }
+        total += img.len();
+        images.push(img);
+    }
+    if total > ocr::MAX_BATCH_BYTES {
+        return ocr_err(StatusCode::BAD_REQUEST, format!("images are too large in total ({total} bytes, limit {})", ocr::MAX_BATCH_BYTES));
+    }
+    if !ocr::cli_available().await {
+        return ocr_err(
             StatusCode::SERVICE_UNAVAILABLE,
-            "tesseract is not available. Install Tesseract OCR (with the jpn language data) or set ARUARU_LLM_TESSERACT.".to_string(),
-        );
-    };
-    if let Some(missing) = languages.split('+').find(|l| !installed.iter().any(|i| i == l)) {
-        return err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            format!("tesseract language data '{missing}' is not installed (installed: {})", installed.join(", ")),
+            "tesseract is not available. Install Tesseract OCR or set ARUARU_LLM_TESSERACT.",
         );
     }
-    match ocr::recognize(&image, &languages).await {
-        Ok(out) => json_response(
+    let fetched = match ocr_data::ensure_languages(quality, &languages).await {
+        Ok(f) => f,
+        Err(e) => return ocr_err(StatusCode::SERVICE_UNAVAILABLE, e),
+    };
+    match ocr::recognize_batch(&images, &languages, &ocr_data::variant_dir(quality)).await {
+        Ok(pages) => json_response(
             StatusCode::OK,
             &OcrResponse {
-                lines: out.lines,
+                pages: pages.into_iter().map(|lines| OcrPage { lines }).collect(),
                 languages,
+                quality: quality.dir_name(),
+                fetched_languages: fetched,
                 engine: "tesseract-cli",
-                disclosure: "OCR by the local Tesseract CLI; the image is processed in memory/temp and deleted immediately. Recognition errors are possible.",
+                disclosure: "OCR by the Tesseract CLI; images are processed in temp files and deleted immediately. Recognition errors are possible.",
             },
         ),
-        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e),
+        Err(e) => ocr_err(StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct OcrLanguageEntry {
+    code: &'static str,
+    name_ja: &'static str,
+    name_en: &'static str,
+    cached_best: bool,
+    cached_fast: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct OcrLanguagesResponse {
+    max_languages: usize,
+    tesseract_available: bool,
+    languages: Vec<OcrLanguageEntry>,
+    explanation_ja: &'static str,
+    explanation_en: &'static str,
+}
+
+/// `GET /v1/ocr/languages` — 選べる言語の一覧(日英名・取得済みかどうか・説明)。アプリの言語選択画面が使う。
+async fn ocr_languages() -> Response {
+    json_response(
+        StatusCode::OK,
+        &OcrLanguagesResponse {
+            max_languages: ocr_data::MAX_LANGS,
+            tesseract_available: ocr::cli_available().await,
+            languages: ocr_data::LANGUAGES
+                .iter()
+                .map(|l| OcrLanguageEntry {
+                    code: l.code,
+                    name_ja: l.name_ja,
+                    name_en: l.name_en,
+                    cached_best: ocr_data::lang_cached(ocr_data::Quality::Best, l.code),
+                    cached_fast: ocr_data::lang_cached(ocr_data::Quality::Fast, l.code),
+                })
+                .collect(),
+            explanation_ja: "文字認識(OCR)に使う言語を1〜12個選べます。選んだ言語のデータだけを取得して保存(キャッシュ)し、次回以降は再利用するため、選ぶ言語が少ないほど速く軽くなります。ページに含まれる言語を全て選んでください(含まれない言語を選ぶと誤認識が増え、遅くなります)。",
+            explanation_en: "Choose 1 to 12 languages for text recognition (OCR). Only the data for the languages you choose is downloaded and cached for reuse, so fewer languages means faster and lighter processing. Select every language that appears in your pages (choosing languages that do not appear increases misrecognition and slows things down).",
+        },
+    )
+}
+
+#[derive(Debug, Deserialize)]
+struct OcrPrepareRequest {
+    languages: OcrLanguages,
+    #[serde(default)]
+    quality: Option<String>,
+}
+
+/// `POST /v1/ocr/prepare` — 選んだ言語のデータを先に取得してキャッシュする(OCR 実行前の準備)。
+async fn ocr_prepare(req: Request) -> Response {
+    let Json(req): Json<OcrPrepareRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let languages = match ocr_data::normalize_languages(&req.languages.into_codes()) {
+        Ok(l) => l,
+        Err(e) => return ocr_err(StatusCode::BAD_REQUEST, e),
+    };
+    let quality = match ocr_data::Quality::parse(req.quality.as_deref()) {
+        Ok(q) => q,
+        Err(e) => return ocr_err(StatusCode::BAD_REQUEST, e),
+    };
+    match ocr_data::ensure_languages(quality, &languages).await {
+        Ok(fetched) => json_response(
+            StatusCode::OK,
+            &serde_json::json!({ "languages": languages, "quality": quality.dir_name(), "fetched_languages": fetched }),
+        ),
+        Err(e) => ocr_err(StatusCode::SERVICE_UNAVAILABLE, e),
+    }
+}
+
+/// `GET /v1/ocr/fonts/:name` — 書体フォントを返す(必要な時に取得してキャッシュ)。
+/// アプリは PDF にフォントを埋め込むために使う(OFL ライセンスのフォントのみ)。
+async fn ocr_font(params: Params) -> Response {
+    let name = PathParams::from(params).get("name").unwrap_or("").to_string();
+    if !ocr_data::is_known_font(&name) {
+        return ocr_err(StatusCode::NOT_FOUND, "unknown font");
+    }
+    let path = match ocr_data::ensure_font(&name).await {
+        Ok(p) => p,
+        Err(e) => return ocr_err(StatusCode::SERVICE_UNAVAILABLE, e),
+    };
+    match std::fs::read(&path) {
+        Ok(bytes) => hyper::Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "application/octet-stream")
+            .body(fixed_body(Bytes::from(bytes)))
+            .expect("static headers are valid"),
+        Err(e) => ocr_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
 /// `POST /v1/transcribe` — whisper.cpp のプレビルド CLI(`whisper-cli`)を
@@ -3578,6 +3728,9 @@ async fn main() -> anyhow::Result<()> {
                 async move { ocr_endpoint(req, registry).await }
             })),
         )
+        .at("/v1/ocr/languages", get(plain(|| Box::pin(ocr_languages()))))
+        .at("/v1/ocr/prepare", post(handler_fn(move |req, _p| async move { ocr_prepare(req).await })))
+        .at("/v1/ocr/fonts/:name", get(handler_fn(move |_req, p| async move { ocr_font(p).await })))
         .at("/v1/models/catalog", get(plain(|| Box::pin(list_model_catalog()))))
         .at("/v1/geo/random", get(plain(|| Box::pin(geo_random()))))
         .at("/v1/geo/fuji", get(plain(|| Box::pin(geo_fuji()))))
