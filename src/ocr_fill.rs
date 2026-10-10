@@ -21,11 +21,11 @@ pub const MAX_ITEMS: usize = 400;
 const DEADLINE: Duration = Duration::from_secs(600);
 /// 前の文脈・後ろの文脈として使う最大文字数。
 const PREFIX_CHARS: usize = 60;
-const SUFFIX_CHARS: usize = 10;
+const SUFFIX_CHARS: usize = 8;
 /// 位置ごとにモデルへ挙げさせる候補の数。
 const TOP_K: usize = 8;
 /// 1 か所で採点する候補数の上限(採点が一番重いため)。
-const MAX_CANDIDATES: usize = 16;
+const MAX_CANDIDATES: usize = 8;
 /// 連続して直せる最大の文字数(走査で隣り合う不自然なトークンを 1 か所にまとめる上限)。
 pub const MAX_SPAN: usize = 4;
 /// 検索で裏付けが取れた 1 件あたりの加点(nat)と、数える件数の上限。

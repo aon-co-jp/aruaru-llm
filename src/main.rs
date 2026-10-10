@@ -2058,6 +2058,9 @@ async fn ocr_glyph_rank_endpoint(req: Request, device: Arc<dyn GpuDevice>) -> Re
         Vec::new()
     };
     let extra: Vec<char> = req.extra_chars.chars().filter(|c| c.is_alphanumeric()).collect();
+    if pool.is_empty() && extra.is_empty() {
+        return ocr_err(StatusCode::SERVICE_UNAVAILABLE, "no candidate characters: select a language model (POST /v1/qwen/select) or pass extra_chars");
+    }
     let index = match ocr_glyph::ensure_index(&pool, &extra).await {
         Ok(i) => i,
         Err(e) => return ocr_err(StatusCode::SERVICE_UNAVAILABLE, e),
