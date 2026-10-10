@@ -53,6 +53,7 @@ mod self_update;
 mod signatures;
 mod tenants;
 mod ocr;
+mod ocr_correct;
 mod ocr_data;
 mod transcribe;
 
@@ -1730,6 +1731,8 @@ struct OcrLanguageEntry {
 struct OcrLanguagesResponse {
     max_languages: usize,
     tesseract_available: bool,
+    /// 文脈補正(`POST /v1/ocr/correct`)に使う言語モデルが有効か。
+    correction_available: bool,
     languages: Vec<OcrLanguageEntry>,
     explanation_ja: &'static str,
     explanation_en: &'static str,
@@ -1742,6 +1745,7 @@ async fn ocr_languages() -> Response {
         &OcrLanguagesResponse {
             max_languages: ocr_data::MAX_LANGS,
             tesseract_available: ocr::cli_available().await,
+            correction_available: qwen_generation::active_qwen_model_dir().is_some(),
             languages: ocr_data::LANGUAGES
                 .iter()
                 .map(|l| OcrLanguageEntry {
@@ -1765,6 +1769,59 @@ struct OcrPrepareRequest {
     quality: Option<String>,
 }
 
+
+#[derive(Debug, Deserialize)]
+struct OcrCorrectRequest {
+    lines: Vec<ocr_correct::CorrectLine>,
+    /// この信頼度(0〜100)以上の行は補正しない(既定 90)。
+    #[serde(default)]
+    only_below: Option<f32>,
+}
+
+#[derive(Debug, Serialize)]
+struct OcrCorrectResponse {
+    results: Vec<ocr_correct::CorrectResult>,
+    changed: usize,
+    model: String,
+    disclosure: &'static str,
+}
+
+/// `POST /v1/ocr/correct` — OCR の誤読を、前後の行の文脈から補正する(`src/ocr_correct.rs`)。
+/// アクティブな Qwen モデル(`/v1/qwen/install` → `/v1/qwen/select`)が必要。無ければ 503。
+async fn ocr_correct_endpoint(req: Request, device: Arc<dyn GpuDevice>) -> Response {
+    idle_background_fold::touch_activity();
+    let Json(req): Json<OcrCorrectRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    if req.lines.is_empty() || req.lines.len() > ocr_correct::MAX_LINES {
+        return ocr_err(StatusCode::BAD_REQUEST, format!("1..={} lines are required (got {})", ocr_correct::MAX_LINES, req.lines.len()));
+    }
+    let Some(dir) = qwen_generation::active_qwen_model_dir() else {
+        return ocr_err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "no language model is active. Install one with POST /v1/qwen/install {\"id\":\"qwen2.5-0.5b-instruct\"} and POST /v1/qwen/select.",
+        );
+    };
+    let only_below = req.only_below.unwrap_or(90.0);
+    let lines = req.lines;
+    let result = tokio::task::spawn_blocking(move || ocr_correct::correct_lines(&device, &lines, only_below)).await;
+    match result {
+        Ok(results) => {
+            let changed = results.iter().filter(|r| r.changed).count();
+            json_response(
+                StatusCode::OK,
+                &OcrCorrectResponse {
+                    results,
+                    changed,
+                    model: dir.to_string_lossy().to_string(),
+                    disclosure: "Corrections are proposed by a small language model and accepted only when they are small, visually plausible character changes. They can be wrong; both the original and corrected text are returned.",
+                },
+            )
+        }
+        Err(e) => ocr_err(StatusCode::INTERNAL_SERVER_ERROR, format!("correction task failed: {e}")),
+    }
+}
 /// `POST /v1/ocr/prepare` — 選んだ言語のデータを先に取得してキャッシュする(OCR 実行前の準備)。
 async fn ocr_prepare(req: Request) -> Response {
     let Json(req): Json<OcrPrepareRequest> = match Json::from_body(req).await {
@@ -3638,6 +3695,7 @@ async fn main() -> anyhow::Result<()> {
     let classify_traffic_registry = Arc::clone(&registry);
     let generate_pool = Arc::clone(&device_pool);
     let generate_qwen_pool = Arc::clone(&device_pool);
+    let ocr_correct_pool = Arc::clone(&device_pool);
     let generate_deepseek_pool = Arc::clone(&device_pool);
     let generate_registry = Arc::clone(&registry);
     let generate_speculative_pool = Arc::clone(&device_pool);
@@ -3730,6 +3788,13 @@ async fn main() -> anyhow::Result<()> {
         )
         .at("/v1/ocr/languages", get(plain(|| Box::pin(ocr_languages()))))
         .at("/v1/ocr/prepare", post(handler_fn(move |req, _p| async move { ocr_prepare(req).await })))
+        .at(
+            "/v1/ocr/correct",
+            post(handler_fn(move |req, _p| {
+                let device = ocr_correct_pool.next_device();
+                async move { ocr_correct_endpoint(req, device).await }
+            })),
+        )
         .at("/v1/ocr/fonts/:name", get(handler_fn(move |_req, p| async move { ocr_font(p).await })))
         .at("/v1/models/catalog", get(plain(|| Box::pin(list_model_catalog()))))
         .at("/v1/geo/random", get(plain(|| Box::pin(geo_random()))))

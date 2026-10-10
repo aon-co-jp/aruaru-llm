@@ -65,3 +65,4 @@ pub fn generate(device: &Arc<dyn GpuDevice>, prompt: &str, max_new_tokens: usize
         .context("QwenModel::generate_with_repetition_penalty failed")?;
     loaded.tokenizer.decode(&generated).context("tokenizer decode failed")
 }
+
