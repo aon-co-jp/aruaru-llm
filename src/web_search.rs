@@ -1164,3 +1164,13 @@ mod tests {
         }
     }
 }
+
+/// OCR の穴埋め用: 自前のメタ検索 `aruaru-search`(APIキー不要、VPS 内からの呼び出しは回数制限なし)で検索し、
+/// 結果のタイトルと抜粋(スニペット)の文字列だけを返す。接続先は `ARUARU_LLM_SEARCH_URL`(既定 `http://127.0.0.1:4610`、空で無効)。
+/// 失敗・0 件のときは空。他の検索元(共有キー経由)へは移らない(OCR の補完は、自前の検索だけを使う)。
+pub async fn snippets_via_aruaru_search(query: &str, max_results: u8, hl: Option<&str>) -> Vec<String> {
+    match search_via_aruaru_search(query, max_results, None, hl).await {
+        Some(v) => v.into_iter().flat_map(|r| [r.title, r.snippet]).collect(),
+        None => Vec::new(),
+    }
+}

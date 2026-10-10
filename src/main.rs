@@ -55,6 +55,7 @@ mod tenants;
 mod ocr;
 mod ocr_correct;
 mod ocr_fill;
+mod ocr_glyph;
 mod ocr_data;
 mod transcribe;
 
@@ -1832,6 +1833,19 @@ struct OcrFillRequest {
     /// 1 か所で変える最大の文字数(既定 2、1〜3)。
     #[serde(default)]
     max_chars: Option<usize>,
+    /// 真なら、採点した全候補を返す(アプリが字形の証拠と合わせて選び直す用)。
+    #[serde(default)]
+    return_all: bool,
+    /// 真なら、実在の文章での裏付け・候補の採掘に、自前の検索 `aruaru-search`(APIキー不要)を使う。
+    #[serde(default)]
+    use_web: bool,
+    /// 偽なら、言語モデルが自由に挙げる候補(位置ごとの予測・ビーム)を使わず、アプリが渡した候補・形の似た字・検索の採掘だけを採点する(既定: 真)。
+    #[serde(default = "default_true")]
+    lm_candidates: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Serialize)]
@@ -1862,9 +1876,13 @@ async fn ocr_fill_endpoint(req: Request, device: Arc<dyn GpuDevice>) -> Response
     let margin = req.margin.unwrap_or(3.0).clamp(0.0, 20.0);
     let max_chars = req.max_chars.unwrap_or(2).clamp(1, 3);
     let items = req.items;
+    let return_all = req.return_all;
+    let use_web = req.use_web;
+    let lm_free = req.lm_candidates;
     let result = tokio::task::spawn_blocking(move || {
         let lm = ocr_fill::QwenLm { device };
-        ocr_fill::fill_items(&lm, &items, margin, max_chars)
+        let web = ocr_fill::AruaruWeb;
+        ocr_fill::fill_items(&lm, if use_web { Some(&web as &dyn ocr_fill::Web) } else { None }, &items, margin, max_chars, return_all, lm_free)
     })
     .await;
     match result {
@@ -1881,6 +1899,179 @@ async fn ocr_fill_endpoint(req: Request, device: Arc<dyn GpuDevice>) -> Response
             )
         }
         Err(e) => ocr_err(StatusCode::INTERNAL_SERVER_ERROR, format!("fill task failed: {e}")),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct OcrProposeRequest {
+    items: Vec<ocr_fill::FillItem>,
+    /// 位置ごとにモデルへ挙げさせる候補数(既定 48、8〜200)。
+    #[serde(default)]
+    k: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct OcrProposeResponse {
+    results: Vec<ocr_fill::ProposeResult>,
+    model: String,
+}
+
+/// `POST /v1/ocr/propose` — 疑わしい箇所ごとに、入り得る 1 文字の候補を広く挙げる(言語モデルの次の文字の上位 + 形の似た字)。
+/// アプリが残っているインクの形で絞り込み、`POST /v1/ocr/fill` の `items[].extra` に渡して文脈つきで採点する。
+async fn ocr_propose_endpoint(req: Request, device: Arc<dyn GpuDevice>) -> Response {
+    idle_background_fold::touch_activity();
+    let Json(req): Json<OcrProposeRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    if req.items.is_empty() || req.items.len() > ocr_fill::MAX_ITEMS {
+        return ocr_err(StatusCode::BAD_REQUEST, format!("1..={} items are required (got {})", ocr_fill::MAX_ITEMS, req.items.len()));
+    }
+    let Some(dir) = qwen_generation::active_qwen_model_dir() else {
+        return ocr_err(StatusCode::SERVICE_UNAVAILABLE, "no language model is active. Install one with POST /v1/qwen/install and POST /v1/qwen/select.");
+    };
+    let k = req.k.unwrap_or(48).clamp(8, 200);
+    let items = req.items;
+    let result = tokio::task::spawn_blocking(move || {
+        let lm = ocr_fill::QwenLm { device };
+        ocr_fill::propose_items(&lm, &items, k)
+    })
+    .await;
+    match result {
+        Ok(results) => json_response(StatusCode::OK, &OcrProposeResponse { results, model: dir.to_string_lossy().to_string() }),
+        Err(e) => ocr_err(StatusCode::INTERNAL_SERVER_ERROR, format!("propose task failed: {e}")),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct OcrScanRequest {
+    items: Vec<ocr_fill::ScanItem>,
+    /// この対数確率より低いトークンを不自然とみなす(既定 -8.0)。
+    #[serde(default)]
+    threshold: Option<f32>,
+    /// 1 行あたり挙げる最大の箇所数(既定 4)。
+    #[serde(default)]
+    max_spots: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct OcrScanResponse {
+    results: Vec<ocr_fill::ScanResult>,
+    model: String,
+}
+
+/// `POST /v1/ocr/scan` — OCR した行を言語モデルで走査し、前後の文脈にとって不自然な箇所(読み間違いの疑い)を挙げる(`src/ocr_fill.rs`)。
+async fn ocr_scan_endpoint(req: Request, device: Arc<dyn GpuDevice>) -> Response {
+    idle_background_fold::touch_activity();
+    let Json(req): Json<OcrScanRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    if req.items.is_empty() || req.items.len() > 2000 {
+        return ocr_err(StatusCode::BAD_REQUEST, format!("1..=2000 items are required (got {})", req.items.len()));
+    }
+    let Some(dir) = qwen_generation::active_qwen_model_dir() else {
+        return ocr_err(StatusCode::SERVICE_UNAVAILABLE, "no language model is active. Install one with POST /v1/qwen/install and POST /v1/qwen/select.");
+    };
+    let threshold = req.threshold.unwrap_or(-8.0).clamp(-30.0, -1.0);
+    let max_spots = req.max_spots.unwrap_or(4).clamp(1, 12);
+    let items = req.items;
+    let result = tokio::task::spawn_blocking(move || {
+        let lm = ocr_fill::QwenLm { device };
+        ocr_fill::scan_items(&lm, &items, threshold, max_spots)
+    })
+    .await;
+    match result {
+        Ok(results) => json_response(StatusCode::OK, &OcrScanResponse { results, model: dir.to_string_lossy().to_string() }),
+        Err(e) => ocr_err(StatusCode::INTERNAL_SERVER_ERROR, format!("scan task failed: {e}")),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct OcrCharsetQuery {
+    #[serde(default)]
+    n: Option<usize>,
+}
+
+/// `GET /v1/ocr/charset?n=3000` — 頻出順に並べた、漢字・かなの 1 文字の集合(アプリが字形で候補を探す母集団)。
+async fn ocr_charset_endpoint(req: Request) -> Response {
+    let n = req
+        .uri()
+        .query()
+        .and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("n=")))
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(3000)
+        .clamp(100, 8000);
+    if qwen_generation::active_qwen_model_dir().is_none() {
+        return ocr_err(StatusCode::SERVICE_UNAVAILABLE, "no language model is active. Install one with POST /v1/qwen/install and POST /v1/qwen/select.");
+    }
+    let result = tokio::task::spawn_blocking(move || qwen_generation::common_chars(n)).await;
+    match result {
+        Ok(Ok(chars)) => json_response(StatusCode::OK, &serde_json::json!({ "chars": chars.into_iter().collect::<String>() })),
+        Ok(Err(e)) => ocr_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        Err(e) => ocr_err(StatusCode::INTERNAL_SERVER_ERROR, format!("charset task failed: {e}")),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct OcrGlyphRankRequest {
+    cells: Vec<ocr_glyph::RankCell>,
+    /// 升目ごとに、得点を知りたい文字(例: 疑わしい読みの文字)。
+    #[serde(default)]
+    query: Vec<String>,
+    /// 上位に残す文字の数(既定 24)。
+    #[serde(default)]
+    top: Option<usize>,
+    /// 母集団に足す文字(文書に出てくる字など)。
+    #[serde(default)]
+    extra_chars: String,
+    /// 頻出字の数(Qwen の語彙から。既定 8000)。
+    #[serde(default)]
+    pool_n: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct OcrGlyphRankResponse {
+    results: Vec<ocr_glyph::RankResult>,
+    pool: usize,
+    device: String,
+}
+
+/// `POST /v1/ocr/glyph-rank` — かすれた文字の升目を、頻出の漢字・かなの字形と照合して上位を返す(`src/ocr_glyph.rs`)。
+/// 計算は 1 回の行列積(`opencuda_blas::sgemm`)。言語モデルが選ばれていれば、その語彙の頻出順を母集団にする(無ければ `extra_chars` だけ)。
+async fn ocr_glyph_rank_endpoint(req: Request, device: Arc<dyn GpuDevice>) -> Response {
+    idle_background_fold::touch_activity();
+    let Json(req): Json<OcrGlyphRankRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    if req.cells.is_empty() || req.cells.len() > 400 {
+        return ocr_err(StatusCode::BAD_REQUEST, format!("1..=400 cells are required (got {})", req.cells.len()));
+    }
+    let n = req.pool_n.unwrap_or(8000).clamp(100, 8000);
+    let pool: Vec<char> = if qwen_generation::active_qwen_model_dir().is_some() {
+        match tokio::task::spawn_blocking(move || qwen_generation::common_chars(n)).await {
+            Ok(Ok(c)) => c,
+            _ => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
+    let extra: Vec<char> = req.extra_chars.chars().filter(|c| c.is_alphanumeric()).collect();
+    let index = match ocr_glyph::ensure_index(&pool, &extra).await {
+        Ok(i) => i,
+        Err(e) => return ocr_err(StatusCode::SERVICE_UNAVAILABLE, e),
+    };
+    let top = req.top.unwrap_or(24).clamp(1, 200);
+    let query: Vec<Vec<char>> = (0..req.cells.len()).map(|i| req.query.get(i).map(|s| s.chars().collect()).unwrap_or_default()).collect();
+    let cells = req.cells;
+    let dev_name = device.info().name.clone();
+    let idx = Arc::clone(&index);
+    let result = tokio::task::spawn_blocking(move || ocr_glyph::rank(&device, &idx, &cells, top, &query)).await;
+    match result {
+        Ok(Ok(results)) => json_response(StatusCode::OK, &OcrGlyphRankResponse { results, pool: index.len(), device: dev_name }),
+        Ok(Err(e)) => ocr_err(StatusCode::INTERNAL_SERVER_ERROR, e),
+        Err(e) => ocr_err(StatusCode::INTERNAL_SERVER_ERROR, format!("glyph rank task failed: {e}")),
     }
 }
 
@@ -3759,6 +3950,9 @@ async fn main() -> anyhow::Result<()> {
     let generate_qwen_pool = Arc::clone(&device_pool);
     let ocr_correct_pool = Arc::clone(&device_pool);
     let ocr_fill_pool = Arc::clone(&device_pool);
+    let ocr_propose_pool = Arc::clone(&device_pool);
+    let ocr_scan_pool = Arc::clone(&device_pool);
+    let ocr_glyph_pool = Arc::clone(&device_pool);
     let generate_deepseek_pool = Arc::clone(&device_pool);
     let generate_registry = Arc::clone(&registry);
     let generate_speculative_pool = Arc::clone(&device_pool);
@@ -3856,6 +4050,28 @@ async fn main() -> anyhow::Result<()> {
             post(handler_fn(move |req, _p| {
                 let device = ocr_correct_pool.next_device();
                 async move { ocr_correct_endpoint(req, device).await }
+            })),
+        )
+        .at("/v1/ocr/charset", get(handler_fn(move |req, _p| async move { ocr_charset_endpoint(req).await })))
+        .at(
+            "/v1/ocr/glyph-rank",
+            post(handler_fn(move |req, _p| {
+                let device = ocr_glyph_pool.next_device();
+                async move { ocr_glyph_rank_endpoint(req, device).await }
+            })),
+        )
+        .at(
+            "/v1/ocr/scan",
+            post(handler_fn(move |req, _p| {
+                let device = ocr_scan_pool.next_device();
+                async move { ocr_scan_endpoint(req, device).await }
+            })),
+        )
+        .at(
+            "/v1/ocr/propose",
+            post(handler_fn(move |req, _p| {
+                let device = ocr_propose_pool.next_device();
+                async move { ocr_propose_endpoint(req, device).await }
             })),
         )
         .at(
