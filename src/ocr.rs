@@ -200,7 +200,7 @@ async fn run_tesseract(dir: &Path, images: &[Vec<u8>], exts: &[&str], languages:
         .arg("stdout")
         .arg("--tessdata-dir")
         .arg(tessdata_dir)
-        .args(["-l", &languages.join("+"), "--psm", "3", "tsv"])
+        .args(["-l", &languages.join("+"), "--psm", "3", "-c", "tessedit_create_tsv=1"])
         .env("OMP_THREAD_LIMIT", "1")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
