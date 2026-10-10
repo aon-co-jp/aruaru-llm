@@ -141,13 +141,14 @@ fn parse_rows(rows: &[&str]) -> Vec<OcrLine> {
             l.w = x1 - x0;
             l.h = y1 - y0;
             l.conf = l.words.iter().map(|w| w.conf).sum::<f32>() / l.words.len() as f32;
-            // 日本語などは単語間に空白を入れず、英数字どうしが隣り合う所だけ空白で区切る。
+            // 単語の間は空白で区切る。ただし日本語・中国語のように単語間に空白を入れない文字(漢字・かな・CJK の記号)が
+            // 隣り合う所には入れない。
             let mut text = String::new();
             for w in &l.words {
                 let a = text.chars().last();
                 let b = w.text.chars().next();
                 if let (Some(a), Some(b)) = (a, b) {
-                    if a.is_ascii_alphanumeric() && b.is_ascii_alphanumeric() {
+                    if !is_unspaced_script(a) && !is_unspaced_script(b) {
                         text.push(' ');
                     }
                 }
@@ -157,6 +158,11 @@ fn parse_rows(rows: &[&str]) -> Vec<OcrLine> {
             l
         })
         .collect()
+}
+
+/// 単語の間に空白を入れない文字(漢字・ひらがな・カタカナ・CJK の記号と全角形)か。
+fn is_unspaced_script(c: char) -> bool {
+    matches!(c as u32, 0x3000..=0x30FF | 0x31F0..=0x31FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF | 0xFF00..=0xFFEF | 0x20000..=0x2FA1F)
 }
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -242,6 +248,19 @@ mod tests {
         assert!((lines[0].conf - 93.25).abs() < 0.01);
         assert_eq!(lines[1].text, "日本語");
         assert_eq!(lines[1].words.len(), 1);
+    }
+
+    #[test]
+    fn joins_words_with_spaces_except_between_cjk() {
+        let tsv = "level	page_num	block_num	par_num	line_num	word_num	left	top	width	height	conf	text
+\n5	1	1	1	1	1	0	0	10	10	90	Serif
+\n5	1	1	1	1	2	20	0	10	10	90	text:
+\n5	1	1	1	1	3	40	0	10	10	90	한국어
+\n5	1	1	1	1	4	60	0	10	10	90	문장
+\n5	1	1	1	1	5	80	0	10	10	90	日本
+\n5	1	1	1	1	6	100	0	10	10	90	語
+";
+        assert_eq!(parse_tsv(tsv)[0].text, "Serif text: 한국어 문장日本語");
     }
 
     #[test]
