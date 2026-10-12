@@ -250,7 +250,14 @@ async fn classify_generic(req: Request, device: Arc<dyn GpuDevice>, registry: Ar
     };
     log_tenant_usage("classify", &req.tenant, &registry);
     let suffix = scoring::dispatch_suffix(&device);
-    match generic_classify::classify_many(&device, &req.items, &req.categories) {
+    // 埋め込み計算は重いので、待受・他のリクエストを止めないよう別スレッドで実行する
+    // (複数のアプリ=テナントが同時に呼んでも並行処理される)。
+    let (device_for_task, items, categories) = (device.clone(), req.items.clone(), req.categories.clone());
+    let classified = match tokio::task::spawn_blocking(move || generic_classify::classify_many(&device_for_task, &items, &categories)).await {
+        Ok(r) => r,
+        Err(e) => return text_response(StatusCode::INTERNAL_SERVER_ERROR, format!("classification task failed: {e}")),
+    };
+    match classified {
         Ok(results) => json_response(
             StatusCode::OK,
             &ClassifyResponse {
