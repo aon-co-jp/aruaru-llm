@@ -4684,3 +4684,17 @@ The fallback order is now `SerpApi -> Tavily -> Exa -> Brave -> Google`. Both ha
 
 - **日本語**: 知識ストアはモデル非依存で、`data/knowledge/`(`.gitignore`済み)に置く。復元経路は (1) 起動時・6時間ごとの`knowledge::sync_from_remote`(公開WEB→GitHubの順、`ARUARU_LLM_KNOWLEDGE_SYNC_URL`にカンマ区切りで上書き、`off`で無効)、(2) 種知識`data/knowledge_seed.json`。退避は`deploy/knowledge-sync-push.{service,timer}`+`scripts/sync-knowledge-to-github.sh`(VPSの`/etc/systemd/system/`へ入れる。`deploy/install-knowledge-sync.sh`で冪等に設置)。**秘密(`.env.*`、`~/.git-credentials`)はGitに無い**ので、移行時は別途安全に持ち込むこと(値を画面・コミットへ出さない)。
 - **English**: The knowledge store is model-independent and lives in `data/knowledge/` (git-ignored). Restore paths: (1) `knowledge::sync_from_remote` at start-up and every 6 h (public web, then GitHub; override with a comma-separated `ARUARU_LLM_KNOWLEDGE_SYNC_URL`, `off` disables), (2) the bundled seed `data/knowledge_seed.json`. Backup uses `deploy/knowledge-sync-push.{service,timer}` + `scripts/sync-knowledge-to-github.sh` (install via `deploy/install-knowledge-sync.sh`, idempotent). **Secrets (`.env.*`, `~/.git-credentials`) are not in Git** — carry them over separately and never print them or commit them.
+
+## 知識の日本語検索の強化・AI学習コメントの学習とGitHub自動バックアップ(2026-10-08)
+- **日本語検索**: `knowledge.rs`の`words()`が、連続するCJK文字を2文字ずつの断片(バイグラム)で比べるようにした(英数字の語は従来どおり)。以前は日本語の文が1語に潰れ、ほぼ拾えなかった。テスト3件合格(`cargo test knowledge::`)。
+- **学習**: `audiocafe.tokyo`のPHPが`POST /v1/knowledge/add`で、検証済みの価格・AIの誤りの訂正・「料金は推測で書かない」ルールを教える。AIが書いた価格欄は24件中23件が実価格と不一致だったため。
+- **GitHub自動バックアップ**: `knowledge-sync-push`(6時間ごと+PHPクロール直後)が`open-english/data/knowledge/knowledge.json`へ保存。起動時に`sync_from_remote`で復元。空のストアでの復元テスト合格(19件を18秒)。
+- **お引越し**: 知識はGitHubから自動復元される。復元されないのは`.env.providers`等のAPIキーだけ(手動で再配置)。systemdの実物は`audiocafe-tokyo`の`deploy/vps/`。
+- 注意: 知識は公開リポジトリに保存されるため、公開してよい内容だけを入れる。
+
+## Better Japanese knowledge search, AI-comment learning and automatic GitHub backup (2026-10-08)
+- **Japanese search**: `words()` in `knowledge.rs` now compares runs of CJK characters as overlapping 2-character fragments (bigrams); alphanumeric words behave as before. Previously a Japanese sentence collapsed into one token and was almost never matched. 3 tests pass (`cargo test knowledge::`).
+- **Learning**: the PHP of `audiocafe.tokyo` teaches verified prices, corrections of the AI's mistakes and the rule "never guess prices" via `POST /v1/knowledge/add` (23 of 24 AI-written prices disagreed with the real ones).
+- **Automatic GitHub backup**: `knowledge-sync-push` (every 6 h and right after the PHP crawl) saves to `open-english/data/knowledge/knowledge.json`; `sync_from_remote` restores it at start-up. Restore test on an empty store passed (19 entries in 18 s).
+- **Moving servers**: knowledge restores itself from GitHub. Only the API keys (`.env.providers` etc.) must be placed by hand. The real systemd files are in `deploy/vps/` of `audiocafe-tokyo`.
+- Note: knowledge is stored in a public repository, so only put publishable content in it.

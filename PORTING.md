@@ -389,3 +389,17 @@ penalty`(CTRL方式、penalty>1.0で既に登場したトークンのlogitを弱
 5. **Knowledge restores itself**: look for `knowledge sync from ...: N new entr(ies) merged` in the log; check the count with `curl localhost:4600/v1/knowledge/search`.
 6. Not restored automatically: the live news DB (headlines are archived in `open-english-news-archive`), model weights (re-download), secrets.
 Verified (2026-10-06): restore from GitHub only, GitHub fallback when the web source fails, push fired by the timer. A full from-scratch VPS rebuild has **not** been rehearsed.
+
+## 知識の日本語検索の強化・AI学習コメントの学習とGitHub自動バックアップ(2026-10-08)
+- **日本語検索**: `knowledge.rs`の`words()`が、連続するCJK文字を2文字ずつの断片(バイグラム)で比べるようにした(英数字の語は従来どおり)。以前は日本語の文が1語に潰れ、ほぼ拾えなかった。テスト3件合格(`cargo test knowledge::`)。
+- **学習**: `audiocafe.tokyo`のPHPが`POST /v1/knowledge/add`で、検証済みの価格・AIの誤りの訂正・「料金は推測で書かない」ルールを教える。AIが書いた価格欄は24件中23件が実価格と不一致だったため。
+- **GitHub自動バックアップ**: `knowledge-sync-push`(6時間ごと+PHPクロール直後)が`open-english/data/knowledge/knowledge.json`へ保存。起動時に`sync_from_remote`で復元。空のストアでの復元テスト合格(19件を18秒)。
+- **お引越し**: 知識はGitHubから自動復元される。復元されないのは`.env.providers`等のAPIキーだけ(手動で再配置)。systemdの実物は`audiocafe-tokyo`の`deploy/vps/`。
+- 注意: 知識は公開リポジトリに保存されるため、公開してよい内容だけを入れる。
+
+## Better Japanese knowledge search, AI-comment learning and automatic GitHub backup (2026-10-08)
+- **Japanese search**: `words()` in `knowledge.rs` now compares runs of CJK characters as overlapping 2-character fragments (bigrams); alphanumeric words behave as before. Previously a Japanese sentence collapsed into one token and was almost never matched. 3 tests pass (`cargo test knowledge::`).
+- **Learning**: the PHP of `audiocafe.tokyo` teaches verified prices, corrections of the AI's mistakes and the rule "never guess prices" via `POST /v1/knowledge/add` (23 of 24 AI-written prices disagreed with the real ones).
+- **Automatic GitHub backup**: `knowledge-sync-push` (every 6 h and right after the PHP crawl) saves to `open-english/data/knowledge/knowledge.json`; `sync_from_remote` restores it at start-up. Restore test on an empty store passed (19 entries in 18 s).
+- **Moving servers**: knowledge restores itself from GitHub. Only the API keys (`.env.providers` etc.) must be placed by hand. The real systemd files are in `deploy/vps/` of `audiocafe-tokyo`.
+- Note: knowledge is stored in a public repository, so only put publishable content in it.

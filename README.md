@@ -705,3 +705,10 @@ sudo ./install.sh
 **日本語**: aruaru-llmの「賢くなる部分」(接客方針・国別の話題・訂正済み知識)は、モデルとは別の平文ファイル(`data/knowledge/knowledge.json`)に保存され、6時間ごとにGitHub(`aon-co-jp/open-english`の`data/knowledge/knowledge.json`)へ自動退避されます。新しいVPS/PCでaruaru-llmを起動すると、公開WEB→GitHubの順に自動で取り込んで復元します(手動の操作は不要)。VPSの手順は[`PORTING.md`](PORTING.md)「お引越し」節。モデルを入れ替えても知識は消えません。
 
 **English**: What aruaru-llm "learns" (hospitality guidance, per-country topics, corrected facts) is stored as plain text, separate from the model (`data/knowledge/knowledge.json`), and backed up to GitHub every 6 hours (`data/knowledge/knowledge.json` in `aon-co-jp/open-english`). A freshly started aruaru-llm on a new VPS/PC restores it automatically (public web first, then GitHub) — no manual step. VPS steps: see "Migration" in [`PORTING.md`](PORTING.md). Swapping the LLM never touches this data.
+
+## 知識の日本語検索の強化・AI学習コメントの学習とGitHub自動バックアップ(2026-10-08)
+- **日本語検索**: `knowledge.rs`の`words()`が、連続するCJK文字を2文字ずつの断片(バイグラム)で比べるようにした(英数字の語は従来どおり)。以前は日本語の文が1語に潰れ、ほぼ拾えなかった。テスト3件合格(`cargo test knowledge::`)。
+- **学習**: `audiocafe.tokyo`のPHPが`POST /v1/knowledge/add`で、検証済みの価格・AIの誤りの訂正・「料金は推測で書かない」ルールを教える。AIが書いた価格欄は24件中23件が実価格と不一致だったため。
+- **GitHub自動バックアップ**: `knowledge-sync-push`(6時間ごと+PHPクロール直後)が`open-english/data/knowledge/knowledge.json`へ保存。起動時に`sync_from_remote`で復元。空のストアでの復元テスト合格(19件を18秒)。
+- **お引越し**: 知識はGitHubから自動復元される。復元されないのは`.env.providers`等のAPIキーだけ(手動で再配置)。systemdの実物は`audiocafe-tokyo`の`deploy/vps/`。
+- 注意: 知識は公開リポジトリに保存されるため、公開してよい内容だけを入れる。

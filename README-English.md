@@ -456,3 +456,10 @@ The actual speedup is the earlier CPU inference SIMD work (AVX2+FMA3,
 measured 3.34x). This change aligned that path's selection criteria with
 `open-cpu`'s combination checks and made them visible. **The int8 VNNI
 path is still unverified on real hardware** — this CPU does not have VNNI.
+
+## Better Japanese knowledge search, AI-comment learning and automatic GitHub backup (2026-10-08)
+- **Japanese search**: `words()` in `knowledge.rs` now compares runs of CJK characters as overlapping 2-character fragments (bigrams); alphanumeric words behave as before. Previously a Japanese sentence collapsed into one token and was almost never matched. 3 tests pass (`cargo test knowledge::`).
+- **Learning**: the PHP of `audiocafe.tokyo` teaches verified prices, corrections of the AI's mistakes and the rule "never guess prices" via `POST /v1/knowledge/add` (23 of 24 AI-written prices disagreed with the real ones).
+- **Automatic GitHub backup**: `knowledge-sync-push` (every 6 h and right after the PHP crawl) saves to `open-english/data/knowledge/knowledge.json`; `sync_from_remote` restores it at start-up. Restore test on an empty store passed (19 entries in 18 s).
+- **Moving servers**: knowledge restores itself from GitHub. Only the API keys (`.env.providers` etc.) must be placed by hand. The real systemd files are in `deploy/vps/` of `audiocafe-tokyo`.
+- Note: knowledge is stored in a public repository, so only put publishable content in it.
