@@ -1,0 +1,8 @@
+[Unit]
+Description=Push aruaru-llm knowledge snapshot to GitHub (open-english/data/knowledge)
+After=aruaru-llm.service
+
+[Service]
+Environment=HOME=/root
+Type=oneshot
+ExecStart=/root/aruaru-llm/scripts/sync-knowledge-to-github.sh

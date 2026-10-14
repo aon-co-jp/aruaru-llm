@@ -15,3 +15,6 @@
 /android/.kotlin/
 /android/app/build/
 /android/build/
+
+# 実行時の知識ストア(復元はWEB/GitHubから自動)
+/data/knowledge/

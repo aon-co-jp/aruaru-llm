@@ -369,3 +369,23 @@ penalty`(CTRL方式、penalty>1.0で既に登場したトークンのlogitを弱
 - Search: `ARUARU_LLM_SEARCH_URL` (default `http://127.0.0.1:4610` = `aruaru-search`). Tests: `cargo test --bin aruaru-llm ocr_` (20 tests); speed: `cargo test --release --bin aruaru-llm bench_sgemm -- --ignored --nocapture` (~14 ms per glyph cell).
 - Measurements: in our tests completion does no harm but adds nothing and is slow (10–20 s per spot, Qwen2.5-1.5B on CPU). Off by default, experimental. See `pdf-r2l-rs/PORTING.md`.
 - **Production VPS**: `/v1/ocr` and `/v1/ocr/fill` were deployed earlier; the v1.3.0 additions (`/scan`, `/propose`, `/glyph-rank`, `/charset`) were deployed on 2026-10-10 (503 is expected without a model; the VPS has 4 cores / 3.6 GB RAM). Backup: `/root/aruaru-llm.bin.bak-20261010`. The token is in `/root/aruaru-llm/.env.ocr` (not in git).
+
+## お引越し手順(VPS再構成) / Migration runbook (rebuilding the VPS)
+
+**日本語**
+1. 必要物: `git` `jq` `curl` と Rust(`~/.cargo/bin`)。兄弟ディレクトリに依存リポジトリ(`/root/RPoem`→`/root/repository/RPoem`、`/root/open-cuda`→`/root/repository/open-cuda`)。
+2. `git clone https://github.com/aon-co-jp/aruaru-llm /root/aruaru-llm` → `cargo build --release`。
+3. 秘密を別経路で復元(Gitに無い): `/root/aruaru-llm/.env.google-search` `.env.providers` `.env.ocr`、`~/.git-credentials`(open-englishへpushできるPAT)。
+4. `aruaru-llm.service`(WorkingDirectory=`/root/aruaru-llm`、ExecStart=`target/release/aruaru-llm`、`ARUARU_LLM_BIND=127.0.0.1:4600`)を設置して起動。`deploy/install-knowledge-sync.sh`で知識退避タイマーを設置。
+5. **知識は自動で戻る**: 起動直後のログに`knowledge sync from ...: N new entr(ies) merged`が出る。`curl localhost:4600/v1/knowledge/search`で件数を確認。
+6. 戻らないもの(別途): ニュースの生きているDB(`data/news_by_country.json`、見出しは`open-english-news-archive`に退避済み)、モデルの重み(再ダウンロード)、秘密。
+確認済み(2026-10-06): GitHubのみからの復元、WEB停止時のGitHub切替、タイマー発火によるpush。VPS丸ごとの再構成そのものの通し試験は未実施。
+
+**English**
+1. Needs `git`, `jq`, `curl`, Rust, and sibling dependency repos (`/root/RPoem`, `/root/open-cuda`).
+2. `git clone https://github.com/aon-co-jp/aruaru-llm /root/aruaru-llm`, then `cargo build --release`.
+3. Restore secrets out of band (not in Git): `.env.google-search`, `.env.providers`, `.env.ocr`, `~/.git-credentials` (a PAT that can push to open-english).
+4. Install `aruaru-llm.service` (WorkingDirectory `/root/aruaru-llm`, ExecStart `target/release/aruaru-llm`, `ARUARU_LLM_BIND=127.0.0.1:4600`) and start it; run `deploy/install-knowledge-sync.sh` for the backup timer.
+5. **Knowledge restores itself**: look for `knowledge sync from ...: N new entr(ies) merged` in the log; check the count with `curl localhost:4600/v1/knowledge/search`.
+6. Not restored automatically: the live news DB (headlines are archived in `open-english-news-archive`), model weights (re-download), secrets.
+Verified (2026-10-06): restore from GitHub only, GitHub fallback when the web source fails, push fired by the timer. A full from-scratch VPS rebuild has **not** been rehearsed.

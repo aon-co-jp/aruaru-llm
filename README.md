@@ -699,3 +699,9 @@ sudo ./install.sh
 - Search: `ARUARU_LLM_SEARCH_URL` (default `http://127.0.0.1:4610` = `aruaru-search`). Tests: `cargo test --bin aruaru-llm ocr_` (20 tests); speed: `cargo test --release --bin aruaru-llm bench_sgemm -- --ignored --nocapture` (~14 ms per glyph cell).
 - Measurements: in our tests completion does no harm but adds nothing and is slow (10–20 s per spot, Qwen2.5-1.5B on CPU). Off by default, experimental. See `pdf-r2l-rs/PORTING.md`.
 - **Production VPS**: `/v1/ocr` and `/v1/ocr/fill` were deployed earlier; the v1.3.0 additions (`/scan`, `/propose`, `/glyph-rank`, `/charset`) were deployed on 2026-10-10 (503 is expected without a model; the VPS has 4 cores / 3.6 GB RAM). Backup: `/root/aruaru-llm.bin.bak-20261010`. The token is in `/root/aruaru-llm/.env.ocr` (not in git).
+
+## お引越し(VPS・PCの作り直し) / Migration (rebuilding a VPS or PC)
+
+**日本語**: aruaru-llmの「賢くなる部分」(接客方針・国別の話題・訂正済み知識)は、モデルとは別の平文ファイル(`data/knowledge/knowledge.json`)に保存され、6時間ごとにGitHub(`aon-co-jp/open-english`の`data/knowledge/knowledge.json`)へ自動退避されます。新しいVPS/PCでaruaru-llmを起動すると、公開WEB→GitHubの順に自動で取り込んで復元します(手動の操作は不要)。VPSの手順は[`PORTING.md`](PORTING.md)「お引越し」節。モデルを入れ替えても知識は消えません。
+
+**English**: What aruaru-llm "learns" (hospitality guidance, per-country topics, corrected facts) is stored as plain text, separate from the model (`data/knowledge/knowledge.json`), and backed up to GitHub every 6 hours (`data/knowledge/knowledge.json` in `aon-co-jp/open-english`). A freshly started aruaru-llm on a new VPS/PC restores it automatically (public web first, then GitHub) — no manual step. VPS steps: see "Migration" in [`PORTING.md`](PORTING.md). Swapping the LLM never touches this data.
