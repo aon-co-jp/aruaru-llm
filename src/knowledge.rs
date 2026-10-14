@@ -175,6 +175,37 @@ fn sync_urls() -> Vec<String> {
     }
 }
 
+/// 取り込む知識の上限(サイズ8 MiB・ネスト深さ16・重複キー拒否)。ネットワーク越しの入力なので、
+/// 巨大な本文や極端に深い入れ子でメモリを使い切らされないようにする(`RS-JSON`の`parse_secure`)。
+fn remote_limits() -> rust_json::Limits {
+    rust_json::Limits { max_bytes: 8 * 1024 * 1024, max_depth: 16, reject_duplicate_keys: true }
+}
+
+/// 1回の取り込みで受け付ける最大件数。
+const MAX_REMOTE_ENTRIES: usize = 20_000;
+
+/// 取得した本文から知識の一覧を取り出す。形式は`{"items":[...]}`(APIの返り値)か、配列そのもの
+/// (GitHub上のファイル)のどちらでもよい。上限超過・重複キー・形式違いは`None`(取り込まない)。
+fn parse_remote_entries(body: &str) -> Option<Vec<Entry>> {
+    let value = match rust_json::parse_secure(body, &remote_limits()) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("knowledge sync: rejected remote JSON: {e}");
+            return None;
+        }
+    };
+    let items = match value {
+        serde_json::Value::Array(_) => value,
+        other => other.get("items").cloned()?,
+    };
+    let entries: Vec<Entry> = serde_json::from_value(items).ok()?;
+    if entries.len() > MAX_REMOTE_ENTRIES {
+        tracing::warn!("knowledge sync: too many entries ({}), ignored", entries.len());
+        return None;
+    }
+    Some(entries)
+}
+
 /// 公開WEB(失敗時はGitHub)から知識を取得して手元へ統合する。アプリを入れ直した直後でも、
 /// 次回起動時にここで知識が自動で戻る。取得できなくても手元の知識はそのまま使える。
 pub async fn sync_from_remote() -> usize {
@@ -187,14 +218,8 @@ pub async fn sync_from_remote() -> usize {
             continue;
         }
         let Ok(body) = resp.text().await else { continue };
-        // 形式は`{"items":[...]}`(APIの返り値)か、配列そのもの(GitHub上のファイル)のどちらでもよい
-        let entries: Option<Vec<Entry>> = serde_json::from_str::<Vec<Entry>>(&body).ok().or_else(|| {
-            serde_json::from_str::<serde_json::Value>(&body)
-                .ok()
-                .and_then(|v| v.get("items").cloned())
-                .and_then(|v| serde_json::from_value(v).ok())
-        });
-        if let Some(entries) = entries {
+        // 外部から来る信頼できない入力なので、`RS-JSON`の安全な厳密モードで読む(サイズ・深さの上限、重複キー拒否)
+        if let Some(entries) = parse_remote_entries(&body) {
             let n = merge(entries);
             tracing::info!("knowledge sync from {url}: {n} new entr(ies) merged");
             return n;
@@ -303,6 +328,31 @@ mod tests {
         assert!(!w.iter().any(|x| x.contains('p') && x.chars().any(|c| is_cjk(c))), "{w:?}");
         // 1文字だけの日本語(助詞など)は雑音になるので入れない
         assert!(!words("の").contains("の"));
+    }
+
+    #[test]
+    fn remote_entries_accept_array_and_items_object() {
+        let e = r#"{"id":1,"text":"a fact","tags":["t"],"source":"s","created_unix":1}"#;
+        assert_eq!(parse_remote_entries(&format!("[{e}]")).map(|v| v.len()), Some(1));
+        assert_eq!(parse_remote_entries(&format!(r#"{{"items":[{e},{e}]}}"#)).map(|v| v.len()), Some(2));
+        assert!(parse_remote_entries(r#"{"other":1}"#).is_none());
+    }
+
+    #[test]
+    fn remote_entries_reject_hostile_input() {
+        // 深すぎる入れ子(再帰の暴走を狙う)
+        let deep = "[".repeat(5000) + &"]".repeat(5000);
+        assert!(parse_remote_entries(&deep).is_none());
+        // 大きすぎる本文
+        let big = format!(r#"{{"items":["{}"]}}"#, "a".repeat(9 * 1024 * 1024));
+        assert!(parse_remote_entries(&big).is_none());
+        // 同じキーを2回書いて解釈のずれを狙う
+        let dup = r#"[{"id":1,"text":"x","text":"y","tags":[],"source":"","created_unix":1}]"#;
+        assert!(parse_remote_entries(dup).is_none());
+        // 壊れたJSON・RFC違反(コメント付き)も取り込まない
+        assert!(parse_remote_entries("[{").is_none());
+        assert!(parse_remote_entries("// c
+[]").is_none());
     }
 
     #[test]
