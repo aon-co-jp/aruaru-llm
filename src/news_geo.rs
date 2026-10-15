@@ -114,7 +114,7 @@ fn load_from_disk() -> NewsDb {
     let path = news_db_path();
     std::fs::read_to_string(&path)
         .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
+        .and_then(|s| sonic_rs::from_str(&s).ok())
         .unwrap_or_default()
 }
 
@@ -318,7 +318,7 @@ fn load_news_by_country() -> std::collections::HashMap<String, NewsDb> {
             return map.clone();
         }
     }
-    let loaded = std::fs::read_to_string(news_by_country_db_path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    let loaded = std::fs::read_to_string(news_by_country_db_path()).ok().and_then(|s| sonic_rs::from_str(&s).ok()).unwrap_or_default();
     *NEWS_BY_COUNTRY.write().expect("news-by-country lock poisoned") = Some(loaded);
     load_news_by_country() // 直前に書き込んだので次は必ずSomeから返る(再帰1回のみ)
 }
@@ -608,7 +608,7 @@ static AI_NEWS_DB: RwLock<Option<AiNewsDb>> = RwLock::new(None);
 
 fn load_ai_news_from_disk() -> AiNewsDb {
     let path = ai_news_db_path();
-    std::fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+    std::fs::read_to_string(&path).ok().and_then(|s| sonic_rs::from_str(&s).ok()).unwrap_or_default()
 }
 
 fn persist_ai_news_to_disk(db: &AiNewsDb) {

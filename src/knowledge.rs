@@ -57,7 +57,7 @@ fn now() -> u64 {
 }
 
 fn load_unlocked() -> Vec<Entry> {
-    std::fs::read_to_string(file()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+    std::fs::read_to_string(file()).ok().and_then(|s| sonic_rs::from_str(&s).ok()).unwrap_or_default()
 }
 
 fn save_unlocked(entries: &[Entry]) -> std::io::Result<()> {
@@ -160,7 +160,7 @@ pub fn merge(incoming: Vec<Entry>) -> usize {
 
 /// 同梱の種知識(接客技法の言い換え・先生キャラ方針)を取り込む。何度呼んでも重複しない。
 pub fn seed() -> usize {
-    serde_json::from_str::<Vec<Entry>>(include_str!("../data/knowledge_seed.json")).map(merge).unwrap_or(0)
+    sonic_rs::from_str::<Vec<Entry>>(include_str!("../data/knowledge_seed.json")).map(merge).unwrap_or(0)
 }
 
 /// 既定の取得元(公開WEB→GitHubの順)。`ARUARU_LLM_KNOWLEDGE_SYNC_URL`で1つに上書き、`off`で無効。
