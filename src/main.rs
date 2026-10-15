@@ -1352,18 +1352,30 @@ async fn chat_provider_complete_priority(req: Request) -> Response {
             (Some(k), Some(c)) if !k.trim().is_empty() && !c.trim().is_empty() => Some((k.clone(), c.clone())),
             _ => None,
         };
-        let result = match own_credentials {
-            Some((api_key, cx)) => web_search::search_with_credentials(&req.prompt, 3, &api_key, &cx).await,
-            None if web_search::is_configured() => web_search::search(&req.prompt, 3).await,
-            None => Err(anyhow::anyhow!("Google Custom Search is not configured (no API key/cx set)")),
+        // 2026-10-16変更(ユーザー指示「Google検索の1日100件の無料枠を無制限にするため
+        // aruaru-searchを開発したので、今後はそちらを使って。今すぐ変更して」):
+        // 無料・無制限・APIキー不要の自前メタ検索aruaru-searchを**必ず最初**に試す。
+        // 従来はGoogleキー未設定だと検索自体をスキップし、利用者が自分のキーを送ると
+        // それを直接叩いて1日100件の枠を消費していた。aruaru-searchが使えない/0件の
+        // ときだけ、従来どおり利用者の鍵→共有設定の順で予備へ落ちる。
+        let (result, backend) = match web_search::search_free_only(&req.prompt, 3, None, None).await {
+            Ok(r) if !r.is_empty() => (Ok(r), "aruaru-search"),
+            _ => {
+                let fallback = match own_credentials {
+                    Some((api_key, cx)) => web_search::search_with_credentials(&req.prompt, 3, &api_key, &cx).await,
+                    None if web_search::is_configured() => web_search::search(&req.prompt, 3).await,
+                    None => Err(anyhow::anyhow!("aruaru-search returned nothing and no backup search key is configured")),
+                };
+                (fallback, "backup")
+            }
         };
         match result {
             Ok(results) if !results.is_empty() => {
-                context_blocks.push(format!("Google search results:\n{}", web_search::format_results_as_context(&results)));
-                search_notes.push(format!("google: {} result(s)", results.len()));
+                context_blocks.push(format!("Web search results:\n{}", web_search::format_results_as_context(&results)));
+                search_notes.push(format!("{backend}: {} result(s)", results.len()));
             }
-            Ok(_) => search_notes.push("google: 0 results".to_string()),
-            Err(err) => search_notes.push(format!("google: failed ({err:#})")),
+            Ok(_) => search_notes.push(format!("{backend}: 0 results")),
+            Err(err) => search_notes.push(format!("{backend}: failed ({err:#})")),
         }
     }
 
