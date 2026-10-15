@@ -4740,3 +4740,13 @@ Reading into `serde_json::Value` gives almost no speed-up even with SIMD (188 ms
 **Adoption**: in `Cargo.toml`, `rust-json = { path = "../RS-JSON", features = ["fast"] }`. Example in `RS-JSON/README.md`.
 
 **Status in this repository**: `knowledge::sync_from_remote` (outside import) already uses `parse_secure`. Everything else is not yet applied (policy only). Next targets: search indexes and JSON loaded at start-up.
+
+## HANDOFF 2026-10-16: 検索は aruaru-search を必ず最初に(Google 1日100件の枠を消費しない)
+
+- 共有AI経路(`/v1/chat-providers/complete-priority` の `use_google_search`)は、これまで Google キー未設定だと検索をスキップし、
+  利用者が自分のキーを送るとそれを直接叩いていた(1日100件)。`web_search::search_free_only`(aruaru-search)を**最初に試し**、
+  使えない・0件のときだけ従来どおり利用者の鍵→共有設定へ落ちる。`search_notes` は `aruaru-search: N result(s)` / `backup: ...`。
+- `search_via_aruaru_search` は、`hl`/`gl` が無いとき検索語の文字種から推定する(`infer_lang_hint`: かな→ja、ハングル→ko、
+  かな無しの漢字→zh)。aruaru-search は言語ヒントが無いと Bing/Brave だけを選ぶため、それらが休止中だと日本語でも502になっていた。
+- 英語は aruaru-search 側に公式 API の検索元(Wikipedia・Hacker News・Stack Overflow)を追加して補った(`aruaru-search/CLAUDE.md` 参照)。
+  限界: 一般のウェブ全体の最新情報は Bing・Brave 頼み。
