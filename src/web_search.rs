@@ -336,11 +336,42 @@ pub async fn search(query: &str, max_results: u8) -> Result<Vec<SearchResult>> {
 /// 1日上限(`SHARED_SEARCH_DAILY_LIMIT`)も各社の無料枠も消費しない。aruaru-searchが動いていない・
 /// 全検索元から拒否された・結果が0件のときは、従来どおり下の共有キー経由のチェーンへ自動で移る。
 /// 接続先は環境変数`ARUARU_LLM_SEARCH_URL`(既定`http://127.0.0.1:4610`、空文字で無効化)。
+/// 検索語の文字種から言語ヒント(hl, gl)を推定する。aruaru-searchは言語ヒントが無いと
+/// 英語向けの検索元(Bing/Brave)しか選ばず、それらが拒否中だと日本語等でも0件になるため
+/// (2026-10-16実測: hl/gl無しは502、hl=ja・gl=jpは200)。かな→日本語、ハングル→韓国語、
+/// かなの無い漢字のみ→中国語、それ以外は推定しない(None)。
+fn infer_lang_hint(query: &str) -> Option<(&'static str, &'static str)> {
+    let (mut kana, mut hangul, mut han) = (false, false, false);
+    for c in query.chars() {
+        match c {
+            '\u{3040}'..='\u{30ff}' => kana = true,
+            '\u{ac00}'..='\u{d7af}' | '\u{1100}'..='\u{11ff}' => hangul = true,
+            '\u{4e00}'..='\u{9fff}' => han = true,
+            _ => {}
+        }
+    }
+    if kana {
+        Some(("ja", "jp"))
+    } else if hangul {
+        Some(("ko", "kr"))
+    } else if han {
+        Some(("zh", "cn"))
+    } else {
+        None
+    }
+}
+
 async fn search_via_aruaru_search(query: &str, max_results: u8, gl: Option<&str>, hl: Option<&str>) -> Option<Vec<SearchResult>> {
     let base = std::env::var("ARUARU_LLM_SEARCH_URL").unwrap_or_else(|_| "http://127.0.0.1:4610".to_string());
     if base.trim().is_empty() {
         return None;
     }
+    let hl = hl.filter(|h| !h.is_empty());
+    let gl = gl.filter(|g| !g.is_empty());
+    let (hl, gl) = match (hl, infer_lang_hint(query)) {
+        (None, Some((ih, ig))) => (Some(ih), gl.or(Some(ig))),
+        _ => (hl, gl),
+    };
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(2))
         .timeout(std::time::Duration::from_secs(30))
@@ -981,6 +1012,14 @@ Answer:"
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn infer_lang_hint_by_script() {
+        assert_eq!(super::infer_lang_hint("Rustの最新バージョン"), Some(("ja", "jp")));
+        assert_eq!(super::infer_lang_hint("러스트 최신 버전"), Some(("ko", "kr")));
+        assert_eq!(super::infer_lang_hint("最新版本"), Some(("zh", "cn")));
+        assert_eq!(super::infer_lang_hint("latest rust version"), None);
+    }
+
     use super::*;
 
     #[test]
