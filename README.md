@@ -733,3 +733,7 @@ sudo ./install.sh
 **導入**: `Cargo.toml`に `rust-json = { path = "../RS-JSON", features = ["fast"] }`。使用例は`RS-JSON/README.md`。
 
 **このリポジトリでの適用状況**: `knowledge::sync_from_remote`(外部取り込み)は`parse_secure`に適用済み。ほかは未適用(方針のみ)。次の対象: 検索インデックス・ロード時のJSON。
+
+---
+
+作者 / Author: 石塚正浩（MASAHIRO ISHIZUKA） (https://github.com/aon-co-jp)
