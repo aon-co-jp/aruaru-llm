@@ -185,7 +185,7 @@ fn run_with_timeout(mut cmd: std::process::Command) -> Result<std::process::Outp
 /// バージョン差に強いよう `serde_json::Value` で緩くパースする。
 fn parse_whisper_json(bytes: &[u8]) -> Result<TranscribeOutput, String> {
     let v: serde_json::Value =
-        serde_json::from_slice(bytes).map_err(|e| format!("whisper-cli JSON parse failed: {e}"))?;
+        sonic_rs::from_slice(bytes).map_err(|e| format!("whisper-cli JSON parse failed: {e}"))?;
     let mut text = String::new();
     if let Some(arr) = v.get("transcription").and_then(|t| t.as_array()) {
         for seg in arr {

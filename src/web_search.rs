@@ -1103,7 +1103,7 @@ mod tests {
     #[test]
     fn serpapi_response_parses_organic_results() {
         let json = r#"{"organic_results":[{"title":"T1","snippet":"S1","link":"http://a"},{"title":"T2","snippet":"S2","link":"http://b"}]}"#;
-        let parsed: SerpApiResponse = serde_json::from_str(json).unwrap();
+        let parsed: SerpApiResponse = sonic_rs::from_str(json).unwrap();
         assert_eq!(parsed.organic_results.len(), 2);
         assert_eq!(parsed.organic_results[0].title, "T1");
         assert_eq!(parsed.organic_results[1].link, "http://b");
@@ -1111,14 +1111,14 @@ mod tests {
 
     #[test]
     fn serpapi_response_missing_organic_results_defaults_to_empty() {
-        let parsed: SerpApiResponse = serde_json::from_str("{}").unwrap();
+        let parsed: SerpApiResponse = sonic_rs::from_str("{}").unwrap();
         assert!(parsed.organic_results.is_empty());
     }
 
     #[test]
     fn tavily_response_parses_results() {
         let json = r#"{"results":[{"title":"T1","content":"C1","url":"http://a"},{"title":"T2","content":"C2","url":"http://b"}]}"#;
-        let parsed: TavilyResponse = serde_json::from_str(json).unwrap();
+        let parsed: TavilyResponse = sonic_rs::from_str(json).unwrap();
         assert_eq!(parsed.results.len(), 2);
         assert_eq!(parsed.results[0].title, "T1");
         assert_eq!(parsed.results[1].url, "http://b");
@@ -1126,28 +1126,28 @@ mod tests {
 
     #[test]
     fn tavily_response_missing_results_defaults_to_empty() {
-        let parsed: TavilyResponse = serde_json::from_str("{}").unwrap();
+        let parsed: TavilyResponse = sonic_rs::from_str("{}").unwrap();
         assert!(parsed.results.is_empty());
     }
 
     #[test]
     fn exa_response_parses_results() {
         let json = r#"{"results":[{"title":"T1","url":"http://a","highlights":["highlight one","highlight two"]}]}"#;
-        let parsed: ExaResponse = serde_json::from_str(json).unwrap();
+        let parsed: ExaResponse = sonic_rs::from_str(json).unwrap();
         assert_eq!(parsed.results.len(), 1);
         assert_eq!(parsed.results[0].highlights, vec!["highlight one", "highlight two"]);
     }
 
     #[test]
     fn exa_response_missing_results_defaults_to_empty() {
-        let parsed: ExaResponse = serde_json::from_str("{}").unwrap();
+        let parsed: ExaResponse = sonic_rs::from_str("{}").unwrap();
         assert!(parsed.results.is_empty());
     }
 
     #[test]
     fn jina_response_parses_data_array() {
         let json = r#"{"code":200,"data":[{"title":"T1","url":"http://a","content":"C1"},{"title":"T2","url":"http://b","description":"D2"}]}"#;
-        let parsed: JinaResponse = serde_json::from_str(json).unwrap();
+        let parsed: JinaResponse = sonic_rs::from_str(json).unwrap();
         assert_eq!(parsed.data.len(), 2);
         assert_eq!(parsed.data[0].title, "T1");
         assert_eq!(parsed.data[1].description, "D2");
@@ -1155,7 +1155,7 @@ mod tests {
 
     #[test]
     fn jina_response_missing_data_defaults_to_empty() {
-        let parsed: JinaResponse = serde_json::from_str("{}").unwrap();
+        let parsed: JinaResponse = sonic_rs::from_str("{}").unwrap();
         assert!(parsed.data.is_empty());
     }
 

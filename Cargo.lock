@@ -2405,6 +2405,7 @@ dependencies = [
  "safetensors 0.4.5",
  "serde",
  "serde_json",
+ "sonic-rs",
  "tokenizers",
  "tracing",
 ]
@@ -2421,6 +2422,7 @@ dependencies = [
  "safetensors 0.4.5",
  "serde",
  "serde_json",
+ "sonic-rs",
  "tokenizers",
  "tracing",
 ]
@@ -2440,6 +2442,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "sonic-rs",
 ]
 
 [[package]]
@@ -2450,6 +2453,7 @@ dependencies = [
  "chrono",
  "open-runo-core",
  "serde",
+ "sonic-rs",
 ]
 
 [[package]]
@@ -2536,6 +2540,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "sonic-rs",
 ]
 
 [[package]]
@@ -2589,6 +2594,7 @@ dependencies = [
  "serde_json",
  "sha1",
  "sha2 0.10.9",
+ "sonic-rs",
  "tokio",
  "tracing",
  "uuid",
@@ -2621,6 +2627,7 @@ dependencies = [
  "open-runo-db",
  "serde",
  "serde_json",
+ "sonic-rs",
  "uuid",
 ]
 
@@ -2634,6 +2641,7 @@ dependencies = [
  "open-runo-core",
  "serde",
  "serde_json",
+ "sonic-rs",
 ]
 
 [[package]]
@@ -2670,6 +2678,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "sonic-rs",
  "subtle",
  "tokio",
  "tokio-rustls",
