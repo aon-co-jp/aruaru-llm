@@ -103,7 +103,7 @@ fn is_cjk(c: char) -> bool {
 /// 検索用の語に分ける。英数字は空白・記号区切りの2文字以上の語、日本語などは空白で単語が
 /// 区切られないため、連続するCJK文字を**2文字ずつ重ねた断片(バイグラム)**にして比べる
 /// (2026-10-08: 日本語の知識がほぼ拾われなかった問題の対策。形態素解析器などの依存は増やさない)。
-fn words(s: &str) -> HashSet<String> {
+pub(crate) fn words(s: &str) -> HashSet<String> {
     let lower = s.to_lowercase();
     let mut out = HashSet::new();
     for token in lower.split(|c: char| !c.is_alphanumeric()) {
@@ -270,11 +270,16 @@ pub fn context_for(query: &str) -> Option<String> {
 /// 生成プロンプト全体から(最後の`Student:`以降、無ければ全体を検索語として)文脈を作る。
 /// 既に`Known facts:`が入っている(persona経由)場合は二重に足さない。
 pub fn context_for_prompt(prompt: &str) -> Option<String> {
-    if prompt.contains("Known facts:") {
+    if prompt.contains("Known facts:") || prompt.contains("Recent news (shared stock):") {
         return None;
     }
     let query = prompt.rsplit_once("Student:").map(|(_, s)| s).unwrap_or(prompt);
-    context_for(query)
+    // 共有ニュースストック(news_stock.rs)も足す。realdata.proもopen-englishも同じ入口を通る。
+    match (context_for(query), crate::news_stock::context_for(query)) {
+        (Some(k), Some(n)) => Some(format!("{k}
+{n}")),
+        (k, n) => k.or(n),
+    }
 }
 
 /// モデル切替の直前に呼ぶ世代バックアップ(失敗してもモデル切替は止めない)。

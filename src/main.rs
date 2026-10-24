@@ -44,6 +44,7 @@ mod model_catalog;
 mod qwen_generation;
 mod deepseek_generation;
 mod news_geo;
+mod news_stock;
 mod nllb;
 mod phone_task;
 mod provider_priority;
