@@ -4225,6 +4225,8 @@ async fn main() -> anyhow::Result<()> {
         .at("/v1/background-fold/status", get(plain(|| Box::pin(background_fold_status()))))
         .at("/v1/background-fold/task", get(plain(|| Box::pin(background_fold_task()))))
         .at("/v1/background-fold/task-result", post(handler_fn(|req, _p| Box::pin(background_fold_task_result(req)))))
+        // 型駆動のAPIドキュメントを /api/docs 等で配信(2026-10-26、RPoemのRoute::docs_auto)。
+        .docs_auto("/api", "aruaru-llm", env!("CARGO_PKG_VERSION"))
         .with_cors();
 
     // `ARUARU_LLM_BIND`環境変数で上書き可能(2026-08-11追加、Android
