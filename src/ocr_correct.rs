@@ -31,7 +31,7 @@ pub const MAX_LINES: usize = 300;
 /// 1回の要求で補正に使う時間の上限(超えたら残りは補正せずに返す)。
 const DEADLINE: Duration = Duration::from_secs(600);
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 pub struct CorrectLine {
     pub text: String,
     /// 行の信頼度(0〜100)。`only_below` 以上の行は補正しない。

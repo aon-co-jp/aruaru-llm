@@ -136,7 +136,7 @@ dependencies = [
  "bytes",
  "hyper 1.10.1",
  "mockito",
- "open-cpu",
+ "open-cpu 0.1.0",
  "open-cuda-bert",
  "open-cuda-llm",
  "open-runo-glyph",
@@ -150,6 +150,7 @@ dependencies = [
  "reqwest 0.12.28",
  "rust-bert",
  "rust-json",
+ "schemars",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -2395,6 +2396,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "open-cpu"
+version = "0.1.0"
+source = "git+https://github.com/aon-co-jp/open-cpu#efa35b50f30211d7ddc68183b995e1d9eef9e7e1"
+dependencies = [
+ "jni",
+]
+
+[[package]]
 name = "open-cuda-bert"
 version = "0.4.1"
 dependencies = [
@@ -2716,7 +2725,7 @@ version = "0.4.1"
 dependencies = [
  "anyhow",
  "half",
- "open-cpu",
+ "open-cpu 0.1.0 (git+https://github.com/aon-co-jp/open-cpu)",
  "opencuda-core",
  "opencuda-shader-build",
  "rayon",
@@ -5781,7 +5790,7 @@ dependencies = [
 name = "zfs_accel_hlsl"
 version = "0.0.1"
 dependencies = [
- "open-cpu",
+ "open-cpu 0.1.0",
  "thiserror 1.0.69",
  "tracing",
 ]

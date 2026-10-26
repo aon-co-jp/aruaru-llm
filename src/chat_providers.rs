@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 use crate::provider_priority::{self, PriorityService};
 
 /// 対応プロバイダ。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Provider {
     Openai,

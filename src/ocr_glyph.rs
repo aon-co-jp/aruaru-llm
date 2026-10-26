@@ -21,7 +21,7 @@ struct Built {
 
 static INDEX: Mutex<Option<Built>> = Mutex::new(None);
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 pub struct RankCell {
     /// 升目の濃淡(`N`×`N`、0〜1)。
     pub map: Vec<f32>,

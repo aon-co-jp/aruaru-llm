@@ -59,6 +59,7 @@ mod ocr_fill;
 mod ocr_glyph;
 mod ocr_data;
 mod transcribe;
+mod api_docs;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -90,7 +91,7 @@ fn html_page_response(html: &'static str) -> Response {
         .expect("building a response from a fixed set of valid headers cannot fail")
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct ChatRequest {
     message: String,
     /// 呼び出し元ドメイン(任意)。登録済みでなくても応答は返す
@@ -143,7 +144,7 @@ struct ChatResponse {
 
 /// `POST /v1/rerank`(2026-09-25新設、`aruaru-search`との連動)の入力。検索語と文書の意味的な近さを、
 /// 世界約100言語に対応する埋め込み(multilingual-e5-small、open-cuda上で実行)で測る。
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 struct RerankRequest {
     query: String,
     documents: Vec<String>,
@@ -215,7 +216,7 @@ async fn chat(req: Request, device: Arc<dyn GpuDevice>, registry: Arc<TenantRegi
 /// 汎用分類(`/v1/classify`)のリクエスト/レスポンス。呼び出し側が
 /// カテゴリ一覧そのものを自由に指定できる(2026-09-07新設、
 /// `generic_classify.rs`参照)。
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct ClassifyRequest {
     /// 分類したいテキストの一覧。
     items: Vec<String>,
@@ -270,7 +271,7 @@ async fn classify_generic(req: Request, device: Arc<dyn GpuDevice>, registry: Ar
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct ClassifySecurityRequest {
     /// 判定対象のコード片、または振る舞いの説明文。
     text: String,
@@ -362,7 +363,7 @@ async fn classify_security(req: Request, device: Arc<dyn GpuDevice>, registry: A
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct ClassifyTrafficRequest {
     /// RS-SmartTCP側が観測したトラフィック特徴量から組み立てた短い説明文
     /// (例: "one source IP probed 60 ports in 3 seconds")。生パケットや
@@ -422,7 +423,7 @@ async fn classify_traffic(req: Request, device: Arc<dyn GpuDevice>, registry: Ar
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 struct ClassifyPiiRequest {
     /// 呼び出し側でマスク済みの断片(周辺の文脈)。値そのものは送らない運用。
     snippets: Vec<String>,
@@ -508,7 +509,7 @@ async fn admin_remove_tenant(req: Request, params: Params, registry: Arc<TenantR
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct GenerateRequest {
     /// 生成の起点となるプロンプト(英語推奨——GPT-2 124MのBPE語彙は
     /// 英語中心の学習データに由来するため、日本語入力は語彙効率・品質共に
@@ -633,7 +634,7 @@ async fn generate(req: Request, device: Arc<dyn GpuDevice>, registry: Arc<Tenant
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct GenerateSpeculativeRequest {
     prompt: String,
     /// `model_catalog::CATALOG`のいずれか(例: `"distilgpt2"`)。ダウンロード
@@ -748,7 +749,7 @@ async fn generate_speculative(req: Request, device: Arc<dyn GpuDevice>, registry
 /// (2) 検索結果を埋め込んでもGPT-2系の小型モデルが実際にそれを踏まえた
 /// 応答をするとは保証されない(モデル自体は変わらない、既存の`disclosure`
 /// と同じ限界)。
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct GenerateWithSearchRequest {
     prompt: String,
     #[serde(default = "default_max_new_tokens")]
@@ -892,7 +893,7 @@ async fn generate_with_search(req: Request, device: Arc<dyn GpuDevice>, registry
 /// 搭載して」への対応)。**正直な開示**: メモリ上にのみ保持し、
 /// ディスクへの書き込み・ログ出力は一切行わない(プロセス再起動で
 /// 消える設計、`web_search`モジュールdocコメント参照)。
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct GoogleSearchSettingsRequest {
     api_key: String,
     cx: String,
@@ -930,7 +931,7 @@ async fn get_google_search_settings_status() -> Response {
 /// **正直な開示**: トークンは検索の利用自体には必須ではない
 /// (`github_search`モジュールdoc参照、未認証だとレート制限が10/分に
 /// なるだけ)。
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct GithubSearchSettingsRequest {
     #[serde(default)]
     token: String,
@@ -962,7 +963,7 @@ async fn get_github_search_settings_status() -> Response {
 /// `POST /v1/settings/youtube-search` — ブラウザの設定パネルからYouTube
 /// Data API v3のAPIキーを保存する(ユーザー指示「Youtube連携機能も
 /// 付けて」への対応、`set_google_search_settings`と同じ設計)。
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct YoutubeSearchSettingsRequest {
     api_key: String,
 }
@@ -994,7 +995,7 @@ async fn get_youtube_search_settings_status() -> Response {
 /// DeepSeek/Gemini/ClaudeのAPIキーを保存する(`set_google_search_settings`
 /// と同じ設計: メモリ上にのみ保持、ディスク書き込み・ログ出力は一切
 /// 行わない)。
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct ChatProviderSettingsRequest {
     provider: chat_providers::Provider,
     api_key: String,
@@ -1030,7 +1031,7 @@ async fn get_chat_provider_settings_status() -> Response {
 /// リクエストボディに含まれていればこのリクエスト限りで使用し
 /// (共有VPS上での意図しないキー消費を避ける、`generate_with_search`と
 /// 同じ設計)、無ければ実行時/環境変数設定へフォールバックする。
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct ChatProviderCompleteRequest {
     provider: chat_providers::Provider,
     prompt: String,
@@ -1091,7 +1092,7 @@ async fn chat_provider_complete(req: Request) -> Response {
 /// (並列にHTTPリクエストを投げ、成功分をプロバイダ別に、失敗分も
 /// エラー内容付きで正直に返す。1つの応答へ統合・要約する処理は
 /// 行わない——呼び出し元・利用者が結果を比較できるようにするため)。
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct ChatProviderCompleteMultiRequest {
     providers: Vec<chat_providers::Provider>,
     prompt: String,
@@ -1138,7 +1139,7 @@ async fn chat_provider_complete_multi(req: Request) -> Response {
 /// 変更可能にして」への対応)。`order`はフロントエンド側が「番号入力」
 /// または「ラジオボタン」いずれのUIで組み立てても良い、サーバー側は
 /// 並び替え済みの配列を受け取るだけ(UI実装の自由度を残す設計)。
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct ProviderPrioritySettingsRequest {
     enabled: bool,
     #[serde(default)]
@@ -1178,7 +1179,7 @@ async fn get_provider_priority_settings_status() -> Response {
 /// (`generate_with_search`と同じブリッジ式)。**正直な開示**: 各検索
 /// APIが未設定/失敗した場合はその旨を`search_notes`で正直に開示し、
 /// 検索無しでチャット補完自体は続行する(サービス全体を壊さない設計)。
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct ChatProviderCompletePriorityRequest {
     prompt: String,
     #[serde(default)]
@@ -1224,7 +1225,7 @@ async fn chat_provider_active() -> Response {
 /// `POST /v1/search/raw`(2026-09-24新設)の入力。rs-real-data が検索結果そのものを
 /// データセットとして分析するために使う(AI 応答は生成しない)。キーの扱いは
 /// `complete-priority` と同じ(利用者持ち込みのキーを優先し、無ければサーバー設定)。
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct SearchRawRequest {
     /// "google" | "youtube" | "github"
     source: String,
@@ -1434,7 +1435,7 @@ async fn chat_provider_complete_priority(req: Request) -> Response {
     )
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct TranslateRequest {
     /// 翻訳元テキスト。
     text: String,
@@ -1554,7 +1555,7 @@ async fn translate(req: Request, device: Arc<dyn GpuDevice>, registry: Arc<Tenan
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct TranscribeRequest {
     /// 16kHz mono の f32 PCM サンプル(範囲 -1.0..=1.0)をリトルエンディアン
     /// バイト列にして base64 エンコードしたもの。`open-english` の
@@ -1605,7 +1606,7 @@ fn transcribe_engine_label() -> &'static str {
 }
 
 /// `languages` は `"jpn+eng"` 形式の文字列でも `["jpn","eng"]` の配列でもよい。
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 enum OcrLanguages {
     Joined(String),
@@ -1621,7 +1622,7 @@ impl OcrLanguages {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct OcrRequest {
     /// PNG または JPEG(base64)。1ページだけの場合。
     #[serde(default)]
@@ -1784,7 +1785,7 @@ async fn ocr_languages() -> Response {
     )
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct OcrPrepareRequest {
     languages: OcrLanguages,
     #[serde(default)]
@@ -1792,7 +1793,7 @@ struct OcrPrepareRequest {
 }
 
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct OcrCorrectRequest {
     lines: Vec<ocr_correct::CorrectLine>,
     /// この信頼度(0〜100)以上の行は補正しない(既定 90)。
@@ -1844,7 +1845,7 @@ async fn ocr_correct_endpoint(req: Request, device: Arc<dyn GpuDevice>) -> Respo
         Err(e) => ocr_err(StatusCode::INTERNAL_SERVER_ERROR, format!("correction task failed: {e}")),
     }
 }
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct OcrFillRequest {
     items: Vec<ocr_fill::FillItem>,
     /// 採用に必要な対数尤度の差(既定 3.0 = 約20倍)。
@@ -1922,7 +1923,7 @@ async fn ocr_fill_endpoint(req: Request, device: Arc<dyn GpuDevice>) -> Response
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct OcrProposeRequest {
     items: Vec<ocr_fill::FillItem>,
     /// 位置ごとにモデルへ挙げさせる候補数(既定 48、8〜200)。
@@ -1963,7 +1964,7 @@ async fn ocr_propose_endpoint(req: Request, device: Arc<dyn GpuDevice>) -> Respo
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct OcrScanRequest {
     items: Vec<ocr_fill::ScanItem>,
     /// この対数確率より低いトークンを不自然とみなす(既定 -8.0)。
@@ -2007,7 +2008,7 @@ async fn ocr_scan_endpoint(req: Request, device: Arc<dyn GpuDevice>) -> Response
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct OcrCharsetQuery {
     #[serde(default)]
     n: Option<usize>,
@@ -2033,7 +2034,7 @@ async fn ocr_charset_endpoint(req: Request) -> Response {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct OcrGlyphRankRequest {
     cells: Vec<ocr_glyph::RankCell>,
     /// 升目ごとに、得点を知りたい文字(例: 疑わしい読みの文字)。
@@ -2302,7 +2303,7 @@ struct CatalogResponse {
 /// docコメントに詳細な調査結果・限界を明記している。**advisory専用**
 /// (実際のディスク削除は行わない、`evict`は「削除を推奨するモデルID一覧」
 /// を返すのみ)。
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct OptimizeCacheRequest {
     budget_mb: u32,
     #[serde(default)]
@@ -2339,7 +2340,7 @@ async fn list_model_catalog() -> Response {
     )
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct InstallModelRequest {
     /// `model_catalog::CatalogEntry::id`のいずれか。
     id: String,
@@ -2357,7 +2358,7 @@ struct InstallModelErrorResponse {
     error: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct SelectModelRequest {
     /// `model_catalog::CatalogEntry::id`のいずれか(ダウンロード済みで
     /// あることが前提、`GET /v1/models/catalog`の`installed_ids`参照)。
@@ -2481,7 +2482,7 @@ async fn select_qwen_model_http(req: Request) -> Response {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct GenerateQwenRequest {
     prompt: String,
     #[serde(default = "default_max_new_tokens")]
@@ -2553,7 +2554,7 @@ async fn deepseek_status() -> Response {
     )
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct SelectDeepseekModelRequest {
     /// `config.json`/`model.safetensors`/`tokenizer.json`を含むディレクトリの
     /// 絶対または相対パス(`model_catalog`のカタログidではない——上の
@@ -2594,7 +2595,7 @@ async fn select_deepseek_model_http(req: Request) -> Response {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct GenerateDeepseekRequest {
     prompt: String,
     #[serde(default = "default_max_new_tokens")]
@@ -2627,7 +2628,7 @@ async fn generate_deepseek(req: Request, device: Arc<dyn GpuDevice>) -> Response
     }
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, schemars::JsonSchema)]
 struct LayerRedundancyRequest {
     /// トピックを分散させた複数の文を推奨。省略・空配列なら
     /// `mla_calibration_prompts()`(8文の一般英文)を既定として使う。
@@ -2670,7 +2671,7 @@ async fn layer_redundancy_handler(req: Request, device: Arc<dyn GpuDevice>) -> R
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct FoldLayersRequest {
     #[serde(default)]
     sample_prompts: Vec<String>,
@@ -3543,7 +3544,7 @@ async fn geo_fuji() -> Response {
     json_response(StatusCode::OK, &geo_content::fuji_info())
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct GeoToursRequest {
     place: String,
 }
@@ -3611,7 +3612,7 @@ async fn geo_tours(req: Request) -> Response {
     )
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct ReferralsCheckRequest {
     text: String,
 }
@@ -3738,7 +3739,7 @@ fn urlencoding_encode(s: &str) -> String {
     out
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct GeoLookupRequest {
     country: String,
 }
@@ -4226,7 +4227,7 @@ async fn main() -> anyhow::Result<()> {
         .at("/v1/background-fold/task", get(plain(|| Box::pin(background_fold_task()))))
         .at("/v1/background-fold/task-result", post(handler_fn(|req, _p| Box::pin(background_fold_task_result(req)))))
         // 型駆動のAPIドキュメントを /api/docs 等で配信(2026-10-26、RPoemのRoute::docs_auto)。
-        .docs_auto("/api", "aruaru-llm", env!("CARGO_PKG_VERSION"))
+        .docs("/api", api_docs::spec())
         .with_cors();
 
     // `ARUARU_LLM_BIND`環境変数で上書き可能(2026-08-11追加、Android

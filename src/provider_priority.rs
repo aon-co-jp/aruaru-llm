@@ -31,7 +31,7 @@ use std::sync::RwLock;
 use serde::{Deserialize, Serialize};
 
 /// 優先順位付けの対象となるサービス(Google検索+チャット系4社の計5つ)。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum PriorityService {
     GoogleSearch,

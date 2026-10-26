@@ -32,7 +32,7 @@ pub const MAX_SPAN: usize = 4;
 const WEB_BONUS: f32 = 3.0;
 const WEB_MAX_HITS: usize = 3;
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 pub struct FillItem {
     /// 疑わしい箇所の前の文脈(行の前半+前の行の末尾など)。
     #[serde(default)]
@@ -445,7 +445,7 @@ pub fn propose_items(lm: &dyn Lm, items: &[FillItem], k: usize) -> Vec<ProposeRe
 }
 
 /// 走査 1 件: `prefix`(前の行などの文脈。検査はしない)のあとの `text`(検査する 1 行)。
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 pub struct ScanItem {
     #[serde(default)]
     pub prefix: String,
