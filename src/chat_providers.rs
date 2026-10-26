@@ -181,13 +181,13 @@ pub fn configured_providers() -> Vec<Provider> {
     Provider::all().into_iter().filter(|p| is_configured(*p)).collect()
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct ProviderReply {
     pub provider: Provider,
     pub text: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct ProviderFailure {
     pub provider: Provider,
     pub error: String,
@@ -325,14 +325,14 @@ pub async fn complete_multi(providers: &[Provider], keys: &HashMap<Provider, Str
 /// 付きで記録し、どこまで試して何が起きたかを常に正直に開示する
 /// (黙って1社だけ試して諦めない、`web_search`と同じ「サービスを
 /// 壊さない」設計思想)。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct PriorityAttempt {
     pub provider: Provider,
     pub error: String,
     pub quota_exceeded: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct PriorityCompleteResult {
     pub reply: Option<ProviderReply>,
     pub attempted: Vec<PriorityAttempt>,
@@ -378,13 +378,13 @@ pub async fn complete_in_priority_order_skipping(prompt: &str, skip: &[Provider]
 
 // --- OpenAI (ChatGPT) --------------------------------------------------
 
-#[derive(Serialize)]
+#[derive(Serialize, schemars::JsonSchema)]
 struct OpenAiRequest<'a> {
     model: &'a str,
     messages: Vec<OpenAiMessage<'a>>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, schemars::JsonSchema)]
 struct OpenAiMessage<'a> {
     role: &'a str,
     content: &'a str,
@@ -439,12 +439,12 @@ async fn complete_deepseek(client: &reqwest::Client, api_key: &str, prompt: &str
 
 // --- Google Gemini -------------------------------------------------------
 
-#[derive(Serialize)]
+#[derive(Serialize, schemars::JsonSchema)]
 struct GeminiRequest<'a> {
     contents: Vec<GeminiContent<'a>>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, schemars::JsonSchema)]
 struct GeminiContent<'a> {
     // Vertex AI窓口はroleが必須("user"/"model")。通常のGenerative Language
     // APIでも"user"を明示して問題無い。
@@ -452,7 +452,7 @@ struct GeminiContent<'a> {
     parts: Vec<GeminiPart<'a>>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, schemars::JsonSchema)]
 struct GeminiPart<'a> {
     text: &'a str,
 }
@@ -515,7 +515,7 @@ async fn complete_gemini(client: &reqwest::Client, api_key: &str, prompt: &str) 
 
 // --- Anthropic Claude ------------------------------------------------------
 
-#[derive(Serialize)]
+#[derive(Serialize, schemars::JsonSchema)]
 struct ClaudeRequest<'a> {
     model: &'a str,
     max_tokens: u32,
@@ -606,7 +606,7 @@ async fn complete_grok(client: &reqwest::Client, api_key: &str, prompt: &str) ->
 pub const HYBRID_GROUP: [Provider; 6] =
     [Provider::Gemini, Provider::Groq, Provider::Grok, Provider::Mistral, Provider::OpenRouter, Provider::Cloudflare];
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct HybridCompleteResult {
     pub reply: Option<ProviderReply>,
     /// 回答を出したハイブリッド群のプロバイダ(1つだけなら統合なし)。
@@ -706,7 +706,7 @@ fn hybrid_candidates() -> Vec<Provider> {
 
 /// いまのハイブリッド運用状態(画面の「使用中の無料AI」表示用、2026-09-21新設)。
 /// active=同時に使う上位N社、standby=予備(繰り上げ待ち)、resting=お休み中(枠切れ等)。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct HybridStatus {
     pub hybrid_enabled: bool,
     pub size: usize,

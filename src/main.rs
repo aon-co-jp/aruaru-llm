@@ -128,7 +128,7 @@ fn log_tenant_usage(endpoint: &str, tenant: &Option<String>, registry: &TenantRe
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct ChatResponse {
     reply: String,
     engine: String,
@@ -226,14 +226,14 @@ struct ClassifyRequest {
     tenant: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct ClassifiedItemDto {
     item: String,
     category: String,
     score: f32,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct ClassifyResponse {
     results: Vec<ClassifiedItemDto>,
     engine: String,
@@ -279,14 +279,14 @@ struct ClassifySecurityRequest {
     tenant: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct StaticSignalDto {
     tag: String,
     description: String,
     category_hint: &'static str,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct ClassifySecurityResponse {
     label: &'static str,
     description: &'static str,
@@ -373,7 +373,7 @@ struct ClassifyTrafficRequest {
     tenant: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct ClassifyTrafficResponse {
     label: &'static str,
     description: &'static str,
@@ -429,7 +429,7 @@ struct ClassifyPiiRequest {
     snippets: Vec<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, schemars::JsonSchema)]
 struct ClassifyPiiResponse {
     verdict: &'static str,
     pii_votes: usize,
@@ -529,7 +529,7 @@ fn default_max_new_tokens() -> usize {
 
 const MAX_NEW_TOKENS_LIMIT: usize = 128;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct GenerateResponse {
     /// `prompt`に続けて生成されたテキスト(プロンプト自体は含まない)。
     completion: String,
@@ -543,7 +543,7 @@ struct GenerateResponse {
     disclosure: &'static str,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct GenerateErrorResponse {
     error: String,
     engine: String,
@@ -653,7 +653,7 @@ fn default_draft_k() -> usize {
     4
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct GenerateSpeculativeResponse {
     completion: String,
     engine: String,
@@ -771,7 +771,7 @@ struct GenerateWithSearchRequest {
     google_search_cx: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct GenerateWithSearchResponse {
     completion: String,
     engine: String,
@@ -899,7 +899,7 @@ struct GoogleSearchSettingsRequest {
     cx: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct GoogleSearchSettingsStatusResponse {
     /// APIキーの値自体は絶対に返さない(この構造体にキーの値を保持する
     /// フィールドを持たせないことで、実装ミスによる漏洩を型レベルで
@@ -937,7 +937,7 @@ struct GithubSearchSettingsRequest {
     token: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct GithubSearchSettingsStatusResponse {
     token_configured: bool,
 }
@@ -968,7 +968,7 @@ struct YoutubeSearchSettingsRequest {
     api_key: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct YoutubeSearchSettingsStatusResponse {
     configured: bool,
 }
@@ -1001,7 +1001,7 @@ struct ChatProviderSettingsRequest {
     api_key: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct ChatProviderSettingsStatusResponse {
     /// APIキーの値自体は絶対に返さない(`GoogleSearchSettingsStatusResponse`
     /// と同じ設計)。設定済みのプロバイダ一覧のみを返す。
@@ -1039,13 +1039,13 @@ struct ChatProviderCompleteRequest {
     api_key: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct ChatProviderCompleteResponse {
     provider: chat_providers::Provider,
     text: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct ChatProviderErrorResponse {
     provider: chat_providers::Provider,
     error: String,
@@ -1103,7 +1103,7 @@ struct ChatProviderCompleteMultiRequest {
     api_keys: HashMap<chat_providers::Provider, String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct ChatProviderCompleteMultiResponse {
     replies: Vec<chat_providers::ProviderReply>,
     failures: Vec<chat_providers::ProviderFailure>,
@@ -1203,7 +1203,7 @@ struct ChatProviderCompletePriorityRequest {
     providers: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct ChatProviderCompletePriorityResponse {
     reply: Option<chat_providers::ProviderReply>,
     attempted: Vec<chat_providers::PriorityAttempt>,
@@ -1451,14 +1451,14 @@ struct TranslateRequest {
     tenant: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct TranslateResponse {
     translation: String,
     engine: String,
     disclosure: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct TranslateErrorResponse {
     error: String,
     engine: String,
@@ -1582,7 +1582,7 @@ fn default_transcribe_sample_rate() -> u32 {
     16000
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct TranscribeResponse {
     transcript: String,
     /// Whisper が検出/使用した言語コード。
@@ -1591,7 +1591,7 @@ struct TranscribeResponse {
     disclosure: &'static str,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct TranscribeErrorResponse {
     error: String,
     engine: &'static str,
@@ -1640,12 +1640,12 @@ struct OcrRequest {
     tenant: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct OcrPage {
     lines: Vec<ocr::OcrLine>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct OcrResponse {
     /// 画像と同じ順のページごとの認識結果。
     pages: Vec<OcrPage>,
@@ -1657,7 +1657,7 @@ struct OcrResponse {
     disclosure: &'static str,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct OcrErrorResponse {
     error: String,
     engine: &'static str,
@@ -1741,7 +1741,7 @@ async fn ocr_endpoint(req: Request, registry: Arc<TenantRegistry>) -> Response {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct OcrLanguageEntry {
     code: &'static str,
     name_ja: &'static str,
@@ -1750,7 +1750,7 @@ struct OcrLanguageEntry {
     cached_fast: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct OcrLanguagesResponse {
     max_languages: usize,
     tesseract_available: bool,
@@ -1801,7 +1801,7 @@ struct OcrCorrectRequest {
     only_below: Option<f32>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct OcrCorrectResponse {
     results: Vec<ocr_correct::CorrectResult>,
     changed: usize,
@@ -1869,7 +1869,7 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct OcrFillResponse {
     results: Vec<ocr_fill::FillResult>,
     changed: usize,
@@ -1931,7 +1931,7 @@ struct OcrProposeRequest {
     k: Option<usize>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct OcrProposeResponse {
     results: Vec<ocr_fill::ProposeResult>,
     model: String,
@@ -1975,7 +1975,7 @@ struct OcrScanRequest {
     max_spots: Option<usize>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct OcrScanResponse {
     results: Vec<ocr_fill::ScanResult>,
     model: String,
@@ -2051,7 +2051,7 @@ struct OcrGlyphRankRequest {
     pool_n: Option<usize>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct OcrGlyphRankResponse {
     results: Vec<ocr_glyph::RankResult>,
     pool: usize,
@@ -2280,7 +2280,7 @@ async fn transcribe(req: Request, registry: Arc<TenantRegistry>) -> Response {
 
 /// `GET /v1/models/catalog` — インストール可能なGPT-2アーキテクチャ互換
 /// モデルの一覧(ダウンロード前、どのモデルが選択可能かを提示するため)。
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct CatalogResponse {
     models: &'static [model_catalog::CatalogEntry],
     installed_ids: Vec<&'static str>,
@@ -2346,14 +2346,14 @@ struct InstallModelRequest {
     id: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct InstallModelResponse {
     id: String,
     dir: String,
     message_ja: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct InstallModelErrorResponse {
     error: String,
 }
@@ -2365,7 +2365,7 @@ struct SelectModelRequest {
     id: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct SelectModelResponse {
     id: String,
     dir: String,
@@ -2489,13 +2489,13 @@ struct GenerateQwenRequest {
     max_new_tokens: usize,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct GenerateQwenResponse {
     text: String,
     engine: &'static str,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct GenerateQwenErrorResponse {
     error: String,
 }
@@ -2531,7 +2531,7 @@ async fn generate_qwen(req: Request, device: Arc<dyn GpuDevice>) -> Response {
 // を任意のディレクトリパスから直接選択できるようにする
 // (`model_catalog`のid方式ではなく生パスを受け取る点がQwen版と異なる)。
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct DeepseekStatusResponse {
     active_model_dir: Option<String>,
     disclosure_ja: &'static str,
@@ -2602,13 +2602,13 @@ struct GenerateDeepseekRequest {
     max_new_tokens: usize,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct GenerateDeepseekResponse {
     text: String,
     engine: &'static str,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct GenerateDeepseekErrorResponse {
     error: String,
 }
@@ -2636,8 +2636,9 @@ struct LayerRedundancyRequest {
     sample_prompts: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct LayerRedundancyResponse {
+    #[schemars(with = "Vec<serde_json::Value>")]
     layers: Vec<open_cuda_llm::LayerRedundancyReport>,
     disclosure_ja: &'static str,
     disclosure_en: &'static str,
@@ -2717,8 +2718,9 @@ fn default_block_influence_threshold() -> f32 {
     0.01
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct FoldLayersResponse {
+    #[schemars(with = "Vec<serde_json::Value>")]
     redundancy: Vec<open_cuda_llm::LayerRedundancyReport>,
     original_layer_count: usize,
     pruned_layer_count: usize,
@@ -2864,7 +2866,7 @@ async fn recommend_model(req: Request) -> Response {
     json_response(StatusCode::OK, &hardware::recommend_at_precision(precision))
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct RecommendAndDownloadResponse {
     recommendation: hardware::Recommendation,
     already_installed: bool,
@@ -2950,7 +2952,7 @@ fn current_model_id() -> String {
     generation::active_model_dir().and_then(|dir| dir.file_name().map(|n| n.to_string_lossy().to_string())).unwrap_or_else(|| "gpt2".to_string())
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct StepModelResponse {
     from_id: String,
     to_id: Option<String>,
@@ -3076,7 +3078,7 @@ async fn healthz() -> Response {
 ///   `opencuda-directx`クレート(`hw-detect-directx` feature、既定オフ、
 ///   GPU**検出**のみで演算には使わない)であり、独立リポジトリ
 ///   `aon-co-jp/open-directx`とは無関係(CLAUDE.md 2026-08-20参照)。
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct RuntimeDeviceInfo {
     id: usize,
     name: String,
@@ -3086,7 +3088,7 @@ struct RuntimeDeviceInfo {
     supports_spirv: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct RuntimeInfoResponse {
     devices: Vec<RuntimeDeviceInfo>,
     device_count: usize,
@@ -3126,7 +3128,7 @@ struct RuntimeInfoResponse {
 /// ビルド不能なため撤回)。`cli_present` と `model_present` の両方が
 /// true のときだけ `/v1/transcribe` が実際に書き起こせる。いずれも
 /// リポジトリには同梱していない。
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct WhisperTierInfo {
     /// CLI・モデルの両方が実在し `/v1/transcribe` が動作可能か。
     available: bool,
@@ -3168,14 +3170,14 @@ fn whisper_tier_info() -> WhisperTierInfo {
 /// **正直な開示**: `compiled_in`はビルド時featureの有無、`active`は
 /// 実行時に実際にその経路が使われているかを表す。両方trueの段だけが
 /// 「実際に効いている」——それ以外は下位段へフォールバックしている。
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct TierStatus {
     compiled_in: bool,
     active: bool,
     detail: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct AccelerationInfo {
     /// 実際に有効な最上位の段(`cuda` / `vulkan` / `directx-gemm` / `cpu-simd`)。
     tier: &'static str,
@@ -3268,7 +3270,7 @@ fn acceleration_info(pool: &device_pool::DevicePool) -> AccelerationInfo {
 /// - `"compiled-in"` = ビルドに含まれるが実行時には選ばれていない
 /// - `"not-compiled-in"` = feature を有効にすれば使える
 /// - `"planned"` = 設計方針として記録済み・未実装
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct BackendMatrixRow {
     backend: &'static str,
     status: &'static str,
@@ -3359,7 +3361,7 @@ fn backend_matrix(accel: &AccelerationInfo) -> Vec<BackendMatrixRow> {
 }
 
 /// CPU 側 SIMD ディスパッチの状況(`open-cpu` + `opencuda-blas` の実測値)。
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct CpuSimdInfo {
     /// 検出された命令セットの組み合わせ(例 `"avx2+fma3+sse2"`)。
     features: String,
@@ -3549,7 +3551,7 @@ struct GeoToursRequest {
     place: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct GeoToursResponse {
     configured: bool,
     web_results: Vec<web_search::SearchResult>,
@@ -3617,7 +3619,7 @@ struct ReferralsCheckRequest {
     text: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct ReferralsCheckResponse {
     matched: bool,
     referrals: Option<referrals::ReferralInfo>,

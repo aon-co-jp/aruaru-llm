@@ -257,7 +257,7 @@ fn loggable_query(query: &str) -> String {
     format!("(非表示・{chars}文字)")
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct SearchResult {
     pub title: String,
     pub snippet: String,

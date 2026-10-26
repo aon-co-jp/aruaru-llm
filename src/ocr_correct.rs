@@ -43,7 +43,7 @@ fn default_conf() -> f32 {
     0.0
 }
 
-#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+#[derive(Debug, Clone, serde::Serialize, PartialEq, schemars::JsonSchema)]
 pub struct CorrectResult {
     pub index: usize,
     pub original: String,

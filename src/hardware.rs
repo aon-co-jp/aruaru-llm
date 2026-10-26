@@ -45,7 +45,7 @@ use serde::Serialize;
 use opencuda_core::GpuDevice as _;
 
 /// 検出したハードウェア能力の要約(API/UIへそのまま返せる形)。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct HardwareSummary {
     /// 実際にGPUを検出できたか。
     pub gpu_detected: bool,
@@ -181,7 +181,7 @@ fn recommend_id_for_vram_at_precision(
 /// `open-cuda-llm::GptModel`の重みロード自体は依然F32(一部F16/BF16/
 /// FP8→f32変換、2026-09-02 HANDOFF参照)前提で、この推奨サイズ計算が
 /// 選んだ精度をロード時のdtypeとして実際に使う経路は無い(誇張しない)。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub enum InferencePrecision {
     F16,
     F32,
@@ -413,7 +413,7 @@ pub fn detect_usb_android_devices() -> Result<Vec<String>, String> {
 /// 利用可能なアクセラレータ(CPU/GPU/NPU、PC/スマホ別)の一覧
 /// (2026-08-19新設、`idle_background_fold`のスケジューラ・
 /// `GET /v1/background-fold/status`から参照される)。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct AcceleratorInventory {
     /// CPUは常に利用可能とみなす(このプロセス自体が動作している時点で
     /// 自明なため検出処理は行わない)。
@@ -449,7 +449,7 @@ pub fn detect_accelerators() -> AcceleratorInventory {
 }
 
 /// 推奨結果(API/UI向け)。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct Recommendation {
     pub hardware: HardwareSummary,
     pub recommended_model_id: &'static str,

@@ -37,7 +37,7 @@ const MAX_CONCURRENT: usize = 2;
 
 static SEMAPHORE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(MAX_CONCURRENT);
 
-#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+#[derive(Debug, Clone, serde::Serialize, PartialEq, schemars::JsonSchema)]
 pub struct OcrWord {
     pub text: String,
     pub x: i32,
@@ -47,7 +47,7 @@ pub struct OcrWord {
     pub conf: f32,
 }
 
-#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+#[derive(Debug, Clone, serde::Serialize, PartialEq, schemars::JsonSchema)]
 pub struct OcrLine {
     pub text: String,
     pub x: i32,

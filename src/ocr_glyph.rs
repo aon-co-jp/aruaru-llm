@@ -27,7 +27,7 @@ pub struct RankCell {
     pub map: Vec<f32>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+#[derive(Debug, Clone, serde::Serialize, PartialEq, schemars::JsonSchema)]
 pub struct RankResult {
     /// 類似度の高い上位の文字(文字, 類似度)。
     pub top: Vec<(String, f32)>,

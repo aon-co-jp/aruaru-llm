@@ -32,7 +32,7 @@ use serde::Serialize;
 /// の3ファイルを`resolve/main/`から直接取得できることを前提とする
 /// (Hugging Face上の実在するpublicリポジトリ、認証・利用規約同意不要な
 /// もののみを選定——ダウンロード前にライセンス欄をユーザーへ提示する)。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct CatalogEntry {
     /// このカタログ内での識別子(`models/{id}/`ディレクトリ名にもなる)。
     pub id: &'static str,

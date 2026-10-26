@@ -58,14 +58,14 @@ fn unknown_conf() -> f32 {
     -1.0
 }
 
-#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+#[derive(Debug, Clone, serde::Serialize, PartialEq, schemars::JsonSchema)]
 pub struct Scored {
     pub text: String,
     /// この候補 + 後ろの文脈の、前の文脈つき対数尤度(大きいほど尤もらしい)。
     pub logp: f32,
 }
 
-#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+#[derive(Debug, Clone, serde::Serialize, PartialEq, schemars::JsonSchema)]
 pub struct FillResult {
     pub index: usize,
     pub suspect: String,
@@ -396,7 +396,7 @@ pub fn fill_items(lm: &dyn Lm, web: Option<&dyn Web>, items: &[FillItem], margin
 }
 
 /// 提案 1 件: 疑わしい文字列の `pos` 文字目(`gap` のときは 0 = 挿入位置)に入り得る 1 文字と、言語モデルの次文字確率。
-#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+#[derive(Debug, Clone, serde::Serialize, PartialEq, schemars::JsonSchema)]
 pub struct Proposal {
     pub pos: usize,
     pub text: String,
@@ -404,7 +404,7 @@ pub struct Proposal {
     pub lm: Option<f32>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+#[derive(Debug, Clone, serde::Serialize, PartialEq, schemars::JsonSchema)]
 pub struct ProposeResult {
     pub index: usize,
     pub proposals: Vec<Proposal>,
@@ -453,7 +453,7 @@ pub struct ScanItem {
 }
 
 /// 不自然な箇所: `text` の中の文字の範囲と、その言語モデルの対数確率(低いほど不自然)。
-#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+#[derive(Debug, Clone, serde::Serialize, PartialEq, schemars::JsonSchema)]
 pub struct ScanSpot {
     pub start: usize,
     pub len: usize,
@@ -461,7 +461,7 @@ pub struct ScanSpot {
     pub logp: f32,
 }
 
-#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+#[derive(Debug, Clone, serde::Serialize, PartialEq, schemars::JsonSchema)]
 pub struct ScanResult {
     pub index: usize,
     pub spots: Vec<ScanSpot>,
