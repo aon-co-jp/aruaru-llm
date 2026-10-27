@@ -270,7 +270,7 @@ fn solve_knapsack_sbm(values: &[f64], weights: &[u32], capacity: u32, seed: u64)
     // 保証しない、あくまで近似ヒューリスティック)。
     let mut best: Option<(Vec<bool>, f64)> = None;
     for attempt in 0..8u64 {
-        let z = simulated_bifurcation_minimize(&h_spin, &j_spin, n, 800, 32, seed.wrapping_add(attempt * 0x9E3779B97F4A7C15));
+        let z = simulated_bifurcation_minimize(&h_spin, &j_spin, n, 800, 32, seed.wrapping_add(attempt.wrapping_mul(0x9E3779B97F4A7C15)));
         let selection = z[..n_items].to_vec();
         if !respects_capacity(&selection, weights, capacity) {
             continue;

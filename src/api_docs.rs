@@ -165,16 +165,16 @@ pub fn spec() -> Spec {
         .op(post_t::<crate::geo_content::GeoLookupResponse>("/v1/geo/lookup", "地点の検索", "geo").body::<GeoLookupRequest>())
         .op(post_t::<ReferralsCheckResponse>("/v1/referrals/check", "紹介の確認", "geo").body::<ReferralsCheckRequest>());
     // --- 運用 ---
-    s.op(get("/", "トップ画面(HTML)", "system"))
-        .op(get("/healthz", "生存確認", "system"))
+    s.op(Op::get("/").summary("トップ画面(HTML)").tag("system").public().response_text(200, "HTML", "text/html"))
+        .op(Op::get("/healthz").summary("生存確認").tag("system").public().response_text(200, "ok", "text/plain"))
         .op(get_t::<RuntimeInfoResponse>("/v1/runtime", "実行基盤の情報", "system"))
         .op(get("/v1/accelerators", "利用できるアクセラレータ", "system"))
         .op(get_t::<crate::idle_background_fold::FoldProgress>("/v1/background-fold/status", "バックグラウンド折り畳みの状態", "system"))
         .op(get_t::<crate::phone_task::PhoneTask>("/v1/background-fold/task", "バックグラウンド折り畳みのタスク取得", "system"))
         .op(post_t::<crate::phone_task::TaskResultRecord>("/v1/background-fold/task-result", "バックグラウンド折り畳みの結果送信", "system").body::<crate::phone_task::TaskResultRequest>())
-        .op(post_t::<OkText>("/admin/tenants", "テナントを登録(管理)", "admin").body::<crate::tenants::TenantInfo>())
+        .op(Op::post("/admin/tenants").summary("テナントを登録(管理)").tag("admin").public().body::<crate::tenants::TenantInfo>().response_text(200, "ok", "text/plain").response::<ErrorBody>(400, "入力不正"))
         .op(get_t::<Vec<crate::tenants::TenantInfo>>("/admin/tenants", "テナント一覧(管理)", "admin"))
-        .op(Op::delete("/admin/tenants/:host").summary("テナントを削除(管理)").tag("admin").public().ok::<Envelope>("OK"))
+        .op(Op::delete("/admin/tenants/:host").summary("テナントを削除(管理)").tag("admin").public().response_text(200, "ok", "text/plain"))
 }
 
 #[cfg(test)]
@@ -206,29 +206,27 @@ mod tests {
 // ---- ハンドラが`json!`で組み立てる形を写した型(返却形を変えたらここも直す) ----
 
 #[derive(Serialize, JsonSchema)]
-struct RerankResponse {
-    scores: Vec<f32>,
-    engine: String,
+pub(crate) struct RerankResponse {
+    pub(crate) scores: Vec<f32>,
+    pub(crate) engine: String,
 }
 #[derive(Serialize, JsonSchema)]
-struct PruneResponse {
-    archived_countries: Vec<String>,
+pub(crate) struct PruneResponse {
+    pub(crate) archived_countries: usize,
 }
 #[derive(Serialize, JsonSchema)]
-struct KnowledgeItems {
-    count: u64,
-    items: Vec<crate::knowledge::Entry>,
+pub(crate) struct KnowledgeItems {
+    pub(crate) count: u64,
+    pub(crate) items: Vec<crate::knowledge::Entry>,
 }
 #[derive(Serialize, JsonSchema)]
-struct CharsetResponse {
-    chars: String,
+pub(crate) struct CharsetResponse {
+    pub(crate) chars: String,
 }
 #[derive(Serialize, JsonSchema)]
-struct OcrPrepareResponse {
-    languages: Vec<String>,
-    quality: String,
-    fetched_languages: Vec<String>,
+pub(crate) struct OcrPrepareResponse {
+    pub(crate) languages: Vec<String>,
+    pub(crate) quality: String,
+    pub(crate) fetched_languages: Vec<String>,
 }
 
-/// プレーンテキスト`ok`を返すエンドポイントの、JSON表現上の代用。
-type OkText = String;

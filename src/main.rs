@@ -175,7 +175,7 @@ async fn rerank(req: Request, device: Arc<dyn GpuDevice>) -> Response {
     match result {
         Ok(Ok(scores)) => json_response(
             StatusCode::OK,
-            &serde_json::json!({"scores": scores, "engine": scoring::engine_embedding_label(&device)}),
+            &crate::api_docs::RerankResponse { scores, engine: scoring::engine_embedding_label(&device).to_string() },
         ),
         Ok(Err(e)) => json_response(StatusCode::SERVICE_UNAVAILABLE, &serde_json::json!({"error": format!("埋め込みを計算できません: {e:#}")})),
         Err(e) => json_response(StatusCode::INTERNAL_SERVER_ERROR, &serde_json::json!({"error": format!("{e}")})),
@@ -2028,7 +2028,7 @@ async fn ocr_charset_endpoint(req: Request) -> Response {
     }
     let result = tokio::task::spawn_blocking(move || qwen_generation::common_chars(n)).await;
     match result {
-        Ok(Ok(chars)) => json_response(StatusCode::OK, &serde_json::json!({ "chars": chars.into_iter().collect::<String>() })),
+        Ok(Ok(chars)) => json_response(StatusCode::OK, &crate::api_docs::CharsetResponse { chars: chars.into_iter().collect::<String>() }),
         Ok(Err(e)) => ocr_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
         Err(e) => ocr_err(StatusCode::INTERNAL_SERVER_ERROR, format!("charset task failed: {e}")),
     }
@@ -2116,7 +2116,7 @@ async fn ocr_prepare(req: Request) -> Response {
     match ocr_data::ensure_languages(quality, &languages).await {
         Ok(fetched) => json_response(
             StatusCode::OK,
-            &serde_json::json!({ "languages": languages, "quality": quality.dir_name(), "fetched_languages": fetched }),
+            &crate::api_docs::OcrPrepareResponse { languages, quality: quality.dir_name().to_string(), fetched_languages: fetched },
         ),
         Err(e) => ocr_err(StatusCode::SERVICE_UNAVAILABLE, e),
     }
@@ -3675,7 +3675,7 @@ async fn news_for_country(req: Request) -> Response {
 /// 中継しておらず、VPS上で直接叩く用途を想定している。
 async fn news_prune_archive() -> Response {
     let pruned = crate::news_geo::prune_and_archive_stale_news();
-    json_response(StatusCode::OK, &serde_json::json!({"archived_countries": pruned}))
+    json_response(StatusCode::OK, &crate::api_docs::PruneResponse { archived_countries: pruned })
 }
 
 /// クエリ文字列値の簡易`%XX`デコード(依存クレートを増やさないための最小実装、`+`はそのまま)。
@@ -3814,7 +3814,7 @@ async fn knowledge_search(req: Request) -> Response {
         Some(q) if !q.is_empty() => knowledge::search(&q, 10),
         _ => knowledge::list(),
     };
-    json_response(StatusCode::OK, &serde_json::json!({"count": items.len(), "items": items}))
+    json_response(StatusCode::OK, &crate::api_docs::KnowledgeItems { count: items.len() as u64, items })
 }
 
 /// 引数を取らないハンドラを`handler_fn`のシグネチャへ橋渡しする。
