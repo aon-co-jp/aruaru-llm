@@ -140,7 +140,7 @@ pub fn current_order() -> Vec<PriorityService> {
     with_state(|s| s.order.clone())
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct PriorityStatus {
     pub enabled: bool,
     pub order: Vec<PriorityService>,

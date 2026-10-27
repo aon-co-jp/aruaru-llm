@@ -21,7 +21,7 @@ use std::sync::RwLock;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct TenantInfo {
     /// 登録したドメイン(例: "e-gov.info")。
     pub host: String,

@@ -95,7 +95,7 @@ fn idle_seconds() -> u64 {
 }
 
 /// バックグラウンド処理の進捗。`GET /v1/background-fold/status`で公開する。
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
 pub struct FoldProgress {
     pub steps_completed: u64,
     pub last_step_epoch_secs: u64,

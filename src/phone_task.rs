@@ -31,7 +31,7 @@ use std::sync::{Mutex, OnceLock};
 use serde::{Deserialize, Serialize};
 
 /// 1件のタスク。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct PhoneTask {
     pub task_id: u64,
     pub vec_a: Vec<f32>,
@@ -41,7 +41,7 @@ pub struct PhoneTask {
     pub kind: &'static str,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct TaskResultRequest {
     pub task_id: u64,
     pub similarity: f32,
@@ -50,7 +50,7 @@ pub struct TaskResultRequest {
     pub device_label: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct TaskResultRecord {
     pub task_id: u64,
     pub similarity: f32,

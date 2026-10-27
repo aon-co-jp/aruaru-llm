@@ -13,7 +13,7 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct PersonaRequest {
     /// "female"(メイド)または"male"(執事)。それ以外は400相当で拒否する。
     pub gender: String,
@@ -21,7 +21,7 @@ pub struct PersonaRequest {
     pub country: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct PersonaResponse {
     pub persona: &'static str,
     pub name: &'static str,

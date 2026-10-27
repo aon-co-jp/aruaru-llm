@@ -316,7 +316,7 @@ fn greedy_fallback(values: &[f64], weights: &[u32], capacity: u32) -> Vec<bool> 
 /// `capacity_mb`予算内で価値合計を最大化する品物集合を、SBM経由で決定
 /// する(制約違反時は正直に貪欲フォールバックへ切り替える、`used_sbm`
 /// フィールドで呼び出し側がどちらの経路だったか判別できる)。
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
 pub struct CacheOptimizationResult {
     pub keep: Vec<String>,
     pub evict: Vec<String>,

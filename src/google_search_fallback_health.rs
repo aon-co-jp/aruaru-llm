@@ -44,7 +44,7 @@ const CHECK_INTERVAL: Duration = Duration::from_secs(24 * 3600);
 /// 少し遅らせる。
 const STARTUP_DELAY: Duration = Duration::from_secs(30);
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct FallbackHealth {
     pub last_checked_unix: u64,
     /// エンドポイント自体に到達できたか(DNS・TLS・接続レベル)。

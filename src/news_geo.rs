@@ -36,14 +36,14 @@ use crate::web_search::{self, SearchResult};
 
 const IP_GEOLOCATION_ENDPOINT: &str = "http://ip-api.com/json/";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct CountryInfo {
     pub country: String,
     pub country_code: String,
     pub query_ip: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct IpApiResponse {
     status: String,
     #[serde(default)]
@@ -76,7 +76,7 @@ pub async fn detect_server_country() -> Result<CountryInfo> {
     Ok(CountryInfo { country: body.country, country_code: body.country_code, query_ip: body.query })
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct NewsItem {
     pub title: String,
     pub snippet: String,
@@ -92,7 +92,7 @@ pub struct NewsItem {
     pub retrieved_at_unix: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 pub struct NewsDb {
     pub country: Option<CountryInfo>,
     pub items: Vec<NewsItem>,
@@ -585,7 +585,7 @@ const AI_NEWS_QUERIES: &[(&str, &str)] = &[
     ("zh-TW", "最新 開源 LLM AI 模型 新聞 2026"),
 ];
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AiNewsItem {
     pub lang: String,
     pub title: String,
@@ -593,7 +593,7 @@ pub struct AiNewsItem {
     pub link: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 pub struct AiNewsDb {
     pub items: Vec<AiNewsItem>,
     pub fetched_at_unix: Option<u64>,

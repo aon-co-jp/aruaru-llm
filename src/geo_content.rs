@@ -39,7 +39,7 @@ use serde::{Deserialize, Serialize};
 
 const EMBEDDED_JSON: &str = include_str!("../data/geo_content.json");
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct JapanPrefecture {
     pub name_ja: String,
     pub name_en: String,
@@ -49,7 +49,7 @@ pub struct JapanPrefecture {
     pub food_en: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct UsState {
     pub name_en: String,
     pub name_ja: String,
@@ -59,7 +59,7 @@ pub struct UsState {
     pub food_ja: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct WorldCapital {
     pub country_en: String,
     pub country_ja: String,
@@ -73,7 +73,7 @@ pub struct WorldCapital {
     pub souvenir_ja: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct FujiMountainHut {
     pub name_ja: String,
     pub name_en: String,
@@ -85,7 +85,7 @@ pub struct FujiMountainHut {
     pub url: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct FujiTransportOption {
     pub name_ja: String,
     pub name_en: String,
@@ -100,7 +100,7 @@ pub struct FujiTransportOption {
 /// `gear_shops`として明確に分ける)。
 pub type FujiGearShop = FujiTransportOption;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct GeoDataset {
     #[serde(rename = "_disclosure_ja")]
     #[allow(dead_code)]
@@ -140,7 +140,7 @@ fn database_url() -> Option<String> {
     std::env::var("ARUARU_LLM_GEO_DATABASE_URL").ok().filter(|s| !s.trim().is_empty())
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct GeoRandomResponse {
     pub prefecture: JapanPrefecture,
     pub state: UsState,
@@ -304,7 +304,7 @@ pub async fn seed_database_if_configured() {
     );
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct GeoLookupResponse {
     pub found: bool,
     pub capital: Option<WorldCapital>,
@@ -375,7 +375,7 @@ pub async fn lookup_country(query: &str) -> GeoLookupResponse {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct FujiInfoResponse {
     pub safety_ja: String,
     pub safety_en: String,

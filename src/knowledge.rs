@@ -23,7 +23,7 @@ const KEEP_SNAPSHOTS: usize = 10;
 const MAX_TEXT_CHARS: usize = 2000;
 static LOCK: Mutex<()> = Mutex::new(());
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Entry {
     pub id: u64,
     pub text: String,
@@ -35,7 +35,7 @@ pub struct Entry {
     pub created_unix: u64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct AddRequest {
     pub text: String,
     #[serde(default)]
