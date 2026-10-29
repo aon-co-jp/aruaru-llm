@@ -155,6 +155,10 @@ fn newsworthy(it: &Item) -> bool {
     it.link.starts_with("http")
         && !l.contains("wikipedia.org")
         && !l.contains("wikimedia.org")
+        && !l.contains("youtube.com")
+        && !l.contains("youtu.be")
+        && !l.contains("facebook.com")
+        && !l.contains("playlist")
         && !it.title.to_lowercase().starts_with("list of")
         && it.title.chars().count() >= 12
 }
@@ -181,7 +185,7 @@ pub fn digest_by_month(year: i64) -> Vec<DigestMonth> {
                 let n = 6usize;
                 let picks: Vec<_> = if v.len() <= n { v } else { (0..n).map(|k| v[k * (v.len() - 1) / (n - 1)]).collect() }
                     .into_iter()
-                    .map(|i| (i.country.clone(), i.date.clone(), i.title.clone(), i.link.clone()))
+                    .map(|i| (i.country.replace('+', " "), i.date.clone(), i.title.clone(), i.link.clone()))
                     .collect();
                 DigestMonth { year, month, total, picks }
             })

@@ -405,9 +405,9 @@ pub fn build_answer(intent: &Intent, items: &[Item], since: u64, now_ts: u64) ->
     cats.dedup();
     let mut out = String::new();
     out.push_str(&format!(
-        "📰 {}({})\n",
+        "📰 {}{}\n",
         if ja { intent.label_ja } else { intent.label_en },
-        if ja { format!("{} 時点", fmt_time(now_ts, true)) } else { format!("as of {}", fmt_time(now_ts, false)) }
+        if ja { format!("({} 時点)", fmt_time(now_ts, true)) } else { format!(" (as of {})", fmt_time(now_ts, false)) }
     ));
     let mut total = 0;
     let mut seen = std::collections::HashSet::new();
@@ -519,10 +519,11 @@ pub fn build_year_digest(yi: &YearIntent, archive: &[Item], stock: &[crate::news
         }
         any = true;
         v.sort_by_key(|i| i.ts);
-        out.push_str(&if ja {
-            format!("\n■ {}年{}月(記録した主要ニュース {} 件)\n", yi.year, m, v.len())
-        } else {
-            format!("\n■ {} {} ({} main headlines recorded)\n", mon[(m - 1) as usize], yi.year, v.len())
+        out.push_str(&match (ja, v.is_empty()) {
+            (true, false) => format!("\n■ {}年{}月(記録した主要ニュース {} 件)\n", yi.year, m, v.len()),
+            (true, true) => format!("\n■ {}年{}月\n", yi.year, m),
+            (false, false) => format!("\n■ {} {} ({} main headlines recorded)\n", mon[(m - 1) as usize], yi.year, v.len()),
+            (false, true) => format!("\n■ {} {}\n", mon[(m - 1) as usize], yi.year),
         });
         for i in spread(&v, 8) {
             let (_, mm, d, _, _) = civil(i.ts);
