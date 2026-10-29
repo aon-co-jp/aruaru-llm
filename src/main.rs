@@ -45,6 +45,7 @@ mod qwen_generation;
 mod deepseek_generation;
 mod news_geo;
 mod news_stock;
+mod news_feed;
 mod nllb;
 mod phone_task;
 mod provider_priority;
@@ -1346,15 +1347,17 @@ async fn chat_provider_complete_priority(req: Request) -> Response {
         );
     }
 
-    // 固定回答(knowledge::verbatim_for): 登録された文章をAIを通さずそのまま返す。
-    if let Some(text) = knowledge::verbatim_for(&req.prompt) {
+    // ニュース系の質問(news_feed): 今日/最近/一週間/今月/一ヶ月/年間の見出し一覧をAIを通さず返す。
+    // 固定回答(消費税など)に当てはまる質問が先。
+    let news_text = if knowledge::verbatim_for(&req.prompt).is_none() { news_feed::answer_for(&req.prompt).await } else { None };
+    if let Some(text) = news_text.or_else(|| knowledge::verbatim_for(&req.prompt)) {
         return json_response(
             StatusCode::OK,
             &ChatProviderCompletePriorityResponse {
                 reply: Some(chat_providers::ProviderReply { provider: chat_providers::Provider::Knowledge, text }),
                 attempted: Vec::new(),
                 all_quota_exceeded: false,
-                search_notes: vec!["knowledge: fixed answer".to_string()],
+                search_notes: vec!["knowledge: fixed answer / news feed".to_string()],
                 hybrid_providers: Vec::new(),
                 synthesized: false,
             },
@@ -3951,6 +3954,7 @@ async fn main() -> anyhow::Result<()> {
     geo_content::seed_database_if_configured().await;
     // モデル非依存の知識: 種知識を入れ、公開WEB/GitHubから自動で取り込む(アンインストール後の復元用)。
     knowledge::spawn_background_sync();
+    news_feed::spawn_background_refresh();
 
     // 2026-07-27追記(使いやすさ改善): GPU検出feature(hw-detect-vulkan/
     // hw-detect-directx)はいずれも既定offのため、何も知らずにビルドした

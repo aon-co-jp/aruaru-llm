@@ -24,6 +24,7 @@ struct Item {
     country: String,
     date: String,
     title: String,
+    link: String,
     words: HashSet<String>,
 }
 
@@ -52,13 +53,14 @@ fn parse(text: &str, out: &mut Vec<Item>) {
                 date = rest.rsplit_once("searched at:").map(|(_, d)| d.trim().trim_end_matches(')').to_string()).unwrap_or_default();
             }
         } else if let Some(item) = line.strip_prefix("- [") {
-            if let Some((title, _)) = item.split_once("](") {
+            if let Some((title, rest)) = item.split_once("](") {
+                let link = rest.split(')').next().unwrap_or("").trim().to_string();
                 let title = title.trim();
                 if title.is_empty() || country.is_empty() {
                     continue;
                 }
                 let words = crate::knowledge::words(title).into_iter().filter(|w| significant(w)).collect();
-                out.push(Item { country: country.clone(), date: date.clone(), title: title.to_string(), words });
+                out.push(Item { country: country.clone(), date: date.clone(), title: title.to_string(), link, words });
             }
         }
     }
@@ -136,6 +138,55 @@ pub fn context_for(query: &str) -> Option<String> {
         "Recent news (shared stock): {}",
         hits.iter().map(|(c, d, t)| format!("[{c} {d}] {t}")).collect::<Vec<_>>().join(" | ")
     ))
+}
+
+/// 年間ダイジェスト用: ストックしている国別ニュース検索の索引を月ごとにまとめたもの。
+pub struct DigestMonth {
+    pub year: i64,
+    pub month: i64,
+    pub total: usize,
+    /// (国名, 検索日, 見出し, リンク)。日付順に均等に拾った数件。
+    pub picks: Vec<(String, String, String, String)>,
+}
+
+/// 検索結果の一覧ページ・百科事典ページなど、ニュースの見出しとして不適切なものを除く。
+fn newsworthy(it: &Item) -> bool {
+    let l = it.link.to_lowercase();
+    it.link.starts_with("http")
+        && !l.contains("wikipedia.org")
+        && !l.contains("wikimedia.org")
+        && !it.title.to_lowercase().starts_with("list of")
+        && it.title.chars().count() >= 12
+}
+
+pub fn digest_by_month(year: i64) -> Vec<DigestMonth> {
+    with_items(|items| {
+        let mut by: std::collections::BTreeMap<i64, Vec<&Item>> = std::collections::BTreeMap::new();
+        for it in items {
+            let mut p = it.date.split('-');
+            let (y, m) = (p.next().and_then(|x| x.parse::<i64>().ok()), p.next().and_then(|x| x.parse::<i64>().ok()));
+            if let (Some(y), Some(m)) = (y, m) {
+                if y == year && (1..=12).contains(&m) {
+                    by.entry(m).or_default().push(it);
+                }
+            }
+        }
+        by.into_iter()
+            .map(|(month, mut v)| {
+                let total = v.len();
+                v.retain(|i| newsworthy(i));
+                v.sort_by(|a, b| a.date.cmp(&b.date).then(a.title.cmp(&b.title)));
+                let mut seen = std::collections::HashSet::new();
+                v.retain(|i| seen.insert(i.title.clone()));
+                let n = 6usize;
+                let picks: Vec<_> = if v.len() <= n { v } else { (0..n).map(|k| v[k * (v.len() - 1) / (n - 1)]).collect() }
+                    .into_iter()
+                    .map(|i| (i.country.clone(), i.date.clone(), i.title.clone(), i.link.clone()))
+                    .collect();
+                DigestMonth { year, month, total, picks }
+            })
+            .collect()
+    })
 }
 
 #[cfg(test)]
