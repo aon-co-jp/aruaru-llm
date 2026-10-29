@@ -1346,6 +1346,21 @@ async fn chat_provider_complete_priority(req: Request) -> Response {
         );
     }
 
+    // 固定回答(knowledge::verbatim_for): 登録された文章をAIを通さずそのまま返す。
+    if let Some(text) = knowledge::verbatim_for(&req.prompt) {
+        return json_response(
+            StatusCode::OK,
+            &ChatProviderCompletePriorityResponse {
+                reply: Some(chat_providers::ProviderReply { provider: chat_providers::Provider::Knowledge, text }),
+                attempted: Vec::new(),
+                all_quota_exceeded: false,
+                search_notes: vec!["knowledge: fixed answer".to_string()],
+                hybrid_providers: Vec::new(),
+                synthesized: false,
+            },
+        );
+    }
+
     let mut context_blocks: Vec<String> = Vec::new();
     let mut search_notes: Vec<String> = Vec::new();
 

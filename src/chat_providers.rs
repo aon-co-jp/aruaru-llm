@@ -59,6 +59,8 @@ pub enum Provider {
     OpenRouter,
     /// Cloudflare Workers AI(2026-09-21追加)。OpenAI互換API。キーは「アカウントID:APIトークン」の形式。
     Cloudflare,
+    /// 知識データベースの固定回答(AIを呼ばず、登録された文章をそのまま返す)。2026-10-29追加。
+    Knowledge,
 }
 
 impl Provider {
@@ -77,6 +79,7 @@ impl Provider {
             Provider::OpenRouter => "ARUARU_LLM_OPENROUTER_API_KEY",
             // 値は「アカウントID:APIトークン」(1つの環境変数に収めるため)。
             Provider::Cloudflare => "ARUARU_LLM_CLOUDFLARE_API_KEY",
+            Provider::Knowledge => "ARUARU_LLM_KNOWLEDGE_NONE",
         }
     }
 
@@ -93,6 +96,7 @@ impl Provider {
             Provider::Ollama => "ollama",
             Provider::OpenRouter => "openrouter",
             Provider::Cloudflare => "cloudflare",
+            Provider::Knowledge => "knowledge",
         }
     }
 
@@ -253,6 +257,7 @@ pub async fn complete_with_key(provider: Provider, api_key: &str, prompt: &str) 
             let slow_client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(60)).build().context("failed to build reqwest client for OpenRouter")?;
             complete_openai_compatible(&slow_client, "OpenRouter", "https://openrouter.ai/api/v1/chat/completions", &model, api_key, prompt).await
         }
+        Provider::Knowledge => bail!("knowledge is not an AI provider"),
         Provider::Cloudflare => {
             let (account_id, token) = api_key.split_once(':').context("Cloudflare key must be in the form ACCOUNT_ID:API_TOKEN")?;
             let model = std::env::var("ARUARU_LLM_CLOUDFLARE_MODEL").unwrap_or_else(|_| "@cf/meta/llama-3.3-70b-instruct-fp8-fast".to_string());

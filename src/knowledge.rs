@@ -375,3 +375,26 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }
+
+/// 固定回答(2026-10-29新設、ユーザー指示「消費税の質問には登録した文章をそのまま表示」)。
+/// タグ`固定回答`(日本語)または`fixed-answer`(英語)を持つ項目は、同じ項目の別のタグ
+/// (例: `消費税` / `consumption tax`)が質問に含まれたとき、AIを呼ばずその文章をそのまま返す。
+/// 日本語の質問には日本語の項目、英語の質問には英語の項目(複数なら登録順に連結)。
+pub fn verbatim_for(prompt: &str) -> Option<String> {
+    let query = prompt.rsplit_once("Student:").map(|(_, s)| s).unwrap_or(prompt);
+    let lower = query.to_lowercase();
+    let mut hits: Vec<Entry> = list()
+        .into_iter()
+        .filter(|e| {
+            let fixed = e.tags.iter().any(|t| t == "固定回答" || t == "fixed-answer");
+            fixed && e.tags.iter().any(|t| t != "固定回答" && t != "fixed-answer" && lower.contains(&t.to_lowercase()))
+        })
+        .collect();
+    if hits.is_empty() {
+        return None;
+    }
+    hits.sort_by_key(|e| e.id);
+    Some(hits.iter().map(|e| e.text.as_str()).collect::<Vec<_>>().join("
+
+"))
+}
