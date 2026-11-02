@@ -44,7 +44,7 @@ open-cuda-llm = { path = "../open-cuda/crates/open-cuda-llm" }
 # モデルカタログ(2026-07-26追加)からのHugging Faceダウンロードに使う
 # HTTPクライアント。OpenSSL不要のrustls-tlsを使用(他リポジトリの既存
 # 方針〈aruaru-db等〉と同じ)。
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 # ハードウェア検出(2026-07-27追加、推奨LLMサイズ算出用)。既定では
 # 無効(opt-in feature) — CPUのみの環境やAndroid等クロスコンパイル環境で
 # Vulkanローダー/Windows SDKへの依存を強制しないため(既存の
