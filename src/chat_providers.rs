@@ -24,6 +24,7 @@
 //!   行わない(呼び出し元・利用者が結果を比較できるよう、プロバイダ別の
 //!   生の応答をそのまま返す)。
 
+use crate::http_json::{RequestBuilderJson, ResponseJson};
 use std::collections::HashMap;
 use std::sync::RwLock;
 

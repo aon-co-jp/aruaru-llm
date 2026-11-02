@@ -24,6 +24,7 @@
 //!   丸ごと転載せず、上位数件の名前・説明・URL・スター数のみをプロンプト
 //!   へ埋め込む(`web_search.rs`と同じ引用範囲の配慮)。
 
+use crate::http_json::ResponseJson;
 use std::sync::RwLock;
 
 use anyhow::{bail, Context, Result};

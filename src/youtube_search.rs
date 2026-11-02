@@ -21,6 +21,7 @@
 //!   プロンプトへ埋め込む(`web_search.rs`と同じ引用範囲の配慮)。
 //!   実際の動画内容(音声・字幕の書き起こし等)は一切取得しない。
 
+use crate::http_json::ResponseJson;
 use std::sync::RwLock;
 
 use anyhow::{bail, Context, Result};

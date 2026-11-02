@@ -29,6 +29,7 @@
 //! 止めはしない(既存の「補助機能の失敗は権威パスをブロックしない」方針を
 //! 踏襲)——あくまで開発者・利用者への早期警告のみが目的。
 
+use crate::http_json::ResponseJson;
 use std::sync::RwLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 

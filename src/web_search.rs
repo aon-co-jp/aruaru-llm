@@ -24,6 +24,7 @@
 //!   転載せず、上位数件のタイトル・スニペット・URLのみをプロンプトへ
 //!   埋め込む(引用の範囲、既存の秋葉原メイドカフェ記事引用と同じ配慮)。
 
+use crate::http_json::{RequestBuilderJson, ResponseJson};
 use std::sync::{Mutex, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 

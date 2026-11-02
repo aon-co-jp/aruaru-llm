@@ -26,6 +26,7 @@
 //!   (aruaru-dbのような本格的なDB接続は今回のスコープ外、軽量な
 //!   ローカル保存として正直に開示する)。
 
+use crate::http_json::ResponseJson;
 use std::path::PathBuf;
 use std::sync::RwLock;
 

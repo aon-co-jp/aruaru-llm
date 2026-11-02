@@ -45,6 +45,7 @@
 //!   退避しておいた旧バイナリを復元して起動し直す。この一連の流れ自体は
 //!   実機で確認していない(コードレビューベース)。
 
+use crate::http_json::ResponseJson;
 use std::path::PathBuf;
 use std::time::Duration;
 

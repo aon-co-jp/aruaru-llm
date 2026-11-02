@@ -27,6 +27,7 @@ mod cache_optimizer;
 mod chat_providers;
 mod device_pool;
 mod generic_classify;
+mod http_json;
 mod geo_content;
 mod knowledge;
 mod persona;
