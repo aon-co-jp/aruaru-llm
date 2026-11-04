@@ -384,7 +384,7 @@ async fn search_via_aruaru_search(query: &str, max_results: u8, gl: Option<&str>
         "hl": hl.unwrap_or(""),
         "gl": gl.unwrap_or(""),
     });
-    let resp = client.post(format!("{}/v1/search", base.trim_end_matches('/'))).json(&body).send().await.ok()?;
+    let resp = client.post(format!("{}/aruaru_search.v1.Search/Search", base.trim_end_matches('/'))).json(&body).send().await.ok()?;
     if !resp.status().is_success() {
         return None;
     }
@@ -409,7 +409,7 @@ async fn search_via_aruaru_search(query: &str, max_results: u8, gl: Option<&str>
     Some(results)
 }
 
-/// `aruaru-search`の`GET /v1/media-search`(archive.org横断検索、パブリックドメイン・CC0・
+/// `aruaru-search`の`POST /aruaru_search.v1.Search/MediaSearch`(Connect)(archive.org横断検索、パブリックドメイン・CC0・
 /// CC-BY(-SA)のみ許可——CC-BY-NC等は`aruaru-search`側で既に除外済み)へそのままプロキシする。
 /// ユーザー指示(2026-09-28)「実際に組み込むのはarchive.orgのライセンス確認済み音源なら
 /// 商用化してもOKな方で」への対応(MusicGenのCC-BY-NC限定生成の代わりに使う)。
@@ -425,8 +425,8 @@ pub async fn media_search(query: &str, max_results: u8) -> Result<serde_json::Va
         .build()
         .context("failed to build HTTP client")?;
     let resp = client
-        .get(format!("{}/v1/media-search", base.trim_end_matches('/')))
-        .query(&[("q", query), ("n", &max_results.to_string())])
+        .post(format!("{}/aruaru_search.v1.Search/MediaSearch", base.trim_end_matches('/')))
+        .json(&serde_json::json!({ "q": query, "n": max_results }))
         .send()
         .await
         .context("failed to reach aruaru-search")?;
