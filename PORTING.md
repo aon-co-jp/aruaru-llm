@@ -479,3 +479,13 @@ Reading into `serde_json::Value` gives almost no speed-up even with SIMD (188 ms
 - **Исключения (интерфейсы, форму которых определяет чужой стандарт, а не наш собственный API)**: ACME, обратные вызовы OAuth/OIDC, вебхуки сторонних сервисов (например, GitHub), проверки работоспособности, раздача статических файлов, OTLP и тому подобное. Такие интерфейсы принимают обычный HTTP, как того требует соответствующий стандарт.
 - Эталонные реализации: `RPoem` (`open_runo.admin.v1.Admin`) и `open-easy-web` (`server/src/connect.rs`, `proto/open_easy_web/admin/v1/admin.proto`).
 - Примечание: соответствует ли код конкретного репозитория этой политике, зависит от самого репозитория. Данный раздел лишь фиксирует политику и не означает, что код уже изменён.
+
+## 本番の一括切り替え手順書 (Connect移行, 2026-11-05)
+前提: 呼び出し元が `connect-migration` に対応済み(`CLAUDE.md` の一覧と、引き継ぎメモの表で確認)。新旧の両対応は作らない(恒久化を避ける)。切り替え窓は数分。
+1. **事前確認**: 各呼び出し元の master/main に Connect 対応コミットがあること(`gh api repos/aon-co-jp/<repo>/commits`)。VPS の呼び出し元サービスは、入れ替え用バイナリ/ファイルを先に VPS へ置いておく(まだ起動しない)。
+2. **ビルド**: WSL で `cargo build --release`(VPS ではビルドしない)。`objdump -T` で glibc 2.39 以下を確認。
+3. **バックアップ**: VPS の `/root/repository/aruaru-llm` の現バイナリを `.bak-YYYYMMDD` に退避(`systemctl cat` は秘密を伏せて見る)。
+4. **入れ替え(順に、各段で確認)**: aruaru-llm を scp→置換→`systemctl restart aruaru-llm.service`→`curl -s -X POST localhost:4600/aruaru_llm.v1.Llm/Runtime -d '{}'` が 200 → すぐに呼び出し元(aruaru-search、audiocafe-tokyo-rust、open-english/maid-cafe-english、version-control)を順に入れ替えて再起動。
+5. **確認**: 旧経路 `curl -o /dev/null -w '%{http_code}' localhost:4600/v1/chat -X POST -d '{}'` が 404、各サービスの画面/ログで aruaru-llm 呼び出しが 200。
+6. **ロールバック**: 4 の途中で失敗したら、`.bak` を戻して該当サービスを再起動(aruaru-llm を戻す場合は、既に入れ替えた呼び出し元も一つ前に戻す)。
+7. 成功後に `connect-migration` を main へマージ(強制pushしない)。クライアント配布物(aruaru-IME・pdf-r2l-rs・Android)は旧版が壊れるので、更新の案内を出す。
