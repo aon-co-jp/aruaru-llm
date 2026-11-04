@@ -46,7 +46,7 @@ btn.addEventListener('click', async () => {
   btn.disabled = true;
   statusEl.textContent = 'ハードウェアを検出しています...(GPU検出→推奨サイズ算出→未取得ならダウンロード。数百MB〜数GBの場合、数分かかることがあります)';
   try {
-    const res = await fetch('/v1/recommend-and-download', { method: 'POST' });
+    const res = await fetch('/aruaru_llm.v1.Llm/RecommendAndDownload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
     const data = await res.json();
     if (!res.ok) {
       statusEl.textContent = 'エラー: ' + (data.error || res.status);
@@ -78,7 +78,7 @@ async function stepModelSize(path, button) {
   button.disabled = true;
   statusEl.textContent = '確認しています...(未取得ならダウンロード。数百MB〜数GBの場合、数分かかることがあります)';
   try {
-    const res = await fetch(path, { method: 'POST' });
+    const res = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
     const data = await res.json();
     if (!res.ok) {
       statusEl.textContent = 'エラー: ' + (data.error || res.status);
@@ -102,15 +102,15 @@ async function stepModelSize(path, button) {
   }
 }
 
-largerBtn.addEventListener('click', () => stepModelSize('/v1/download-larger', largerBtn));
-smallerBtn.addEventListener('click', () => stepModelSize('/v1/download-smaller', smallerBtn));
+largerBtn.addEventListener('click', () => stepModelSize('/aruaru_llm.v1.Llm/DownloadLarger', largerBtn));
+smallerBtn.addEventListener('click', () => stepModelSize('/aruaru_llm.v1.Llm/DownloadSmaller', smallerBtn));
 
 genBtn.addEventListener('click', async () => {
   genBtn.disabled = true;
   genResult.textContent = '生成中...';
   try {
     const prompt = document.getElementById('prompt').value;
-    const res = await fetch('/v1/generate', {
+    const res = await fetch('/aruaru_llm.v1.Llm/Generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ prompt, max_new_tokens: 20 })

@@ -49,8 +49,8 @@ try {
         exit 0
     }
 
-    $rec = Invoke-RestMethod -Uri "$base/v1/recommend" -TimeoutSec 10
-    $catalog = Invoke-RestMethod -Uri "$base/v1/models/catalog" -TimeoutSec 10
+    $rec = Invoke-RestMethod -Uri "$base/aruaru_llm.v1.Llm/Recommend" -Method Post -ContentType 'application/json' -Body '{}' -TimeoutSec 10
+    $catalog = Invoke-RestMethod -Uri "$base/aruaru_llm.v1.Llm/ModelsCatalog" -Method Post -ContentType 'application/json' -Body '{}' -TimeoutSec 10
     $entries = $catalog.models
     $recommendedEntry = $entries | Where-Object { $_.id -eq $rec.recommended_model_id } | Select-Object -First 1
     $sortedByLargest = $entries | Sort-Object approx_size_mb
@@ -110,11 +110,11 @@ $($rec.disclosure_ja)
 
     if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
         Write-Output "recommend-model: installing recommended model $($rec.recommended_model_id)..."
-        $null = Invoke-RestMethod -Uri "$base/v1/recommend-and-download" -Method Post -TimeoutSec 600
+        $null = Invoke-RestMethod -Uri "$base/aruaru_llm.v1.Llm/RecommendAndDownload" -Method Post -ContentType 'application/json' -Body '{}' -TimeoutSec 600
     } elseif ($result -eq [System.Windows.Forms.DialogResult]::No -and $largerEntry) {
         Write-Output "recommend-model: installing recommended model $($rec.recommended_model_id) then stepping up to larger model $($largerEntry.id)..."
-        $null = Invoke-RestMethod -Uri "$base/v1/recommend-and-download" -Method Post -TimeoutSec 600
-        $null = Invoke-RestMethod -Uri "$base/v1/download-larger" -Method Post -TimeoutSec 600
+        $null = Invoke-RestMethod -Uri "$base/aruaru_llm.v1.Llm/RecommendAndDownload" -Method Post -ContentType 'application/json' -Body '{}' -TimeoutSec 600
+        $null = Invoke-RestMethod -Uri "$base/aruaru_llm.v1.Llm/DownloadLarger" -Method Post -ContentType 'application/json' -Body '{}' -TimeoutSec 600
     } else {
         Write-Output "recommend-model: skipped by user (Cancel). You can run this anytime from the 'Recommend LLM' button in the app."
     }

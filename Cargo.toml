@@ -14,6 +14,7 @@ path = "src/main.rs"
 # 同時に始めて下さい」)。実体はtokio/hyper直接実装
 # (open_runo_router::hyper_compat)であり、本家poemには依存しない。
 open-runo-poem-compat = { path = "../RPoem/crates/open-runo-poem-compat" }
+http-body-util = "0.1"
 hyper = { version = "1", features = ["full"] }
 bytes = "1"
 tokio = { version = "1", features = ["full"] }

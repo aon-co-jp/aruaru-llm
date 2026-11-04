@@ -15,7 +15,7 @@ cd "$WORK"
 git pull -q --ff-only origin master
 mkdir -p data/knowledge
 TMP="$(mktemp)"
-curl -fsS --max-time 20 "$BASE/v1/knowledge/search" | jq '.items' > "$TMP"
+curl -fsS --max-time 20 -X POST -H 'content-type: application/json' -d '{}' "$BASE/aruaru_llm.v1.Llm/KnowledgeSearch" | jq '.items' > "$TMP"
 # 空・壊れた応答では既存を上書きしない(復元元を守る)
 [ "$(jq 'length' "$TMP")" -gt 0 ] || { echo "empty knowledge; skip"; rm -f "$TMP"; exit 0; }
 mv "$TMP" data/knowledge/knowledge.json

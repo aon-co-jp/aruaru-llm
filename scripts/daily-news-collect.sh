@@ -71,11 +71,11 @@ COUNTRIES=(
   "Tajikistan (English)" "Tajikistan (Japanese)"
 )
 
-echo "[daily-news-collect] collecting news for ${#COUNTRIES[@]} countries via ${ARUARU_LLM_BASE_URL}/v1/news/for"
+echo "[daily-news-collect] collecting news for ${#COUNTRIES[@]} countries via ${ARUARU_LLM_BASE_URL}/aruaru_llm.v1.Llm/NewsFor"
 fail_count=0
 for country in "${COUNTRIES[@]}"; do
     encoded=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$country" 2>/dev/null || echo "$country" | sed 's/ /%20/g')
-    response=$(curl -fsS "${ARUARU_LLM_BASE_URL}/v1/news/for?country=${encoded}" 2>&1)
+    response=$(curl -fsS -X POST -H 'content-type: application/json' -d "{\"country\":\"${country}\"}" "${ARUARU_LLM_BASE_URL}/aruaru_llm.v1.Llm/NewsFor" 2>&1)
     if [ $? -ne 0 ]; then
         echo "[daily-news-collect] WARN: failed to fetch news for '${country}': ${response}"
         fail_count=$((fail_count + 1))

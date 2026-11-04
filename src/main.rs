@@ -28,6 +28,7 @@ mod chat_providers;
 mod device_pool;
 mod generic_classify;
 mod http_json;
+mod connect;
 mod geo_content;
 mod knowledge;
 mod persona;
@@ -73,6 +74,7 @@ use opencuda_cpu::CpuDevice;
 use open_runo_poem_compat::hyper_compat::{fixed_body, json_response, Params};
 use open_runo_poem_compat::{delete, get, handler_fn, post, Handler, Json, PathParams, Request, Response, Route, Server, StatusCode, TcpListener};
 use serde::{Deserialize, Serialize};
+use connect::{cx_get, cx_post};
 use tenants::{TenantInfo, TenantRegistry};
 
 /// poemの`Response::builder().status(...).body(&str)`相当(RPoemは
@@ -4016,238 +4018,224 @@ async fn main() -> anyhow::Result<()> {
     let admin_remove_registry = Arc::clone(&registry);
 
     let app = Route::new()
-        .at("/v1/classify-pii", post(handler_fn({ let pool = Arc::clone(&chat_pool); move |req, _p| { let device = pool.next_device(); async move { classify_pii(req, device).await } } })))
-        .at("/v1/rerank", post(handler_fn({ let pool = Arc::clone(&chat_pool); move |req, _p| { let device = pool.next_device(); async move { rerank(req, device).await } } })))
-        .at("/v1/chat", post(handler_fn(move |req, _p| { let device = chat_pool.next_device(); let registry = Arc::clone(&chat_registry); async move { chat(req, device, registry).await } })))
-        .at(
-            "/v1/classify-security",
-            post(handler_fn(move |req, _p| {
+        .at(&connect::path("ClassifyPii"), cx_post(handler_fn({ let pool = Arc::clone(&chat_pool); move |req, _p| { let device = pool.next_device(); async move { classify_pii(req, device).await } } })))
+
+        .at(&connect::path("Rerank"), cx_post(handler_fn({ let pool = Arc::clone(&chat_pool); move |req, _p| { let device = pool.next_device(); async move { rerank(req, device).await } } })))
+
+        .at(&connect::path("Chat"), cx_post(handler_fn(move |req, _p| { let device = chat_pool.next_device(); let registry = Arc::clone(&chat_registry); async move { chat(req, device, registry).await } })))
+
+        .at(&connect::path("ClassifySecurity"), cx_post(handler_fn(move |req, _p| {
                 let device = classify_pool.next_device();
                 let registry = Arc::clone(&classify_registry);
                 async move { classify_security(req, device, registry).await }
-            })),
-        )
-        .at(
-            "/v1/classify",
-            post(handler_fn(move |req, _p| {
+            })))
+
+        .at(&connect::path("Classify"), cx_post(handler_fn(move |req, _p| {
                 let device = classify_generic_pool.next_device();
                 let registry = Arc::clone(&classify_generic_registry);
                 async move { classify_generic(req, device, registry).await }
-            })),
-        )
-        .at(
-            "/v1/security/classify-traffic",
-            post(handler_fn(move |req, _p| {
+            })))
+
+        .at(&connect::path("SecurityClassifyTraffic"), cx_post(handler_fn(move |req, _p| {
                 let device = classify_traffic_pool.next_device();
                 let registry = Arc::clone(&classify_traffic_registry);
                 async move { classify_traffic(req, device, registry).await }
-            })),
-        )
-        .at(
-            "/v1/generate",
-            post(handler_fn(move |req, _p| {
+            })))
+
+        .at(&connect::path("Generate"), cx_post(handler_fn(move |req, _p| {
                 let device = generate_pool.next_device();
                 let registry = Arc::clone(&generate_registry);
                 async move { generate(req, device, registry).await }
-            })),
-        )
-        .at(
-            "/v1/generate-speculative",
-            post(handler_fn(move |req, _p| {
+            })))
+
+        .at(&connect::path("GenerateSpeculative"), cx_post(handler_fn(move |req, _p| {
                 let device = generate_speculative_pool.next_device();
                 let registry = Arc::clone(&generate_speculative_registry);
                 async move { generate_speculative(req, device, registry).await }
-            })),
-        )
-        .at(
-            "/v1/generate-with-search",
-            post(handler_fn(move |req, _p| {
+            })))
+
+        .at(&connect::path("GenerateWithSearch"), cx_post(handler_fn(move |req, _p| {
                 let device = generate_search_pool.next_device();
                 let registry = Arc::clone(&generate_search_registry);
                 async move { generate_with_search(req, device, registry).await }
-            })),
-        )
-        .at(
-            "/v1/translate",
-            post(handler_fn(move |req, _p| {
+            })))
+
+        .at(&connect::path("Translate"), cx_post(handler_fn(move |req, _p| {
                 let device = translate_pool.next_device();
                 let registry = Arc::clone(&translate_registry);
                 async move { translate(req, device, registry).await }
-            })),
-        )
-        .at(
-            "/v1/transcribe",
-            post(handler_fn(move |req, _p| {
+            })))
+
+        .at(&connect::path("Transcribe"), cx_post(handler_fn(move |req, _p| {
                 let registry = Arc::clone(&transcribe_registry);
                 async move { transcribe(req, registry).await }
-            })),
-        )
-        .at(
-            "/v1/ocr",
-            post(handler_fn(move |req, _p| {
+            })))
+
+        .at(&connect::path("Ocr"), cx_post(handler_fn(move |req, _p| {
                 let registry = Arc::clone(&ocr_registry);
                 async move { ocr_endpoint(req, registry).await }
-            })),
-        )
-        .at("/v1/ocr/languages", get(plain(|| Box::pin(ocr_languages()))))
-        .at("/v1/ocr/prepare", post(handler_fn(move |req, _p| async move { ocr_prepare(req).await })))
-        .at(
-            "/v1/ocr/correct",
-            post(handler_fn(move |req, _p| {
+            })))
+
+        .at(&connect::path("OcrLanguages"), cx_get(plain(|| Box::pin(ocr_languages())), None))
+
+        .at(&connect::path("OcrPrepare"), cx_post(handler_fn(move |req, _p| async move { ocr_prepare(req).await })))
+
+        .at(&connect::path("OcrCorrect"), cx_post(handler_fn(move |req, _p| {
                 let device = ocr_correct_pool.next_device();
                 async move { ocr_correct_endpoint(req, device).await }
-            })),
-        )
-        .at("/v1/ocr/charset", get(handler_fn(move |req, _p| async move { ocr_charset_endpoint(req).await })))
-        .at(
-            "/v1/ocr/glyph-rank",
-            post(handler_fn(move |req, _p| {
+            })))
+
+        .at(&connect::path("OcrCharset"), cx_get(handler_fn(move |req, _p| async move { ocr_charset_endpoint(req).await }), None))
+
+        .at(&connect::path("OcrGlyphRank"), cx_post(handler_fn(move |req, _p| {
                 let device = ocr_glyph_pool.next_device();
                 async move { ocr_glyph_rank_endpoint(req, device).await }
-            })),
-        )
-        .at(
-            "/v1/ocr/scan",
-            post(handler_fn(move |req, _p| {
+            })))
+
+        .at(&connect::path("OcrScan"), cx_post(handler_fn(move |req, _p| {
                 let device = ocr_scan_pool.next_device();
                 async move { ocr_scan_endpoint(req, device).await }
-            })),
-        )
-        .at(
-            "/v1/ocr/propose",
-            post(handler_fn(move |req, _p| {
+            })))
+
+        .at(&connect::path("OcrPropose"), cx_post(handler_fn(move |req, _p| {
                 let device = ocr_propose_pool.next_device();
                 async move { ocr_propose_endpoint(req, device).await }
-            })),
-        )
-        .at(
-            "/v1/ocr/fill",
-            post(handler_fn(move |req, _p| {
+            })))
+
+        .at(&connect::path("OcrFill"), cx_post(handler_fn(move |req, _p| {
                 let device = ocr_fill_pool.next_device();
                 async move { ocr_fill_endpoint(req, device).await }
-            })),
-        )
+            })))
+
         .at("/v1/ocr/fonts/:name", get(handler_fn(move |_req, p| async move { ocr_font(p).await })))
-        .at("/v1/models/catalog", get(plain(|| Box::pin(list_model_catalog()))))
-        .at("/v1/geo/random", get(plain(|| Box::pin(geo_random()))))
-        .at("/v1/geo/fuji", get(plain(|| Box::pin(geo_fuji()))))
-        .at("/v1/geo/tours", post(handler_fn(|req, _p| Box::pin(geo_tours(req)))))
-        .at("/v1/referrals/check", post(handler_fn(|req, _p| Box::pin(referrals_check(req)))))
-        .at("/v1/news/refresh", post(plain(|| Box::pin(news_refresh()))))
-        .at("/v1/news/latest", get(plain(|| Box::pin(news_latest()))))
-        .at("/v1/news/for", get(handler_fn(|req, _p| Box::pin(news_for_country(req)))))
-        .at("/v1/news/prune-archive", post(handler_fn(|_req, _p| Box::pin(news_prune_archive()))))
-        .at("/v1/news/ai-refresh", post(plain(|| Box::pin(ai_news_refresh()))))
-        .at("/v1/news/ai-latest", get(plain(|| Box::pin(ai_news_latest()))))
-        .at("/v1/geo/lookup", post(handler_fn(|req, _p| Box::pin(geo_lookup(req)))))
-        .at("/v1/knowledge/add", post(handler_fn(|req, _p| Box::pin(knowledge_add(req)))))
-        .at("/v1/knowledge/search", get(handler_fn(|req, _p| Box::pin(knowledge_search(req)))))
-        .at("/v1/persona/prompt",post(handler_fn(|req, _p| Box::pin(persona_prompt(req)))))
-        .at(
-            "/v1/settings/google-search",
-            post(handler_fn(|req, _p| Box::pin(set_google_search_settings(req))))
-                .get(plain(|| Box::pin(get_google_search_settings_status())))
-                .delete(plain(|| Box::pin(clear_google_search_settings()))),
-        )
-        .at(
-            "/v1/settings/github-search",
-            post(handler_fn(|req, _p| Box::pin(set_github_search_settings(req))))
-                .get(plain(|| Box::pin(get_github_search_settings_status())))
-                .delete(plain(|| Box::pin(clear_github_search_settings()))),
-        )
-        .at(
-            "/v1/settings/youtube-search",
-            post(handler_fn(|req, _p| Box::pin(set_youtube_search_settings(req))))
-                .get(plain(|| Box::pin(get_youtube_search_settings_status())))
-                .delete(plain(|| Box::pin(clear_youtube_search_settings()))),
-        )
-        .at(
-            "/v1/settings/chat-providers",
-            post(handler_fn(|req, _p| Box::pin(set_chat_provider_settings(req))))
-                .get(plain(|| Box::pin(get_chat_provider_settings_status())))
-                .delete(plain(|| Box::pin(clear_chat_provider_settings()))),
-        )
-        .at("/v1/chat-providers/complete", post(handler_fn(|req, _p| Box::pin(chat_provider_complete(req)))))
-        .at("/v1/chat-providers/complete-multi", post(handler_fn(|req, _p| Box::pin(chat_provider_complete_multi(req)))))
-        .at("/v1/chat-providers/complete-priority", post(handler_fn(|req, _p| Box::pin(chat_provider_complete_priority(req)))))
-        .at("/v1/search/raw", post(handler_fn(|req, _p| Box::pin(search_raw(req)))))
-        .at("/v1/media-search", get(handler_fn(|req, _p| Box::pin(media_search(req)))))
-        .at("/v1/chat-providers/active", get(plain(|| Box::pin(chat_provider_active()))))
-        .at(
-            "/v1/settings/provider-priority",
-            post(handler_fn(|req, _p| Box::pin(set_provider_priority_settings(req))))
-                .get(plain(|| Box::pin(get_provider_priority_settings_status())))
-                .delete(plain(|| Box::pin(reset_provider_priority_settings()))),
-        )
-        .at(
-            "/v1/models/optimize-cache",
-            post(handler_fn(|req, _p| Box::pin(optimize_model_cache_handler(req)))),
-        )
-        .at("/v1/models/install", post(handler_fn(|req, _p| Box::pin(install_model(req)))))
-        .at("/v1/models/select", post(handler_fn(|req, _p| Box::pin(select_model(req)))))
-        .at("/v1/qwen/catalog", get(plain(|| Box::pin(list_qwen_catalog()))))
-        .at("/v1/qwen/install", post(handler_fn(|req, _p| Box::pin(install_qwen_model(req)))))
-        .at("/v1/qwen/select", post(handler_fn(|req, _p| Box::pin(select_qwen_model_http(req)))))
-        .at(
-            "/v1/generate-qwen",
-            post(handler_fn(move |req, _p| {
+        .at(&connect::path("ModelsCatalog"), cx_get(plain(|| Box::pin(list_model_catalog())), None))
+
+        .at(&connect::path("GeoRandom"), cx_get(plain(|| Box::pin(geo_random())), None))
+
+        .at(&connect::path("GeoFuji"), cx_get(plain(|| Box::pin(geo_fuji())), None))
+
+        .at(&connect::path("GeoTours"), cx_post(handler_fn(|req, _p| Box::pin(geo_tours(req)))))
+
+        .at(&connect::path("ReferralsCheck"), cx_post(handler_fn(|req, _p| Box::pin(referrals_check(req)))))
+
+        .at(&connect::path("NewsRefresh"), cx_post(plain(|| Box::pin(news_refresh()))))
+
+        .at(&connect::path("NewsLatest"), cx_get(plain(|| Box::pin(news_latest())), None))
+
+        .at(&connect::path("NewsFor"), cx_get(handler_fn(|req, _p| Box::pin(news_for_country(req))), None))
+
+        .at(&connect::path("NewsPruneArchive"), cx_post(handler_fn(|_req, _p| Box::pin(news_prune_archive()))))
+
+        .at(&connect::path("NewsAiRefresh"), cx_post(plain(|| Box::pin(ai_news_refresh()))))
+
+        .at(&connect::path("NewsAiLatest"), cx_get(plain(|| Box::pin(ai_news_latest())), None))
+
+        .at(&connect::path("GeoLookup"), cx_post(handler_fn(|req, _p| Box::pin(geo_lookup(req)))))
+
+        .at(&connect::path("KnowledgeAdd"), cx_post(handler_fn(|req, _p| Box::pin(knowledge_add(req)))))
+
+        .at(&connect::path("KnowledgeSearch"), cx_get(handler_fn(|req, _p| Box::pin(knowledge_search(req))), None))
+
+        .at(&connect::path("PersonaPrompt"), cx_post(handler_fn(|req, _p| Box::pin(persona_prompt(req)))))
+
+        .at(&connect::path("SetGoogleSearchSettings"), cx_post(handler_fn(|req, _p| Box::pin(set_google_search_settings(req)))))
+        .at(&connect::path("GetGoogleSearchSettings"), cx_get(plain(|| Box::pin(get_google_search_settings_status())), None))
+        .at(&connect::path("ClearGoogleSearchSettings"), cx_get(plain(|| Box::pin(clear_google_search_settings())), None))
+
+        .at(&connect::path("SetGithubSearchSettings"), cx_post(handler_fn(|req, _p| Box::pin(set_github_search_settings(req)))))
+        .at(&connect::path("GetGithubSearchSettings"), cx_get(plain(|| Box::pin(get_github_search_settings_status())), None))
+        .at(&connect::path("ClearGithubSearchSettings"), cx_get(plain(|| Box::pin(clear_github_search_settings())), None))
+
+        .at(&connect::path("SetYoutubeSearchSettings"), cx_post(handler_fn(|req, _p| Box::pin(set_youtube_search_settings(req)))))
+        .at(&connect::path("GetYoutubeSearchSettings"), cx_get(plain(|| Box::pin(get_youtube_search_settings_status())), None))
+        .at(&connect::path("ClearYoutubeSearchSettings"), cx_get(plain(|| Box::pin(clear_youtube_search_settings())), None))
+
+        .at(&connect::path("SetChatProviderSettings"), cx_post(handler_fn(|req, _p| Box::pin(set_chat_provider_settings(req)))))
+        .at(&connect::path("GetChatProviderSettings"), cx_get(plain(|| Box::pin(get_chat_provider_settings_status())), None))
+        .at(&connect::path("ClearChatProviderSettings"), cx_get(plain(|| Box::pin(clear_chat_provider_settings())), None))
+
+        .at(&connect::path("ChatProvidersComplete"), cx_post(handler_fn(|req, _p| Box::pin(chat_provider_complete(req)))))
+
+        .at(&connect::path("ChatProvidersCompleteMulti"), cx_post(handler_fn(|req, _p| Box::pin(chat_provider_complete_multi(req)))))
+
+        .at(&connect::path("ChatProvidersCompletePriority"), cx_post(handler_fn(|req, _p| Box::pin(chat_provider_complete_priority(req)))))
+
+        .at(&connect::path("SearchRaw"), cx_post(handler_fn(|req, _p| Box::pin(search_raw(req)))))
+
+        .at(&connect::path("MediaSearch"), cx_get(handler_fn(|req, _p| Box::pin(media_search(req))), None))
+
+        .at(&connect::path("ChatProvidersActive"), cx_get(plain(|| Box::pin(chat_provider_active())), None))
+
+        .at(&connect::path("SetProviderPrioritySettings"), cx_post(handler_fn(|req, _p| Box::pin(set_provider_priority_settings(req)))))
+        .at(&connect::path("GetProviderPrioritySettings"), cx_get(plain(|| Box::pin(get_provider_priority_settings_status())), None))
+        .at(&connect::path("ResetProviderPrioritySettings"), cx_get(plain(|| Box::pin(reset_provider_priority_settings())), None))
+
+        .at(&connect::path("ModelsOptimizeCache"), cx_post(handler_fn(|req, _p| Box::pin(optimize_model_cache_handler(req)))))
+
+        .at(&connect::path("ModelsInstall"), cx_post(handler_fn(|req, _p| Box::pin(install_model(req)))))
+
+        .at(&connect::path("ModelsSelect"), cx_post(handler_fn(|req, _p| Box::pin(select_model(req)))))
+
+        .at(&connect::path("QwenCatalog"), cx_get(plain(|| Box::pin(list_qwen_catalog())), None))
+
+        .at(&connect::path("QwenInstall"), cx_post(handler_fn(|req, _p| Box::pin(install_qwen_model(req)))))
+
+        .at(&connect::path("QwenSelect"), cx_post(handler_fn(|req, _p| Box::pin(select_qwen_model_http(req)))))
+
+        .at(&connect::path("GenerateQwen"), cx_post(handler_fn(move |req, _p| {
                 let device = generate_qwen_pool.next_device();
                 async move { generate_qwen(req, device).await }
-            })),
-        )
-        .at("/v1/deepseek/status", get(plain(|| Box::pin(deepseek_status()))))
-        .at("/v1/deepseek/select", post(handler_fn(|req, _p| Box::pin(select_deepseek_model_http(req)))))
-        .at(
-            "/v1/generate-deepseek",
-            post(handler_fn(move |req, _p| {
+            })))
+
+        .at(&connect::path("DeepseekStatus"), cx_get(plain(|| Box::pin(deepseek_status())), None))
+
+        .at(&connect::path("DeepseekSelect"), cx_post(handler_fn(|req, _p| Box::pin(select_deepseek_model_http(req)))))
+
+        .at(&connect::path("GenerateDeepseek"), cx_post(handler_fn(move |req, _p| {
                 let device = generate_deepseek_pool.next_device();
                 async move { generate_deepseek(req, device).await }
-            })),
-        )
-        .at(
-            "/v1/models/layer-redundancy",
-            post(handler_fn(move |req, _p| {
+            })))
+
+        .at(&connect::path("ModelsLayerRedundancy"), cx_post(handler_fn(move |req, _p| {
                 let device = layer_redundancy_pool.next_device();
                 async move { layer_redundancy_handler(req, device).await }
-            })),
-        )
-        .at(
-            "/v1/models/fold-layers",
-            post(handler_fn(move |req, _p| {
+            })))
+
+        .at(&connect::path("ModelsFoldLayers"), cx_post(handler_fn(move |req, _p| {
                 let device = fold_layers_pool.next_device();
                 async move { fold_layers_handler(req, device).await }
-            })),
-        )
-        .at("/v1/recommend", get(handler_fn(|req, _p| Box::pin(recommend_model(req)))))
-        .at("/v1/recommend-and-download", post(plain(|| Box::pin(recommend_and_download()))))
-        .at("/v1/download-larger", post(plain(|| Box::pin(download_larger_model()))))
-        .at("/v1/download-smaller", post(plain(|| Box::pin(download_smaller_model()))))
+            })))
+
+        .at(&connect::path("Recommend"), cx_get(handler_fn(|req, _p| Box::pin(recommend_model(req))), None))
+
+        .at(&connect::path("RecommendAndDownload"), cx_post(plain(|| Box::pin(recommend_and_download()))))
+
+        .at(&connect::path("DownloadLarger"), cx_post(plain(|| Box::pin(download_larger_model()))))
+
+        .at(&connect::path("DownloadSmaller"), cx_post(plain(|| Box::pin(download_smaller_model()))))
+
         .at("/", get(plain(|| Box::pin(index_page()))))
-        .at(
-            "/admin/tenants",
-            post(handler_fn(move |req, _p| { let registry = Arc::clone(&admin_register_registry); async move { admin_register_tenant(req, registry).await } }))
-                .get(handler_fn(move |req, _p| { let registry = Arc::clone(&admin_list_registry); async move { admin_list_tenants(req, registry).await } })),
-        )
-        .at(
-            "/admin/tenants/:host",
-            delete(handler_fn(move |req, params| { let registry = Arc::clone(&admin_remove_registry); async move { admin_remove_tenant(req, params, registry).await } })),
-        )
+        .at(&connect::path("RegisterTenant"), cx_post(handler_fn(move |req, _p| { let registry = Arc::clone(&admin_register_registry); async move { admin_register_tenant(req, registry).await } })))
+        .at(&connect::path("ListTenants"), cx_get(handler_fn(move |req, _p| { let registry = Arc::clone(&admin_list_registry); async move { admin_list_tenants(req, registry).await } }), None))
+
+        .at(&connect::path("RemoveTenant"), cx_get(handler_fn(move |req, params| { let registry = Arc::clone(&admin_remove_registry); async move { admin_remove_tenant(req, params, registry).await } }), Some("host")))
+
         .at("/healthz", get(plain(|| Box::pin(healthz()))))
-        .at(
-            "/v1/search/fallback-status",
-            get(handler_fn(|_req, _p| Box::pin(google_search_fallback_status()))),
-        )
-        .at(
-            "/v1/runtime",
-            get(handler_fn(move |_req, _p| {
+        .at(&connect::path("SearchFallbackStatus"), cx_get(handler_fn(|_req, _p| Box::pin(google_search_fallback_status())), None))
+
+        .at(&connect::path("Runtime"), cx_get(handler_fn(move |_req, _p| {
                 let pool = Arc::clone(&runtime_info_pool);
                 async move { runtime_info(pool).await }
-            })),
-        )
-        .at("/v1/accelerators", get(plain(|| Box::pin(accelerators_info()))))
-        .at("/v1/background-fold/status", get(plain(|| Box::pin(background_fold_status()))))
-        .at("/v1/background-fold/task", get(plain(|| Box::pin(background_fold_task()))))
-        .at("/v1/background-fold/task-result", post(handler_fn(|req, _p| Box::pin(background_fold_task_result(req)))))
+            }), None))
+
+        .at(&connect::path("Accelerators"), cx_get(plain(|| Box::pin(accelerators_info())), None))
+
+        .at(&connect::path("BackgroundFoldStatus"), cx_get(plain(|| Box::pin(background_fold_status())), None))
+
+        .at(&connect::path("BackgroundFoldTask"), cx_get(plain(|| Box::pin(background_fold_task())), None))
+
+        .at(&connect::path("BackgroundFoldTaskResult"), cx_post(handler_fn(|req, _p| Box::pin(background_fold_task_result(req)))))
+
         // 型駆動のAPIドキュメントを /api/docs 等で配信(2026-10-26、RPoemのRoute::docs_auto)。
         .docs("/api", api_docs::spec())
         .with_cors();
