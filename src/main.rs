@@ -1373,7 +1373,7 @@ async fn chat_provider_complete_priority(req: Request) -> Response {
 
     // DATABASEに固定回答が無い質問(ユーザー指示 2026-11-06): aruaru-search・蓄積したネットニュースと世界情勢・
     // 知識ストアを総合して、配慮ある回答に仕上げる。aruaru-searchは無料・無制限なので、一定の長さの質問では常に使う。
-    let student_question = req.prompt.rsplit_once("Student:").map(|(_, s)| s).unwrap_or(&req.prompt).trim().to_string();
+    let student_question = req.prompt.rsplit_once("Student:").map(|(_, s)| s).unwrap_or(&req.prompt).trim().lines().next().unwrap_or("").trim().to_string();
     let auto_search = student_question.chars().count() >= 8;
     // DATABASEの自動再更新: 質問のトピックを背景で再調査し、複数の出典で裏付けが取れたら知識ストアへ保存する。
     auto_research::spawn_for_question(&student_question);

@@ -44,13 +44,13 @@ pub fn topic_term(question: &str) -> Option<String> {
     for p in ['を', 'は', 'が', 'の', 'に', 'で', 'と', 'も', 'へ', 'や'] {
         s = s.replace(p, " ");
     }
-    s.split(|c: char| c.is_whitespace() || (c.is_ascii_punctuation() && c != '-'))
+    s.split(|c: char| c.is_whitespace() || c.is_ascii_punctuation())
         .map(str::trim)
         .filter(|t| {
             let n = t.chars().count();
             (2..=20).contains(&n) && !(t.is_ascii() && n < 4)
         })
-        .max_by_key(|t| t.chars().count())
+        .max_by_key(|t| (!t.is_ascii(), t.chars().count()))
         .map(str::to_string)
 }
 
@@ -167,6 +167,8 @@ mod tests {
         assert_eq!(topic_term("ウクライナ情勢とは").as_deref(), Some("ウクライナ情勢"));
         assert_eq!(topic_term("What is inflation?").as_deref(), Some("inflation"));
         assert_eq!(topic_term("あ"), None);
+        // 日本語の語があれば、英語の長い語より優先する
+        assert_eq!(topic_term("ウクライナ情勢について island-travel-guide").as_deref(), Some("ウクライナ情勢"));
     }
 
     #[test]
