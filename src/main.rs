@@ -30,6 +30,7 @@ mod generic_classify;
 mod http_json;
 mod connect;
 mod geo_content;
+mod auto_research;
 mod knowledge;
 mod persona;
 mod pii;
@@ -1374,6 +1375,8 @@ async fn chat_provider_complete_priority(req: Request) -> Response {
     // 知識ストアを総合して、配慮ある回答に仕上げる。aruaru-searchは無料・無制限なので、一定の長さの質問では常に使う。
     let student_question = req.prompt.rsplit_once("Student:").map(|(_, s)| s).unwrap_or(&req.prompt).trim().to_string();
     let auto_search = student_question.chars().count() >= 8;
+    // DATABASEの自動再更新: 質問のトピックを背景で再調査し、複数の出典で裏付けが取れたら知識ストアへ保存する。
+    auto_research::spawn_for_question(&student_question);
     if req.use_google_search || auto_search {
         let own_credentials = match (&req.google_search_api_key, &req.google_search_cx) {
             (Some(k), Some(c)) if !k.trim().is_empty() && !c.trim().is_empty() => Some((k.clone(), c.clone())),
@@ -3973,6 +3976,7 @@ async fn main() -> anyhow::Result<()> {
     // モデル非依存の知識: 種知識を入れ、公開WEB/GitHubから自動で取り込む(アンインストール後の復元用)。
     knowledge::spawn_background_sync();
     news_feed::spawn_background_refresh();
+    auto_research::spawn_background_refresh();
 
     // 2026-07-27追記(使いやすさ改善): GPU検出feature(hw-detect-vulkan/
     // hw-detect-directx)はいずれも既定offのため、何も知らずにビルドした

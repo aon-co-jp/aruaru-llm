@@ -94,6 +94,32 @@ pub fn add(req: AddRequest) -> Result<Entry, String> {
     Ok(entry)
 }
 
+/// 自動調査(`auto_research.rs`)の項目を、語ごとに1件へ置き換えて保存する。
+/// ユーザーが登録した項目(出典が`auto-research`でないもの)には一切触れない。自動調査の項目が`max`件を超えたら古い順に捨てる。
+pub fn upsert_auto(term: &str, text: &str, max: usize) -> Result<(), String> {
+    let text = text.trim();
+    if text.is_empty() || text.chars().count() > MAX_TEXT_CHARS {
+        return Err(format!("text must be 1-{MAX_TEXT_CHARS} characters"));
+    }
+    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut all = load_unlocked();
+    all.retain(|e| !(e.source == "auto-research" && e.tags.iter().any(|t| t == term)));
+    let mut autos: Vec<usize> = (0..all.len()).filter(|i| all[*i].source == "auto-research").collect();
+    if autos.len() >= max {
+        autos.sort_by_key(|i| all[*i].created_unix);
+        let drop: std::collections::HashSet<usize> = autos.into_iter().take(autos_len_excess(all.iter().filter(|e| e.source == "auto-research").count(), max)).collect();
+        let mut i = 0;
+        all.retain(|_| { let keep = !drop.contains(&i); i += 1; keep });
+    }
+    let id = all.iter().map(|e| e.id).max().unwrap_or(0) + 1;
+    all.push(Entry { id, text: text.to_string(), tags: vec![term.to_string(), "自動調査".to_string()], source: "auto-research".to_string(), created_unix: now() });
+    save_unlocked(&all).map_err(|e| format!("failed to save knowledge: {e}"))
+}
+
+fn autos_len_excess(count: usize, max: usize) -> usize {
+    count + 1 - max.min(count + 1)
+}
+
 /// 日本語・中国語・韓国語の文字か(ひらがな・カタカナ・漢字・ハングル・半角カナ)。
 fn is_cjk(c: char) -> bool {
     matches!(c as u32,
