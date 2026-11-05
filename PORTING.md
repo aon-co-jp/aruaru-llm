@@ -489,3 +489,9 @@ Reading into `serde_json::Value` gives almost no speed-up even with SIMD (188 ms
 5. **確認**: 旧経路 `curl -o /dev/null -w '%{http_code}' localhost:4600/v1/chat -X POST -d '{}'` が 404、各サービスの画面/ログで aruaru-llm 呼び出しが 200。
 6. **ロールバック**: 4 の途中で失敗したら、`.bak` を戻して該当サービスを再起動(aruaru-llm を戻す場合は、既に入れ替えた呼び出し元も一つ前に戻す)。
 7. 成功後に `connect-migration` を main へマージ(強制pushしない)。クライアント配布物(aruaru-IME・pdf-r2l-rs・Android)は旧版が壊れるので、更新の案内を出す。
+
+## 本番切り替えの実施記録 (2026-11-05)
+
+- aruaru-llm(`connect-migration` をWSLでリリースビルド、glibc 2.39)を VPS に反映。同時に realdata-pro・aruaru-jobs・version-control のバイナリ、audiocafe-tokyo(PHP, ff-pull)、diet_crawl.py、スクリプト3本を入れ替え。バックアップは各ファイルの `.bak-20261105`。
+- 初回は起動待ち(ウォームアップ)が8秒では足りず自動ロールバック→待ちを最大120秒に伸ばして再実行し成功。Runtime 200・旧 `/v1/chat` 404・healthz 200・KnowledgeSearch 200、各サービス active、直近3分のエラー0。
+- main へのマージは未実施(別途判断)。
