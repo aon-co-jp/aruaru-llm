@@ -553,6 +553,52 @@ pub fn build_year_digest(yi: &YearIntent, archive: &[Item], stock: &[crate::news
 }
 
 /// 質問がニュース系なら、見出し一覧の回答を返す。そうでなければ`None`。
+/// DATABASEに固定回答が無い質問のための文脈: 蓄積してある見出し(RSS・アーカイブ)から、質問と語が重なるものを最大4件。
+/// 日本語は2文字、英語は4文字以上の語で照合する。該当無しなら`None`。
+pub fn context_for(prompt: &str) -> Option<String> {
+    let query = prompt.rsplit_once("Student:").map(|(_, s)| s).unwrap_or(prompt).to_lowercase();
+    let mut terms: Vec<String> = Vec::new();
+    let chars: Vec<char> = query.chars().collect();
+    let is_cjk = |c: char| ('\u{3040}'..='\u{30ff}').contains(&c) || ('\u{4e00}'..='\u{9fff}').contains(&c);
+    for w in chars.windows(2) {
+        if w.iter().all(|c| is_cjk(*c)) && !w.iter().all(|c| ('\u{3040}'..='\u{309f}').contains(c)) {
+            terms.push(w.iter().collect());
+        }
+    }
+    for w in query.split(|c: char| !c.is_alphanumeric()) {
+        if w.chars().count() >= 4 && w.is_ascii() {
+            terms.push(w.to_string());
+        }
+    }
+    terms.sort();
+    terms.dedup();
+    if terms.is_empty() {
+        return None;
+    }
+    {
+        let mut st = STATE.lock().unwrap_or_else(|e| e.into_inner());
+        ensure_loaded(&mut st);
+    }
+    let mut items = STATE.lock().unwrap_or_else(|e| e.into_inner()).items.clone();
+    items.extend(archive_snapshot());
+    let mut scored: Vec<(usize, &Item)> = items
+        .iter()
+        .map(|i| {
+            let t = i.title.to_lowercase();
+            (terms.iter().filter(|w| t.contains(w.as_str())).count(), i)
+        })
+        .filter(|(n, _)| *n >= 1)
+        .collect();
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.ts.cmp(&a.1.ts)));
+    let mut seen = std::collections::HashSet::new();
+    let lines: Vec<String> = scored.into_iter().filter(|(_, i)| seen.insert(i.title.clone())).take(4).map(|(_, i)| format!("[{} {}] {}", i.source, i.category, i.title)).collect();
+    if lines.is_empty() {
+        None
+    } else {
+        Some(format!("Recent headlines (stocked internet news): {}", lines.join(" | ")))
+    }
+}
+
 pub async fn answer_for(prompt: &str) -> Option<String> {
     let this_year = civil(now()).0;
     if let Some(yi) = year_intent(prompt, this_year) {

@@ -1370,7 +1370,11 @@ async fn chat_provider_complete_priority(req: Request) -> Response {
     let mut context_blocks: Vec<String> = Vec::new();
     let mut search_notes: Vec<String> = Vec::new();
 
-    if req.use_google_search {
+    // DATABASEに固定回答が無い質問(ユーザー指示 2026-11-06): aruaru-search・蓄積したネットニュースと世界情勢・
+    // 知識ストアを総合して、配慮ある回答に仕上げる。aruaru-searchは無料・無制限なので、一定の長さの質問では常に使う。
+    let student_question = req.prompt.rsplit_once("Student:").map(|(_, s)| s).unwrap_or(&req.prompt).trim().to_string();
+    let auto_search = student_question.chars().count() >= 8;
+    if req.use_google_search || auto_search {
         let own_credentials = match (&req.google_search_api_key, &req.google_search_cx) {
             (Some(k), Some(c)) if !k.trim().is_empty() && !c.trim().is_empty() => Some((k.clone(), c.clone())),
             _ => None,
@@ -1430,6 +1434,17 @@ async fn chat_provider_complete_priority(req: Request) -> Response {
         }
     }
 
+    // 蓄積したネットニュースの見出し(news_feed)。世界情勢の質問に、いまの出来事を踏まえて答えるため。
+    if let Some(n) = news_feed::context_for(&req.prompt) {
+        context_blocks.push(n);
+        search_notes.push("news_feed: headlines".to_string());
+    }
+    if !context_blocks.is_empty() {
+        context_blocks.insert(
+            0,
+            "Instruction: The database has no fixed answer for this question. Answer thoughtfully and considerately, weighing the facts, the stocked news / world-affairs headlines and the search results below. Present balanced viewpoints, say plainly when something is uncertain, never invent facts, and mention the source kind (news / search) when you rely on it.".to_string(),
+        );
+    }
     // モデル非依存の知識ストア(knowledge.rs)を常時差し込む。使うモデルが変わっても同じ知識が効く。
     if let Some(k) = knowledge::context_for_prompt(&req.prompt) {
         context_blocks.push(k);
