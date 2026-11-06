@@ -4878,3 +4878,5 @@ reqwest 0.13・rand 0.10・sonic-rs 0.5・base64 0.23・sha2 0.11 へ更新済�
 - 外から来る HTTP 本文(`Json::from_body`)は RPoem の `open-runo-poem-compat`→`secure_json` 側で処理(重複キー・深さ・16 MiB の検査つき、RPoem の記録を参照)。
 - **実測(前後)**: 知識の取り込み 約3.7 MB・2万件(`parse_remote_entries`)が **約70 ms → 約39 ms(約1.8倍)**。`cargo test --release bench_parse_remote_entries -- --ignored --nocapture` で再現。
 - 試験: `cargo test` 全通過(183件、モデルのある環境。モデルの無い新規 clone では `scoring`/`security`/`intrusion_detection` の14件がモデル不足で失敗する=従来どおり)。
+
+**VPS 反映(2026-11-06)**: WSL でリリースビルド(`cargo build --release --locked`、既定フィーチャ)→ `objdump -T` で最大 GLIBC_2.39(VPS は 2.39)を確認 → scp → `/root/aruaru-llm/target/release/aruaru-llm.bak-20261106` へバックアップ → 入れ替え → `systemctl restart aruaru-llm` → `/healthz`・`/`・`Generate` が 200 を確認(失敗時は自動で戻す手順)。VPS 上の clone(未コミットの変更あり)には触っていない。戻すには `cp -p aruaru-llm.bak-20261106 aruaru-llm && systemctl restart aruaru-llm`。
