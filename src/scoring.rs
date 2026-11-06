@@ -219,6 +219,27 @@ fn model_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models/multilingual-e5-small")
 }
 
+/// 埋め込みモデルのファイル(`config.json`・`tokenizer.json`・`model.safetensors`)が揃っているか。
+/// モデルは大きく git に入れていないため、新規 clone や CI では無い。モデルを要る試験は、無ければ
+/// 失敗ではなくスキップする(`skip_without_embedding_model!`)。実機では常に有る。
+pub(crate) fn embedding_model_available() -> bool {
+    let d = model_dir();
+    ["config.json", "tokenizer.json", "model.safetensors"].iter().all(|f| d.join(f).is_file())
+}
+
+/// モデルが無い環境でその試験をスキップする(理由を標準エラーに出して `return`)。
+#[cfg(test)]
+macro_rules! skip_without_embedding_model {
+    () => {
+        if !$crate::scoring::embedding_model_available() {
+            eprintln!("skipped: embedding model (models/multilingual-e5-small) is not available in this environment");
+            return;
+        }
+    };
+}
+#[cfg(test)]
+pub(crate) use skip_without_embedding_model;
+
 /// `generation.rs::default_matmul_spirv_path`と同じsibling path前提
 /// (`../open-cuda`、`ARUARU_LLM_MATMUL_SPIRV`環境変数で共通に上書き可能)。
 /// `open-cuda-bert::BertModel::set_matmul_spirv`(2026-08-06新設、
@@ -522,6 +543,7 @@ mod tests {
 
     #[test]
     fn matches_government_intent_via_opencuda() {
+        crate::scoring::skip_without_embedding_model!();
         let device = cpu_device();
         let intent = best_intent(&device, "マイナンバーカードの申請をしたい").unwrap().unwrap();
         assert_eq!(intent.name, "gov");
@@ -529,6 +551,7 @@ mod tests {
 
     #[test]
     fn matches_trade_intent_case_insensitively() {
+        crate::scoring::skip_without_embedding_model!();
         let device = cpu_device();
         let intent = best_intent(&device, "I want to BUY a speaker").unwrap().unwrap();
         assert_eq!(intent.name, "trade");
@@ -536,6 +559,7 @@ mod tests {
 
     #[test]
     fn matches_credit_intent() {
+        crate::scoring::skip_without_embedding_model!();
         let device = cpu_device();
         let intent = best_intent(&device, "掛け仕入れについて教えて").unwrap().unwrap();
         assert_eq!(intent.name, "credit");
@@ -543,6 +567,7 @@ mod tests {
 
     #[test]
     fn matches_realestate_intent() {
+        crate::scoring::skip_without_embedding_model!();
         let device = cpu_device();
         let intent = best_intent(&device, "土地を探しています").unwrap().unwrap();
         assert_eq!(intent.name, "realestate");
@@ -550,6 +575,7 @@ mod tests {
 
     #[test]
     fn returns_none_for_unmatched_text() {
+        crate::scoring::skip_without_embedding_model!();
         let device = cpu_device();
         let intent = best_intent(&device, "こんにちは").unwrap();
         assert!(intent.is_none());
@@ -557,6 +583,7 @@ mod tests {
 
     #[test]
     fn reply_for_ja_returns_japanese_unchanged() {
+        crate::scoring::skip_without_embedding_model!();
         let device = cpu_device();
         let intent = best_intent(&device, "マイナンバーカードの申請をしたい").unwrap().unwrap();
         let (reply, lang, fallback) = intent.reply_for("ja");
@@ -568,6 +595,7 @@ mod tests {
 
     #[test]
     fn reply_for_en_returns_english_translation() {
+        crate::scoring::skip_without_embedding_model!();
         let device = cpu_device();
         let intent = best_intent(&device, "マイナンバーカードの申請をしたい").unwrap().unwrap();
         let (reply, lang, fallback) = intent.reply_for("en");
@@ -579,6 +607,7 @@ mod tests {
 
     #[test]
     fn reply_for_unsupported_lang_falls_back_to_english_with_indicator() {
+        crate::scoring::skip_without_embedding_model!();
         let device = cpu_device();
         let intent = best_intent(&device, "マイナンバーカードの申請をしたい").unwrap().unwrap();
         let (reply, lang, fallback) = intent.reply_for("fr");

@@ -170,6 +170,7 @@ mod tests {
 
     #[test]
     fn classifies_port_scan_description_as_suspicious() {
+        crate::scoring::skip_without_embedding_model!();
         let device = cpu_device();
         let v = classify_traffic(&device, "one source IP probed 60 different destination ports within 3 seconds, no handshake completed").unwrap();
         assert!(v.is_suspicious, "expected suspicious, got label={} score={}", v.label, v.score);
@@ -177,6 +178,7 @@ mod tests {
 
     #[test]
     fn classifies_syn_flood_description_as_suspicious() {
+        crate::scoring::skip_without_embedding_model!();
         let device = cpu_device();
         let v = classify_traffic(&device, "thousands of SYN packets per second hit the same port with no completed handshake").unwrap();
         assert!(v.is_suspicious, "expected suspicious, got label={} score={}", v.label, v.score);
@@ -184,6 +186,7 @@ mod tests {
 
     #[test]
     fn classifies_ordinary_browsing_as_not_suspicious() {
+        crate::scoring::skip_without_embedding_model!();
         let device = cpu_device();
         let v = classify_traffic(&device, "a normal web browsing session with a handful of HTTPS connections to common sites").unwrap();
         assert!(!v.is_suspicious, "expected benign, got label={} score={}", v.label, v.score);

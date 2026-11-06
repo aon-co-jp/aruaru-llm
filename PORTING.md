@@ -593,3 +593,5 @@ Reading into `serde_json::Value` gives almost no speed-up even with SIMD (188 ms
 - 試験: `cargo test` 全通過(183件、モデルのある環境。モデルの無い新規 clone では `scoring`/`security`/`intrusion_detection` の14件がモデル不足で失敗する=従来どおり)。
 
 **VPS 反映(2026-11-06)**: WSL でリリースビルド(`cargo build --release --locked`、既定フィーチャ)→ `objdump -T` で最大 GLIBC_2.39(VPS は 2.39)を確認 → scp → `/root/aruaru-llm/target/release/aruaru-llm.bak-20261106` へバックアップ → 入れ替え → `systemctl restart aruaru-llm` → `/healthz`・`/`・`Generate` が 200 を確認(失敗時は自動で戻す手順)。VPS 上の clone(未コミットの変更あり)には触っていない。戻すには `cp -p aruaru-llm.bak-20261106 aruaru-llm && systemctl restart aruaru-llm`。
+
+**モデルの無い環境の試験(2026-11-06)**: 埋め込みモデル(`models/multilingual-e5-small/`、git に入れていない)を要る14件の試験(`scoring`・`security`・`intrusion_detection`)は、モデルが無いと失敗していた。`scoring::embedding_model_available()` と `skip_without_embedding_model!()` を足し、モデルが無い環境(新規 clone・CI)ではスキップ(理由を標準エラーに出す)、有る環境では従来どおり実行する。確認: `ARUARU_LLM_EMBED_MODEL_DIR=/nonexistent` でもモデルありでも `scoring::`/`security::`/`intrusion_detection::` の15件が全通過。
