@@ -24,7 +24,7 @@ ARUARU_LLM_BASE_URL="${ARUARU_LLM_BASE_URL:-http://127.0.0.1:4600}"
 PENDING_FILE="${ARUARU_LLM_DIR}/data/news-archive-pending.md"
 ARCHIVE_FILE="${OPEN_ENGLISH_DIR}/NEWS-TITLE-README.md"
 
-echo "[archive-news-to-github] pruning stale news via ${ARUARU_LLM_BASE_URL}/v1/news/prune-archive"
+echo "[archive-news-to-github] pruning stale news via ${ARUARU_LLM_BASE_URL}/aruaru_llm.v1.Llm/NewsPruneArchive"
 pruned_response=$(curl -fsS -X POST -H 'content-type: application/json' -d '{}' "${ARUARU_LLM_BASE_URL}/aruaru_llm.v1.Llm/NewsPruneArchive" || echo '{"pruned":0}')
 echo "[archive-news-to-github] prune response: ${pruned_response}"
 

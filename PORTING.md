@@ -571,3 +571,9 @@ Reading into `serde_json::Value` gives almost no speed-up even with SIMD (188 ms
 - aruaru-llm(connect-migration)と呼び出し元6サービス(aruaru-search〈VPS現行+呼び出しのみConnect〉・audiocafe-tokyo-rust・e-gov-server・open-english(+demo)・realdata-pro・open-easy-web)を一括入れ替え。PHP(audiocafe aruaru/index.php)と3スクリプトも更新。
 - 確認: Runtime 200・旧`/v1/runtime` 404・全サービスactive。初回は起動待ち不足でスクリプトが自動ロールバックし、起動待ちを足して再実施し成功。
 - バックアップは VPS の `/root/cutover-20261105/bak`。aruaru-ime-daemon(/opt)は未入れ替え。
+
+## 本番切り替えの実施記録 (2026-11-05)
+
+- aruaru-llm(`connect-migration` をWSLでリリースビルド、glibc 2.39)を VPS に反映。同時に realdata-pro・aruaru-jobs・version-control のバイナリ、audiocafe-tokyo(PHP, ff-pull)、diet_crawl.py、スクリプト3本を入れ替え。バックアップは各ファイルの `.bak-20261105`。
+- 初回は起動待ち(ウォームアップ)が8秒では足りず自動ロールバック→待ちを最大120秒に伸ばして再実行し成功。Runtime 200・旧 `/v1/chat` 404・healthz 200・KnowledgeSearch 200、各サービス active、直近3分のエラー0。
+- main へのマージは未実施(別途判断)。
