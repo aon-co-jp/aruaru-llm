@@ -125,3 +125,8 @@ real-dx12 = ["dep:opencuda-directx", "opencuda-directx/real-dx12"]
 [dev-dependencies]
 tempfile = "3"
 mockito = "1"
+
+# Androidのリンク失敗対策(2026-11-06): open-cuda が git 版の open-cpu を引き、パス版と二重になって
+# 同名JNIシンボルが重複するため、git 版をパス版へ置き換えて1系統にそろえる。
+[patch."https://github.com/aon-co-jp/open-cpu"]
+open-cpu = { path = "../open-cpu" }
