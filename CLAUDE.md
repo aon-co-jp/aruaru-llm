@@ -4870,3 +4870,11 @@ Reading into `serde_json::Value` gives almost no speed-up even with SIMD (188 ms
 
 ## 2026-11-06 依存更新(HANDOFF)
 reqwest 0.13・rand 0.10・sonic-rs 0.5・base64 0.23・sha2 0.11 へ更新済み(詳細は `PORTING.md` 末尾)。RustSecの残り(h2 0.3・protobuf 2・zip 0.6・zstd-safe 5)は任意機能 `nllb-translate` の `rust-bert` 0.23.0 が固定しており、上流待ち(既定ビルドには含まれない)。本番VPSへの反映は未実施(再ビルド・再起動が必要)。
+
+## JSON の読み込みを RS-JSON の安全モード+sonic-rs に統一(2026-11-06)
+方針(`F:\runo\CLAUDE.md`「JSON処理の使用方針」)どおり、信頼できない入力は `rust_json::parse_secure_sonic`(SIMD版・サイズ/深さ/重複キーの上限つき)で検査してから型へ読む。
+- **重大な発見と修正**: `http_json` の安全な受信(`ResponseJson::json`)は、**実際には一度も働いていなかった**。`reqwest` の `json` 機能は他の依存(RPoem のルーター・OpenTelemetry)がフィーチャを足すと有効になり(フィーチャの統合)、固有メソッド `Response::json` がトレイトの同名メソッドより優先され、`serde_json` で素通しに読まれていた(`JsonHttpError is never constructed` の警告が手掛かり)。メソッド名を **`json_secure()`(受信)/`json_sonic(&body)`(送信)** に変え、全呼び出し(29か所:chat_providers・web_search・github_search・youtube_search・news_geo・self_update・google_search_fallback_health)を置き換えた。これで外部 API の応答は必ず上限・重複キー検査を通る。
+- 受信は「検査(`parse_secure_sonic`)→ 型へ直接(`sonic_rs::from_str`)」で、中間の `serde_json::Value` を作らない。知識の取り込み(`knowledge::parse_remote_entries`)・埋め込みの地理データ(`geo_content`)・ニュースのディスク保存(`news_feed`)・OCR の manifest(`ocr_data`)・Connect 入口(`connect.rs`)も同様。`rust_json` が返す値は sonic-rs 0.3 の型なので、トレイトは `rust_json::fast::sonic_rs` から使う。
+- 外から来る HTTP 本文(`Json::from_body`)は RPoem の `open-runo-poem-compat`→`secure_json` 側で処理(重複キー・深さ・16 MiB の検査つき、RPoem の記録を参照)。
+- **実測(前後)**: 知識の取り込み 約3.7 MB・2万件(`parse_remote_entries`)が **約70 ms → 約39 ms(約1.8倍)**。`cargo test --release bench_parse_remote_entries -- --ignored --nocapture` で再現。
+- 試験: `cargo test` 全通過(183件、モデルのある環境。モデルの無い新規 clone では `scoring`/`security`/`intrusion_detection` の14件がモデル不足で失敗する=従来どおり)。

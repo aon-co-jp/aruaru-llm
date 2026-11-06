@@ -201,7 +201,9 @@ async fn fetch(url: &str, with_token: bool) -> Result<Vec<u8>, String> {
 async fn manifest_sha(variant: &str, lang: &str) -> Option<String> {
     token()?;
     let body = fetch(&format!("{PRIVATE_BASE}/manifest.json"), true).await.ok()?;
-    let v: serde_json::Value = serde_json::from_slice(&body).ok()?;
+    use rust_json::fast::sonic_rs::JsonValueTrait;
+    let text = std::str::from_utf8(&body).ok()?;
+    let v = rust_json::parse_secure_sonic(text, &rust_json::Limits::default()).ok()?;
     v["languages"][lang][variant]["sha256"].as_str().map(|s| s.to_string())
 }
 

@@ -133,7 +133,7 @@ pub async fn search_with_optional_token(query: &str, max_results: u8, token: Opt
         bail!("GitHub search returned HTTP {status}: {body}");
     }
 
-    let body: GithubSearchResponse = res.json().await.context("failed to parse GitHub search response")?;
+    let body: GithubSearchResponse = res.json_secure().await.context("failed to parse GitHub search response")?;
     Ok(body
         .items
         .into_iter()

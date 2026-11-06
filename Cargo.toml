@@ -85,7 +85,7 @@ rand = "0.10"
 # (このクレート自身のdocコメント参照)なので、`serde_json::from_value`は
 # 引き続き必要——置き換えたのは生の文字列パース呼び出し(`parse_strict`)
 # のみで、型付きDeserialize自体はserdeに委ねる。
-rust-json = { path = "../RS-JSON" }
+rust-json = { path = "../RS-JSON", features = ["fast"] }
 # base64: `POST /v1/transcribe` が受け取る 16kHz mono f32 PCM ペイロードの
 # デコードに使う。既存 crate(reqwest 等)が推移的に複数版を持つが、直接
 # 依存として明示しておく。

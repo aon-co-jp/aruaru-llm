@@ -94,7 +94,7 @@ async fn fetch_latest_release() -> anyhow::Result<LatestRelease> {
     if !res.status().is_success() {
         anyhow::bail!("GitHub releases API returned HTTP {}", res.status());
     }
-    Ok(res.json::<LatestRelease>().await?)
+    Ok(res.json_secure::<LatestRelease>().await?)
 }
 
 /// `.github/workflows/release.yml`が生成する`aruaru-llm-windows-x86_64.zip`/

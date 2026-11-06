@@ -80,7 +80,7 @@ fn archive_path() -> std::path::PathBuf {
 fn archive_load(a: &mut (bool, Vec<Item>)) {
     if !a.0 {
         a.0 = true;
-        a.1 = std::fs::read_to_string(archive_path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+        a.1 = std::fs::read_to_string(archive_path()).ok().and_then(|s| sonic_rs::from_str(&s).ok()).unwrap_or_default();
     }
 }
 
@@ -139,7 +139,7 @@ fn ensure_loaded(st: &mut State) {
         return;
     }
     st.loaded = true;
-    if let Some(d) = std::fs::read_to_string(path()).ok().and_then(|s| serde_json::from_str::<Disk>(&s).ok()) {
+    if let Some(d) = std::fs::read_to_string(path()).ok().and_then(|s| sonic_rs::from_str::<Disk>(&s).ok()) {
         st.items = d.items;
         st.since = d.since;
     }

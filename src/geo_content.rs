@@ -128,10 +128,9 @@ fn dataset() -> &'static GeoDataset {
         // 型付きへの変換(`serde_json::from_value`)はserde側に委ねる
         // ——Rust-JSON自身が`serde_json::Value`を値モデルとして使う設計
         // のため(クレートのモジュールdoc参照)。
-        let value = rust_json::parse_strict(EMBEDDED_JSON)
-            .expect("data/geo_content.json must be valid strict JSON");
-        serde_json::from_value(value)
-            .expect("data/geo_content.json must match GeoDataset shape")
+        // 埋め込み(信頼できる自前のデータ)なので、型へ直接 `sonic_rs`(SIMD)で読む。
+        sonic_rs::from_str(EMBEDDED_JSON)
+            .expect("data/geo_content.json must be valid strict JSON matching the GeoDataset shape")
     })
 }
 

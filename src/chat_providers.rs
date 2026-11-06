@@ -415,14 +415,14 @@ struct OpenAiChoiceMessage {
 
 async fn complete_openai(client: &reqwest::Client, api_key: &str, prompt: &str) -> Result<String> {
     let body = OpenAiRequest { model: "gpt-3.5-turbo", messages: vec![OpenAiMessage { role: "user", content: prompt }] };
-    let res = client.post("https://api.openai.com/v1/chat/completions").bearer_auth(api_key).json(&body).send().await.context("OpenAI request failed")?;
+    let res = client.post("https://api.openai.com/v1/chat/completions").bearer_auth(api_key).json_sonic(&body).send().await.context("OpenAI request failed")?;
     if !res.status().is_success() {
         let status = res.status();
         let text = res.text().await.unwrap_or_else(|_| "(failed to read response body)".to_string());
         let marker = if is_quota_exceeded_status(status) { QUOTA_EXCEEDED_MARKER } else { "" };
         bail!("{marker}OpenAI returned HTTP {status}: {text}");
     }
-    let parsed: OpenAiResponse = res.json().await.context("failed to parse OpenAI response")?;
+    let parsed: OpenAiResponse = res.json_secure().await.context("failed to parse OpenAI response")?;
     parsed.choices.into_iter().next().map(|c| c.message.content).context("OpenAI response contained no choices")
 }
 
@@ -432,14 +432,14 @@ async fn complete_deepseek(client: &reqwest::Client, api_key: &str, prompt: &str
     // DeepSeekのChat Completions APIはOpenAI互換のリクエスト/レスポンス
     // 形状を採用しているため、同じ構造体をエンドポイントだけ変えて再利用する。
     let body = OpenAiRequest { model: "deepseek-chat", messages: vec![OpenAiMessage { role: "user", content: prompt }] };
-    let res = client.post("https://api.deepseek.com/chat/completions").bearer_auth(api_key).json(&body).send().await.context("DeepSeek request failed")?;
+    let res = client.post("https://api.deepseek.com/chat/completions").bearer_auth(api_key).json_sonic(&body).send().await.context("DeepSeek request failed")?;
     if !res.status().is_success() {
         let status = res.status();
         let text = res.text().await.unwrap_or_else(|_| "(failed to read response body)".to_string());
         let marker = if is_quota_exceeded_status(status) { QUOTA_EXCEEDED_MARKER } else { "" };
         bail!("{marker}DeepSeek returned HTTP {status}: {text}");
     }
-    let parsed: OpenAiResponse = res.json().await.context("failed to parse DeepSeek response")?;
+    let parsed: OpenAiResponse = res.json_secure().await.context("failed to parse DeepSeek response")?;
     parsed.choices.into_iter().next().map(|c| c.message.content).context("DeepSeek response contained no choices")
 }
 
@@ -502,14 +502,14 @@ async fn complete_gemini(client: &reqwest::Client, api_key: &str, prompt: &str) 
     // 変更——クエリ文字列だとリバースプロキシ・アクセスログ・ブラウザ
     // 履歴等にキーが平文で残りやすいため、ヘッダーの方が誤って
     // ログへ残るリスクが低い)。
-    let res = client.post(url).header("x-goog-api-key", api_key).json(&body).send().await.context("Gemini request failed")?;
+    let res = client.post(url).header("x-goog-api-key", api_key).json_sonic(&body).send().await.context("Gemini request failed")?;
     if !res.status().is_success() {
         let status = res.status();
         let text = res.text().await.unwrap_or_else(|_| "(failed to read response body)".to_string());
         let marker = if is_quota_exceeded_status(status) { QUOTA_EXCEEDED_MARKER } else { "" };
         bail!("{marker}Gemini returned HTTP {status}: {text}");
     }
-    let parsed: GeminiResponse = res.json().await.context("failed to parse Gemini response")?;
+    let parsed: GeminiResponse = res.json_secure().await.context("failed to parse Gemini response")?;
     parsed
         .candidates
         .into_iter()
@@ -546,7 +546,7 @@ async fn complete_claude(client: &reqwest::Client, api_key: &str, prompt: &str) 
         .post("https://api.anthropic.com/v1/messages")
         .header("x-api-key", api_key)
         .header("anthropic-version", "2023-06-01")
-        .json(&body)
+        .json_sonic(&body)
         .send()
         .await
         .context("Claude request failed")?;
@@ -556,7 +556,7 @@ async fn complete_claude(client: &reqwest::Client, api_key: &str, prompt: &str) 
         let marker = if is_quota_exceeded_status(status) { QUOTA_EXCEEDED_MARKER } else { "" };
         bail!("{marker}Claude returned HTTP {status}: {text}");
     }
-    let parsed: ClaudeResponse = res.json().await.context("failed to parse Claude response")?;
+    let parsed: ClaudeResponse = res.json_secure().await.context("failed to parse Claude response")?;
     parsed.content.into_iter().next().map(|b| b.text).context("Claude response contained no content blocks")
 }
 
@@ -567,14 +567,14 @@ async fn complete_claude(client: &reqwest::Client, api_key: &str, prompt: &str) 
 /// (ARUARU_LLM_GROQ_MODEL等)で差し替えられるようにしてある。
 async fn complete_openai_compatible(client: &reqwest::Client, name: &str, url: &str, model: &str, api_key: &str, prompt: &str) -> Result<String> {
     let body = OpenAiRequest { model, messages: vec![OpenAiMessage { role: "user", content: prompt }] };
-    let res = client.post(url).bearer_auth(api_key).json(&body).send().await.with_context(|| format!("{name} request failed"))?;
+    let res = client.post(url).bearer_auth(api_key).json_sonic(&body).send().await.with_context(|| format!("{name} request failed"))?;
     if !res.status().is_success() {
         let status = res.status();
         let text = res.text().await.unwrap_or_else(|_| "(failed to read response body)".to_string());
         let marker = if is_quota_exceeded_status(status) { QUOTA_EXCEEDED_MARKER } else { "" };
         bail!("{marker}{name} returned HTTP {status}: {text}");
     }
-    let parsed: OpenAiResponse = res.json().await.with_context(|| format!("failed to parse {name} response"))?;
+    let parsed: OpenAiResponse = res.json_secure().await.with_context(|| format!("failed to parse {name} response"))?;
     parsed.choices.into_iter().next().map(|c| c.message.content).with_context(|| format!("{name} response contained no choices"))
 }
 
@@ -583,14 +583,14 @@ async fn complete_grok(client: &reqwest::Client, api_key: &str, prompt: &str) ->
     // 採用しているため、DeepSeekと同様に既存の`OpenAiRequest`/
     // `OpenAiResponse`をそのままエンドポイントだけ変えて再利用する。
     let body = OpenAiRequest { model: "grok-3-mini", messages: vec![OpenAiMessage { role: "user", content: prompt }] };
-    let res = client.post("https://api.x.ai/v1/chat/completions").bearer_auth(api_key).json(&body).send().await.context("Grok request failed")?;
+    let res = client.post("https://api.x.ai/v1/chat/completions").bearer_auth(api_key).json_sonic(&body).send().await.context("Grok request failed")?;
     if !res.status().is_success() {
         let status = res.status();
         let text = res.text().await.unwrap_or_else(|_| "(failed to read response body)".to_string());
         let marker = if is_quota_exceeded_status(status) { QUOTA_EXCEEDED_MARKER } else { "" };
         bail!("{marker}Grok returned HTTP {status}: {text}");
     }
-    let parsed: OpenAiResponse = res.json().await.context("failed to parse Grok response")?;
+    let parsed: OpenAiResponse = res.json_secure().await.context("failed to parse Grok response")?;
     parsed.choices.into_iter().next().map(|c| c.message.content).context("Grok response contained no choices")
 }
 

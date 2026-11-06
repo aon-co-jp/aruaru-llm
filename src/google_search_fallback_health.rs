@@ -129,7 +129,7 @@ async fn check_once() -> FallbackHealth {
         },
         Ok(resp) => {
             let status = resp.status();
-            let body: Result<serde_json::Value, _> = resp.json().await;
+            let body: Result<serde_json::Value, _> = resp.json_secure().await;
             match body {
                 Ok(json) => {
                     // 無効なキーで問い合わせた場合、Googleは通常

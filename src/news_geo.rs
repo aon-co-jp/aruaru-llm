@@ -68,7 +68,7 @@ pub async fn detect_server_country() -> Result<CountryInfo> {
         .send()
         .await
         .context("IP geolocation request failed")?;
-    let body: IpApiResponse = res.json().await.context("failed to parse IP geolocation response")?;
+    let body: IpApiResponse = res.json_secure().await.context("failed to parse IP geolocation response")?;
 
     if body.status != "success" {
         anyhow::bail!("IP geolocation lookup did not succeed (status={})", body.status);

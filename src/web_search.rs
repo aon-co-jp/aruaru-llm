@@ -384,11 +384,11 @@ async fn search_via_aruaru_search(query: &str, max_results: u8, gl: Option<&str>
         "hl": hl.unwrap_or(""),
         "gl": gl.unwrap_or(""),
     });
-    let resp = client.post(format!("{}/aruaru_search.v1.Search/Search", base.trim_end_matches('/'))).json(&body).send().await.ok()?;
+    let resp = client.post(format!("{}/aruaru_search.v1.Search/Search", base.trim_end_matches('/'))).json_sonic(&body).send().await.ok()?;
     if !resp.status().is_success() {
         return None;
     }
-    let json: serde_json::Value = resp.json().await.ok()?;
+    let json: serde_json::Value = resp.json_secure().await.ok()?;
     let results: Vec<SearchResult> = json
         .get("results")?
         .as_array()?
@@ -426,14 +426,14 @@ pub async fn media_search(query: &str, max_results: u8) -> Result<serde_json::Va
         .context("failed to build HTTP client")?;
     let resp = client
         .post(format!("{}/aruaru_search.v1.Search/MediaSearch", base.trim_end_matches('/')))
-        .json(&serde_json::json!({ "q": query, "n": max_results }))
+        .json_sonic(&serde_json::json!({ "q": query, "n": max_results }))
         .send()
         .await
         .context("failed to reach aruaru-search")?;
     if !resp.status().is_success() {
         bail!("aruaru-search rejected the media-search request (HTTP {})", resp.status());
     }
-    resp.json::<serde_json::Value>().await.context("failed to parse aruaru-search media-search response")
+    resp.json_secure::<serde_json::Value>().await.context("failed to parse aruaru-search media-search response")
 }
 
 /// 自前メタ検索(aruaru-search)だけで検索する。使えなければエラー(共有キーの検索へは移らない)。
@@ -610,7 +610,7 @@ pub async fn search_brave(query: &str, max_results: u8, api_key: &str) -> Result
         let body: String = body.chars().take(300).collect();
         bail!("Brave Search returned HTTP {status}: {body}");
     }
-    let parsed: BraveResponse = res.json().await.context("failed to parse Brave Search response")?;
+    let parsed: BraveResponse = res.json_secure().await.context("failed to parse Brave Search response")?;
     Ok(parsed
         .web
         .map(|w| w.results)
@@ -687,7 +687,7 @@ pub async fn search_serpapi_localized(query: &str, max_results: u8, api_key: &st
         let body: String = body.chars().take(300).collect();
         bail!("SerpApi returned HTTP {status}: {body}");
     }
-    let parsed: SerpApiResponse = res.json().await.context("failed to parse SerpApi response")?;
+    let parsed: SerpApiResponse = res.json_secure().await.context("failed to parse SerpApi response")?;
     Ok(parsed
         .organic_results
         .into_iter()
@@ -737,7 +737,7 @@ pub async fn search_tavily(query: &str, max_results: u8, api_key: &str) -> Resul
         .context("failed to build reqwest client for Tavily")?;
     let res = client
         .post(TAVILY_ENDPOINT)
-        .json(&serde_json::json!({
+        .json_sonic(&serde_json::json!({
             "api_key": api_key,
             "query": query,
             "search_depth": "basic",
@@ -752,7 +752,7 @@ pub async fn search_tavily(query: &str, max_results: u8, api_key: &str) -> Resul
         let body: String = body.chars().take(300).collect();
         bail!("Tavily returned HTTP {status}: {body}");
     }
-    let parsed: TavilyResponse = res.json().await.context("failed to parse Tavily response")?;
+    let parsed: TavilyResponse = res.json_secure().await.context("failed to parse Tavily response")?;
     Ok(parsed
         .results
         .into_iter()
@@ -812,7 +812,7 @@ pub async fn search_exa(query: &str, max_results: u8, api_key: &str) -> Result<V
     let res = client
         .post(EXA_ENDPOINT)
         .header("x-api-key", api_key)
-        .json(&serde_json::json!({
+        .json_sonic(&serde_json::json!({
             "query": query,
             "type": "auto",
             "numResults": max_results.clamp(1, 10),
@@ -827,7 +827,7 @@ pub async fn search_exa(query: &str, max_results: u8, api_key: &str) -> Result<V
         let body: String = body.chars().take(300).collect();
         bail!("Exa returned HTTP {status}: {body}");
     }
-    let parsed: ExaResponse = res.json().await.context("failed to parse Exa response")?;
+    let parsed: ExaResponse = res.json_secure().await.context("failed to parse Exa response")?;
     Ok(parsed
         .results
         .into_iter()
@@ -898,7 +898,7 @@ pub async fn search_jina(query: &str, max_results: u8, api_key: &str) -> Result<
         let body: String = body.chars().take(300).collect();
         bail!("Jina AI Search returned HTTP {status}: {body}");
     }
-    let parsed: JinaResponse = res.json().await.context("failed to parse Jina AI Search response")?;
+    let parsed: JinaResponse = res.json_secure().await.context("failed to parse Jina AI Search response")?;
     Ok(parsed
         .data
         .into_iter()
@@ -961,7 +961,7 @@ pub async fn search_with_credentials(query: &str, max_results: u8, api_key: &str
         bail!("Google Custom Search returned HTTP {status}: {body}");
     }
 
-    let body: CseResponse = res.json().await.context("failed to parse Google Custom Search response")?;
+    let body: CseResponse = res.json_secure().await.context("failed to parse Google Custom Search response")?;
     Ok(body
         .items
         .into_iter()

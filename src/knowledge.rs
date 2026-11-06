@@ -213,18 +213,20 @@ const MAX_REMOTE_ENTRIES: usize = 20_000;
 /// 取得した本文から知識の一覧を取り出す。形式は`{"items":[...]}`(APIの返り値)か、配列そのもの
 /// (GitHub上のファイル)のどちらでもよい。上限超過・重複キー・形式違いは`None`(取り込まない)。
 fn parse_remote_entries(body: &str) -> Option<Vec<Entry>> {
-    let value = match rust_json::parse_secure(body, &remote_limits()) {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!("knowledge sync: rejected remote JSON: {e}");
-            return None;
+    // 先に安全モード(SIMD版)で上限・深さ・重複キーを検査し、通ったら型へ直接読む。
+    if let Err(e) = rust_json::parse_secure_sonic(body, &remote_limits()) {
+        tracing::warn!("knowledge sync: rejected remote JSON: {e}");
+        return None;
+    }
+    let entries: Vec<Entry> = if body.trim_start().starts_with('[') {
+        sonic_rs::from_str(body).ok()?
+    } else {
+        #[derive(Deserialize)]
+        struct Wrapped {
+            items: Vec<Entry>,
         }
+        sonic_rs::from_str::<Wrapped>(body).ok()?.items
     };
-    let items = match value {
-        serde_json::Value::Array(_) => value,
-        other => other.get("items").cloned()?,
-    };
-    let entries: Vec<Entry> = serde_json::from_value(items).ok()?;
     if entries.len() > MAX_REMOTE_ENTRIES {
         tracing::warn!("knowledge sync: too many entries ({}), ignored", entries.len());
         return None;
@@ -423,4 +425,47 @@ pub fn verbatim_for(prompt: &str) -> Option<String> {
     Some(hits.iter().map(|e| e.text.as_str()).collect::<Vec<_>>().join("
 
 "))
+}
+
+#[cfg(test)]
+mod bench_remote {
+    use super::*;
+
+    /// 実測用: `cargo test --release bench_parse_remote_entries -- --ignored --nocapture`。
+    /// 旧: `parse_secure`(serde_json::Value 経由)+`from_value` / 新: `parse_secure_sonic` で検査+`sonic_rs` で型へ直接。
+    #[test]
+    #[ignore]
+    fn bench_parse_remote_entries() {
+        let mut body = String::from("{\"items\":[");
+        for i in 0..20_000u64 {
+            if i > 0 {
+                body.push(',');
+            }
+            body.push_str(&format!(
+                "{{\"id\":{i},\"text\":\"知識 {i}: 山梨県の天気は晴れ、富士山の山小屋は営業中です。\",\"tags\":[\"天気\",\"山\"],\"source\":\"https://example.com/{i}\",\"created_unix\":1700000000}}"
+            ));
+        }
+        body.push_str("]}");
+        let limits = remote_limits();
+        let old = |b: &str| -> usize {
+            let v = rust_json::parse_secure(b, &limits).unwrap();
+            let items = match v {
+                serde_json::Value::Array(_) => v,
+                other => other.get("items").cloned().unwrap(),
+            };
+            serde_json::from_value::<Vec<Entry>>(items).unwrap().len()
+        };
+        let new = |b: &str| -> usize { parse_remote_entries(b).unwrap().len() };
+        assert_eq!(old(&body), new(&body));
+        let time = |f: &dyn Fn(&str) -> usize| {
+            let mut best = f64::MAX;
+            for _ in 0..7 {
+                let t = std::time::Instant::now();
+                std::hint::black_box(f(&body));
+                best = best.min(t.elapsed().as_secs_f64());
+            }
+            best * 1000.0
+        };
+        println!("{} KB: OLD {:.1} ms -> NEW {:.1} ms", body.len() / 1024, time(&old), time(&new));
+    }
 }

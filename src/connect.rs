@@ -52,7 +52,9 @@ async fn normalise(resp: Response) -> Response {
     };
     let text = String::from_utf8_lossy(&bytes).to_string();
     let limits = rust_json::Limits { max_bytes: 1 << 20, max_depth: 32, reject_duplicate_keys: false };
-    let message = rust_json::parse_secure(&text, &limits)
+    // `rust_json` が返す値は自分の `sonic-rs`(0.3)の型なので、トレイトも再公開されたものを使う。
+    use rust_json::fast::sonic_rs::JsonValueTrait;
+    let message = rust_json::parse_secure_sonic(&text, &limits)
         .ok()
         .and_then(|v| {
             v.get("message").or_else(|| v.get("error")).and_then(|m| m.as_str().map(str::to_string))
@@ -96,19 +98,24 @@ async fn read_args(req: &mut Request) -> Result<HashMap<String, String>, Respons
         return Ok(HashMap::new());
     }
     let limits = rust_json::Limits { max_bytes: QUERY_BODY_MAX, max_depth: 8, reject_duplicate_keys: true };
-    let value = rust_json::parse_secure(&text, &limits)
+    use rust_json::fast::sonic_rs::{self as rj_sonic, JsonContainerTrait, JsonValueTrait};
+    let value = rust_json::parse_secure_sonic(&text, &limits)
         .map_err(|e| error(StatusCode::BAD_REQUEST, &format!("invalid JSON: {e}")))?;
     let obj = value.as_object().ok_or_else(|| error(StatusCode::BAD_REQUEST, "body must be a JSON object"))?;
     let mut out = HashMap::new();
     for (k, v) in obj {
-        let s = match v {
-            serde_json::Value::Null => continue,
-            serde_json::Value::String(s) => s.clone(),
-            serde_json::Value::Bool(b) => b.to_string(),
-            serde_json::Value::Number(n) => n.to_string(),
-            _ => return Err(error(StatusCode::BAD_REQUEST, &format!("field `{k}` must be a string, number or boolean"))),
+        let s = if v.is_null() {
+            continue;
+        } else if let Some(s) = v.as_str() {
+            s.to_string()
+        } else if let Some(b) = v.as_bool() {
+            b.to_string()
+        } else if v.is_number() {
+            rj_sonic::to_string(v).unwrap_or_default()
+        } else {
+            return Err(error(StatusCode::BAD_REQUEST, &format!("field `{k}` must be a string, number or boolean")));
         };
-        out.insert(k.clone(), s);
+        out.insert(k.to_string(), s);
     }
     Ok(out)
 }

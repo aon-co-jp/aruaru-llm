@@ -125,7 +125,7 @@ pub async fn search_with_key(query: &str, max_results: u8, api_key: &str) -> Res
         bail!("YouTube search returned HTTP {status}: {body}");
     }
 
-    let body: YoutubeSearchResponse = res.json().await.context("failed to parse YouTube search response")?;
+    let body: YoutubeSearchResponse = res.json_secure().await.context("failed to parse YouTube search response")?;
     Ok(body
         .items
         .into_iter()
