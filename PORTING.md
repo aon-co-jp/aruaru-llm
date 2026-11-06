@@ -577,3 +577,9 @@ Reading into `serde_json::Value` gives almost no speed-up even with SIMD (188 ms
 - aruaru-llm(`connect-migration` をWSLでリリースビルド、glibc 2.39)を VPS に反映。同時に realdata-pro・aruaru-jobs・version-control のバイナリ、audiocafe-tokyo(PHP, ff-pull)、diet_crawl.py、スクリプト3本を入れ替え。バックアップは各ファイルの `.bak-20261105`。
 - 初回は起動待ち(ウォームアップ)が8秒では足りず自動ロールバック→待ちを最大120秒に伸ばして再実行し成功。Runtime 200・旧 `/v1/chat` 404・healthz 200・KnowledgeSearch 200、各サービス active、直近3分のエラー0。
 - main へのマージは未実施(別途判断)。
+
+## 2026-11-06 依存更新(version-control通知) / Dependency update
+
+**日本語**: 直接依存を更新: `reqwest` 0.12→0.13(feature `rustls-tls`→`rustls`)、`rand` 0.8→0.10(`thread_rng`→`rng()`、`SliceRandom`→`IndexedRandom`)、`sonic-rs` 0.3→0.5、`base64` 0.22→0.23、`sha2` 0.10→0.11。`zstd-sys` は 2.1.2 へ(RUSTSEC-2026-0410 解消)。`cargo build`・`cargo test`(183件)通過。
+**直せないもの(上流待ち)**: `h2` 0.3.27・`protobuf` 2.28・`zip` 0.6.6・`zstd-safe` 5 は、すべて**オプション機能 `nllb-translate`** の `rust-bert` 0.23.0(crates.io の最新版)が固定している推移的依存(`cached-path`→`reqwest` 0.11→`h2` 0.3、`rust_tokenizers`→`protobuf` 2、`zip` 0.6)で、`Cargo.toml` からは上げられない。既定ビルド(`default = []`)と本番VPSのバイナリには含まれない。解消するには `rust-bert` の新版を待つか、`nllb-translate` を別実装へ置き換える。`sonic-rs` 0.3.17 が `Cargo.lock` に残るのは兄弟リポジトリ(`open-cuda`・`open-web-server`)の固定で、各リポジトリ側で更新する。
+**English**: Updated direct deps (reqwest 0.13, rand 0.10, sonic-rs 0.5, base64 0.23, sha2 0.11) and `zstd-sys` 2.1.2; build and 183 tests pass. h2 0.3 / protobuf 2 / zip 0.6 / zstd-safe 5 are pinned by `rust-bert` 0.23.0 (latest on crates.io) behind the optional `nllb-translate` feature; they are not in the default build or the production binary and cannot be bumped from this `Cargo.toml`.

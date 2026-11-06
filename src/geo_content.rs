@@ -34,7 +34,7 @@
 
 use std::sync::OnceLock;
 
-use rand::seq::SliceRandom;
+use rand::seq::IndexedRandom;
 use serde::{Deserialize, Serialize};
 
 const EMBEDDED_JSON: &str = include_str!("../data/geo_content.json");
@@ -212,7 +212,7 @@ async fn try_random_from_db() -> Option<(JapanPrefecture, UsState, WorldCapital)
 
 fn random_from_embedded() -> (JapanPrefecture, UsState, WorldCapital) {
     let d = dataset();
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     (
         d.japan_prefectures.choose(&mut rng).cloned().expect("japan_prefectures must not be empty"),
         d.us_states.choose(&mut rng).cloned().expect("us_states must not be empty"),

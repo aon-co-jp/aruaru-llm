@@ -21,7 +21,7 @@ tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 schemars = "1"
-sonic-rs = "0.3"
+sonic-rs = "0.5"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 anyhow = "1"
@@ -45,7 +45,7 @@ open-cuda-llm = { path = "../open-cuda/crates/open-cuda-llm" }
 # モデルカタログ(2026-07-26追加)からのHugging Faceダウンロードに使う
 # HTTPクライアント。OpenSSL不要のrustls-tlsを使用(他リポジトリの既存
 # 方針〈aruaru-db等〉と同じ)。
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 # ハードウェア検出(2026-07-27追加、推奨LLMサイズ算出用)。既定では
 # 無効(opt-in feature) — CPUのみの環境やAndroid等クロスコンパイル環境で
 # Vulkanローダー/Windows SDKへの依存を強制しないため(既存の
@@ -78,7 +78,7 @@ tch = { version = "0.17", optional = true }
 # クライアント側は単一のPostgres接続を張るだけでよい(aruaru-db側で
 # 冗長化が完結する設計、詳細はPORTING.md参照)。
 tokio-postgres = "0.7"
-rand = "0.8"
+rand = "0.10"
 # 埋め込み地理データ(data/geo_content.json)のパースにはRust-JSON
 # (`../Rust-JSON`、旧称RJSON/RustJSON)を使う(ユーザー指示「JSONより
 # RS-JSONを使って」)。内部的には`serde_json::Value`をそのまま使う設計
@@ -89,8 +89,8 @@ rust-json = { path = "../RS-JSON" }
 # base64: `POST /v1/transcribe` が受け取る 16kHz mono f32 PCM ペイロードの
 # デコードに使う。既存 crate(reqwest 等)が推移的に複数版を持つが、直接
 # 依存として明示しておく。
-base64 = "0.22"
-sha2 = "0.10"
+base64 = "0.23"
+sha2 = "0.11"
 # 2026-08-29 方針変更: `POST /v1/transcribe` の実装は `whisper-rs`(C++
 # リンクが必要、Windows/MSVC でビルド不能な既知ブロッカーあり)を直接
 # 使うのをやめ、whisper.cpp の**プレビルド CLI を子プロセス起動**する
