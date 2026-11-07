@@ -195,8 +195,10 @@ fn sync_urls() -> Vec<String> {
         Ok(v) if v.eq_ignore_ascii_case("off") => Vec::new(),
         Ok(v) if !v.trim().is_empty() => v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
         _ => vec![
-            "https://easy-web.tokyo/open-english/v1/public/knowledge/export".to_string(),
+            // 公開WEB(Connect形式。REST全廃後の経路)→GitHub(改名前後の両リポジトリ)の順
+            "https://maid-cafe.tokyo/openenglish.v1.Knowledge/Export".to_string(),
             "https://raw.githubusercontent.com/aon-co-jp/open-english/master/data/knowledge/knowledge.json".to_string(),
+            "https://raw.githubusercontent.com/aon-co-jp/maid-cafe-english/master/data/knowledge/knowledge.json".to_string(),
         ],
     }
 }
@@ -241,7 +243,13 @@ pub async fn sync_from_remote() -> usize {
         return 0;
     };
     for url in sync_urls() {
-        let Ok(resp) = client.get(&url).send().await else { continue };
+        // Connect形式のURL(`/<パッケージ>.v1.<Service>/<Method>`)はPOST(本文`{}`)、GitHubのファイルはGET
+        let req = if url.contains(".v1.") {
+            client.post(&url).header("content-type", "application/json").body("{}")
+        } else {
+            client.get(&url)
+        };
+        let Ok(resp) = req.send().await else { continue };
         if !resp.status().is_success() {
             continue;
         }
