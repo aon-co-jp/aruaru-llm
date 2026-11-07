@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aruaru-llm — easy-web.tokyo</title>
+<meta name="description" content="ローカルで動くAI(LLM)サーバー。日本語検索・OCR・要約などを、あなたのPC/サーバー内だけで。 A local AI (LLM) server: Japanese search, OCR, summarisation and more - running only on your own PC or server.">
+<style>
+:root{--bg:#fff;--fg:#14181f;--sub:#57606a;--card:#f6f8fa;--line:#d0d7de;--acc:#1f6feb;--warn:#c62828;--ok:#1a7f37}
+@media (prefers-color-scheme:dark){:root{--bg:#0d1117;--fg:#e6edf3;--sub:#8b949e;--card:#161b22;--line:#30363d;--acc:#4a9eff;--warn:#ff7b72;--ok:#3fb950}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.7 system-ui,-apple-system,"Segoe UI","Hiragino Sans","Noto Sans JP",sans-serif}
+main{max-width:860px;margin:0 auto;padding:24px 16px 64px}
+h1{font-size:1.9rem;margin:8px 0 4px}
+h2{font-size:1.25rem;margin:36px 0 8px;padding-top:8px;border-top:1px solid var(--line)}
+.tag{color:var(--sub);margin:0 0 16px}
+.en{color:var(--sub);font-size:.95rem;margin:2px 0 10px}
+.warn{border:1px solid var(--warn);border-radius:12px;padding:12px 16px;margin:18px 0}
+.warn b{color:var(--warn)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:12px 0}
+table{width:100%;border-collapse:collapse;font-size:.92rem}
+th,td{text-align:left;padding:10px 8px;border-top:1px solid var(--line);vertical-align:top}
+th{color:var(--sub);font-weight:600;border-top:0}
+a{color:var(--acc)}
+.btn{display:inline-block;min-height:44px;padding:9px 16px;border-radius:10px;background:var(--acc);color:#fff;text-decoration:none;font-weight:600}
+code{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:1px 6px;font-size:.88em;overflow-wrap:anywhere}
+.hash{font:12px/1.4 ui-monospace,Consolas,monospace;color:var(--sub);overflow-wrap:anywhere}
+ol,ul{padding-left:1.3rem}
+li{margin:6px 0}
+footer{margin-top:40px;color:var(--sub);font-size:.88rem}
+@media (max-width:560px){h1{font-size:1.5rem} th:nth-child(3),td:nth-child(3){display:none}}
+</style>
+</head>
+<body>
+<main>
+<h1>aruaru-llm</h1>
+<p class="tag">ローカルで動くAI(LLM)サーバー。日本語検索・OCR・要約などを、あなたのPC/サーバー内だけで。</p>
+<p class="en">A local AI (LLM) server: Japanese search, OCR, summarisation and more - running only on your own PC or server.</p>
+
+<h2>ダウンロード / Download <small>(v0.2.4)</small></h2>
+<p><a class="btn" href="https://github.com/aon-co-jp/aruaru-llm/releases/tag/v0.2.4">最新のリリースページ / Release page (GitHub)</a></p>
+<table>
+<tr><th>対象 / For</th><th>ファイル / File</th><th>SHA-256</th></tr>
+<tr><td>Windows</td><td><a href="https://github.com/aon-co-jp/aruaru-llm/releases/download/v0.2.4/aruaru-llm-installer.exe">aruaru-llm-installer.exe</a> (5.4 MB)</td><td class="hash">6205cc761a05cf707227fa4eb22512fc7a2e261e282af2da46101b6923cf4a68</td></tr>
+<tr><td>Linux (64bit)</td><td><a href="https://github.com/aon-co-jp/aruaru-llm/releases/download/v0.2.4/aruaru-llm-linux-x86_64.tar.gz">aruaru-llm-linux-x86_64.tar.gz</a> (5.9 MB)</td><td class="hash">33eaf2656c6b0e4208657648cae6b71839f92468df0dee7b540d5bbc1767b556</td></tr>
+<tr><td>Windows</td><td><a href="https://github.com/aon-co-jp/aruaru-llm/releases/download/v0.2.4/aruaru-llm-windows-x86_64.zip">aruaru-llm-windows-x86_64.zip</a> (5.6 MB)</td><td class="hash">ff0cdc4ac795e1d778d1f5e8e2cf0dfaa1114871281bd8097727826598883d2a</td></tr>
+</table>
+<p class="en">署名のない開発用のビルドの場合があります。ダウンロードしたら、上の SHA-256 と一致するか確かめてください。 / Some builds are unsigned - please verify the SHA-256 after downloading.</p>
+
+<h2>特長 / Features</h2>
+<ul>
+<li>Qwen等のモデルを自動ダウンロードして動かす。OpenAI互換の推論口、日本語検索、OCR(/v1/ocr)。<span class="en"> Downloads and runs models such as Qwen; OpenAI-style inference endpoint, Japanese search, OCR (/v1/ocr).</span></li>
+<li>1台のサーバーを複数のアプリで共有(マルチコア・非同期)。<span class="en"> One server shared by many apps (multi-core, async).</span></li>
+<li>知識はGitHubへ自動退避・起動時に自動復元。<span class="en"> Knowledge is backed up to GitHub and restored automatically at start-up.</span></li>
+</ul>
+
+<h2>ドキュメント / Documentation</h2>
+<p>使い方・設計・既知の制限は、<a href="https://github.com/aon-co-jp/aruaru-llm">リポジトリの README / CLAUDE.md / PORTING.md</a>(日本語・英語)にあります。<span class="en"> Usage, design and known limits are in the repository's README / CLAUDE.md / PORTING.md (Japanese and English).</span></p>
+
+<footer>
+<p>ライセンスはリポジトリを参照 / See the repository for the license ・ <a href="https://github.com/aon-co-jp/aruaru-llm">ソースコード / Source (GitHub)</a> ・ <a href="/">easy-web.tokyo</a></p>
+</footer>
+</main>
+</body>
+</html>
