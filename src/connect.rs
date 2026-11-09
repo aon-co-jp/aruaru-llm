@@ -127,11 +127,47 @@ fn ensure_post_json(req: &Request) -> Option<Response> {
     None
 }
 
+/// 重い呼び出しだけ受付制御(`admission`)を通す。それ以外はそのまま実行。
+async fn run_governed(h: Handler, req: Request, p: Params) -> Response {
+    let path = req.uri().path().to_string();
+    if !crate::admission::is_heavy(&path) {
+        return h(req, p).await;
+    }
+    let gov = crate::admission::global();
+    let tenant = crate::admission::tenant_of(req.headers());
+    let permit = match gov.acquire(&tenant).await {
+        Ok(p) => p,
+        Err(crate::admission::Reject::Overloaded) => {
+            tracing::warn!("admission: overloaded, rejected tenant={tenant} path={path}");
+            return error(StatusCode::TOO_MANY_REQUESTS, "server is busy: the request queue is full, retry later");
+        }
+        Err(crate::admission::Reject::QueueTimeout) => {
+            tracing::warn!("admission: queue wait timed out tenant={tenant} path={path}");
+            return error(StatusCode::SERVICE_UNAVAILABLE, "server is busy: waited too long in the queue, retry later");
+        }
+    };
+    // 計算は別タスクで走らせ、許可証はそのタスクが持つ。時間切れで応答を返した後も、計算が終わるまで枠は返らない。
+    let task = tokio::spawn(async move {
+        let r = h(req, p).await;
+        drop(permit);
+        r
+    });
+    let limit = gov.exec_timeout();
+    match tokio::time::timeout(limit, task).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(_)) => error(StatusCode::INTERNAL_SERVER_ERROR, "handler task failed"),
+        Err(_) => {
+            tracing::warn!("admission: execution exceeded {limit:?} tenant={tenant} path={path}");
+            error(StatusCode::GATEWAY_TIMEOUT, "request timed out while processing")
+        }
+    }
+}
+
 /// 以前 POST だったもの(本文をそのままハンドラへ)。
 pub fn cx_post(h: Handler) -> MethodRouter {
     post(handler_fn(move |req: Request, p: Params| {
         let h = h.clone();
-        async move { normalise(h(req, p).await).await }
+        async move { normalise(run_governed(h, req, p).await).await }
     }))
 }
 

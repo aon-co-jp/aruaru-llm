@@ -56,6 +56,7 @@ mod scoring;
 mod security;
 mod self_update;
 mod signatures;
+mod admission;
 mod tenants;
 mod ocr;
 mod ocr_correct;
