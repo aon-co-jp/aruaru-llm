@@ -604,3 +604,12 @@ Reading into `serde_json::Value` gives almost no speed-up even with SIMD (188 ms
 
 ### Shared-base admission control (2026-11-09)
 Heavy Connect calls (Generate*/Translate/Transcribe/Ocr*) pass `src/admission.rs`: max concurrency (default 2), per-site queues served round-robin, queue caps (32 total / 8 per site, overflow = immediate 429), queue wait 30 s (503), execution cap 120 s (504; the slot is freed only when the computation really ends). Site id: `x-tenant` > `x-forwarded-host` > `anonymous` (set by the front open-web-server). Env: `ARUARU_LLM_MAX_CONCURRENT`, `_MAX_QUEUE`, `_MAX_QUEUE_PER_TENANT`, `_QUEUE_WAIT_SECS`, `_EXEC_TIMEOUT_SECS`. Measured: real GPT-2 inference is too slow in WSL for a fairness run (a single call hit the 60 s cap); overflow gave 429 in ~2.5 s, queue timeout 503 in ~22.5 s; the unit-level load test (2 slots, 100 ms jobs, A=20/B=3/C=3) finished A=1400 ms, B=767 ms, C=867 ms vs ~1400 ms under FIFO. Deployed to the VPS 2026-11-09 (3 simultaneous sites: all 200).
+
+## 依存更新の記録: RUSTSEC-2026-0258(h2 0.3.27)(2026-11-11、version-control 通知への対応)
+- `h2 0.4.19` → `0.4.20` へ更新(`cargo update -p h2@0.4.19`、`cargo check --locked` 成功)。
+- **`h2 0.3.27`(`RUSTSEC-2026-0258`、修正は `>=0.4.16`)は上流が未対応で直せない**: 経路は `rust-bert 0.23.0`(crates.io の最新) → `cached-path ^0.6` → `reqwest 0.11` → `hyper 0.14` → `h2 0.3`。`cached-path` 自体は 0.10.1 まであるが、`rust-bert` が `^0.6` に固定している。
+- **影響範囲**: この経路は任意フィーチャ `nllb-translate` のみ(既定ビルド・VPS 本番の `--locked` 既定フィーチャには入らない)。`nllb-translate` を有効にして配備する場合は、この脆弱性(空の DATA フレームの無制限受け入れ=DoS)を承知の上で使うこと。
+- 次の手: `rust-bert` の新版(`cached-path` 更新)を待つ。それまで version-control の通知は残る。
+
+### Dependency note: RUSTSEC-2026-0258 (h2 0.3.27) (2026-11-11)
+`h2 0.4.19 → 0.4.20` updated. `h2 0.3.27` cannot be fixed here: it comes only via the optional `nllb-translate` feature (`rust-bert 0.23.0`, the latest → `cached-path ^0.6` → `reqwest 0.11` → `hyper 0.14` → `h2 0.3`). Default builds and the VPS production build are unaffected. Wait for a `rust-bert` release that updates `cached-path`.
