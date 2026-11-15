@@ -852,3 +852,8 @@ sudo ./install.sh
 
 ## 受付制御 / Admission control
 同時実行上限・サイト別公平キュー・タイムアウトを備える(詳細は`CLAUDE.md`)。Max concurrency, per-site fair queues and timeouts (see `CLAUDE.md`).
+
+## 引き継ぎ・再開 / Hand-off and resume (2026-11-15)
+
+**日本語**: 女性キャラ=メイドの先生(さくら)/男性キャラ=執事の先生(トラ)の応対API(`PersonaPrompt`)と、モデル非依存の知識ストア(`data/knowledge/`、起動時と6時間ごとに公開WEB→GitHubから自動復元、6時間ごとにGitHubへ退避)を実装し、VPSへ反映済み。再開用メッセージは[`PORTING.md`](PORTING.md)末尾。
+**English**: The maid/butler teacher persona API (`PersonaPrompt`) and a model-independent knowledge store (`data/knowledge/`, auto-restored from the public web then GitHub at start-up and every 6 h, backed up to GitHub every 6 h) are implemented and deployed to the VPS. The resume message is at the end of [`PORTING.md`](PORTING.md).

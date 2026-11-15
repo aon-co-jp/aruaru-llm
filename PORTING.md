@@ -613,3 +613,11 @@ Heavy Connect calls (Generate*/Translate/Transcribe/Ocr*) pass `src/admission.rs
 
 ### Dependency note: RUSTSEC-2026-0258 (h2 0.3.27) (2026-11-11)
 `h2 0.4.19 → 0.4.20` updated. `h2 0.3.27` cannot be fixed here: it comes only via the optional `nllb-translate` feature (`rust-bert 0.23.0`, the latest → `cached-path ^0.6` → `reqwest 0.11` → `hyper 0.14` → `h2 0.3`). Default builds and the VPS production build are unaffected. Wait for a `rust-bert` release that updates `cached-path`.
+
+## 再開用メッセージ(別アカウントで再開する人へ) / Resume message (for the other account)
+
+**日本語(コピーして貼り付け)**:
+> 再開するリポジトリ: `aon-co-jp/aruaru-llm`(ローカル`F:\aruaru-llm`、VPSは`ssh conoha`の`/root/aruaru-llm`)と`aon-co-jp/open-english`(新名`maid-cafe-english`、ローカル`F:\open-english`、VPS`/root/easy-web.tokyo/open-english`)。まず両リポジトリの`CLAUDE.md`末尾の「HANDOFF 2026-11-15」を読む。最優先は、VPSで`curl -XPOST localhost:4600/aruaru_llm.v1.Llm/PersonaPrompt -H 'content-type: application/json' -d '{"gender":"male","country":"Japan"}'`を叩いたとき「today's news」の行が出ない原因調査(`src/main.rs`の`persona_prompt`の3秒タイムアウトと`news_geo::fetch_for_country_cached`)。次にAndroid実機確認、VPS再構成の通し試験。ビルドは`PATH`に`%USERPROFILE%\.cargo\bin`を足してから。秘密は`F:\`直下のtxt経由で、値は画面・コミットに出さない。他セッションの未コミット変更(`Cargo.lock`、`data/news-feed-*.json`)は触らない。
+
+**English (paste as is)**:
+> Repos to resume: `aon-co-jp/aruaru-llm` (local `F:\aruaru-llm`, VPS `/root/aruaru-llm` via `ssh conoha`) and `aon-co-jp/open-english` (now `maid-cafe-english`; local `F:\open-english`, VPS `/root/easy-web.tokyo/open-english`). First read "HANDOFF 2026-11-15" at the end of each repo's `CLAUDE.md`. Top task: find why `curl -XPOST localhost:4600/aruaru_llm.v1.Llm/PersonaPrompt -H 'content-type: application/json' -d '{"gender":"male","country":"Japan"}'` on the VPS returns no "today's news" line (the 3 s timeout in `persona_prompt` in `src/main.rs`, and `news_geo::fetch_for_country_cached`). Then: a real Android device check, and a from-scratch VPS rebuild rehearsal. Put `%USERPROFILE%\.cargo\bin` on `PATH` to build. Secrets come from txt files at the root of `F:\`; never print or commit values. Do not touch other sessions' uncommitted changes (`Cargo.lock`, `data/news-feed-*.json`).
