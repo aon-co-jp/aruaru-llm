@@ -860,3 +860,6 @@ sudo ./install.sh
 
 **日本語(2026-11-15追記)**: v0.2.5を公開(Connect版、リリースCIにglslc導入)。再開手順は[`PORTING.md`](PORTING.md)末尾。
 **English (2026-11-15 addendum)**: v0.2.5 published (Connect build; glslc added to release CI). Resume steps: end of [`PORTING.md`](PORTING.md).
+
+## 再開 / Resume
+再開用メッセージは`CLAUDE.md`末尾「2026-11-15 再開用メッセージ」(日英)。The resume message (JA/EN) is at the end of `CLAUDE.md`.

@@ -4906,3 +4906,19 @@ Heavy Connect calls (Generate*/Translate/Transcribe/Ocr*) pass `src/admission.rs
 - **新構成**: `src/nllb.rs` は `ARUARU_TRANSLATE_URL`(未設定なら無効)の翻訳ワーカーを Connect(`POST /aruaru_translate.v1.Translate/Translate`、JSON)で呼ぶ。失敗・未設定は従来の GPT-2 流用へフォールバック(動作は従来どおり)。ワーカーは `tools/translate-worker`(Rust、CTranslate2/`ct2rs`、M2M100 418M INT8、127.0.0.1 のみ待受)。手順は同フォルダの README。
 - **実測(WSL)**: `cargo test` 190件合格。ワーカー実起動で日英・仏日の往復、不正入力(言語コード・JSON)の拒否を確認。常駐メモリ約670MB、1文あたり約1.5〜2.6秒(初回含む)。
 - **正直な注意**: 品質は GPT-2 流用より実用的だが誤訳はある(例: dependencies→依存度/依存症)。`source_lang` 省略時は英語と見なす。M2M100 の重みのライセンス(MIT と認識)は採用前にモデルカードで要確認。**未了**: VPS(RAM約3.6GB)での実測・配置(systemd ユニット、モデルの置き場)、本体と実接続した `/v1/translate` の通し確認、main へのマージ(他セッションが作業中のためブランチのまま)。
+
+## 2026-11-15 再開用メッセージ: 共有基盤の受付制御(別アカウントで再開)
+**再開するリポジトリ**: `F:ruaru-llm`(本体)、`F:uno`(記録)。`F:\open-cuda`・`F:\open-directx`は判断の記録のみ(コード変更なし)。
+**済み**: aruaru-llmに受付制御(`src/admission.rs`、`src/connect.rs`)を実装し、2026-11-09にVPSへ反映(同時2・待ち行列全体32/サイト別8・待ち30秒=503・実行120秒=504・満杯=429、Connect形式)。3サイト同時の生成は全て200。単体の公平性測定はA=1400/B=767/C=867ms。open-cuda/open-directxはライブラリのまま(理由は各`CLAUDE.md`)。コミットはorigin/mainに反映済みを確認。
+**未了**: (1)前面open-web-serverが`x-tenant`ヘッダを付けているかの確認(付かないと全サイトが`anonymous`扱い=公平配分が効かない)。(2)実推論での公平性の実測(VPS/WSLのGPT-2は遅く、単発でも60秒超。高速な推論先が要る)。(3)上限値(既定2/32/8)の調整。(4)Chat/Classify等の軽い呼び出しは対象外のまま。
+**落とし穴**: VPSではビルドしない(WSLでビルド→glibc<=2.39確認→scp→バックアップ→再起動→自動ロールバック)。`ARUARU_LLM_GPT2_DIR=models/gpt2`が無いとモデルを読めない。シェルスクリプトで`wait`を引数なしで使うとバックグラウンドのサーバーまで待つ。
+**そのまま貼る再開用メッセージ**:
+> `F:ruaru-llm/CLAUDE.md`の「共有基盤としての受付制御」と`F:uno/API-REST-REMAINING-20261106.md`末尾(2026-11-09)を読み、未了(1)`x-tenant`ヘッダの前面付与の実機確認から再開して。VPSではビルドせずWSLでビルドして差し替え、REST新設禁止(Connect)、秘密は出さない。
+
+### 2026-11-15 Resume message: shared-base admission control (resuming on another account)
+**Repos to resume**: `F:ruaru-llm` (code), `F:uno` (records). `F:\open-cuda` and `F:\open-directx` only hold a decision record (no code change).
+**Done**: admission control in aruaru-llm (`src/admission.rs`, `src/connect.rs`), deployed to the VPS on 2026-11-09 (2 concurrent, queue 32 total / 8 per site, 30 s wait = 503, 120 s run = 504, full = 429, Connect-style errors). Three simultaneous sites all got 200. Unit-level fairness: A=1400 / B=767 / C=867 ms. open-cuda / open-directx stay libraries (reasons in each `CLAUDE.md`). The commits are confirmed on origin/main.
+**Open**: (1) verify the front open-web-server sets `x-tenant` (otherwise every site is `anonymous` and fairness has no effect); (2) measure fairness with real inference (GPT-2 on the VPS/WSL is slow, >60 s even for one call; needs a fast backend); (3) tune the limits (defaults 2/32/8); (4) light calls (Chat/Classify) are still not governed.
+**Pitfalls**: never build on the VPS (build in WSL, check glibc <= 2.39, scp, back up, restart, auto-rollback). Without `ARUARU_LLM_GPT2_DIR=models/gpt2` the model fails to load. A bare `wait` in a shell script also waits for a background server.
+**Paste-ready resume message**:
+> Read "Shared-base admission control" in `F:ruaru-llm/CLAUDE.md` and the 2026-11-09 section at the end of `F:uno/API-REST-REMAINING-20261106.md`, then resume at open item (1): verify on the real front server that `x-tenant` is set. Do not build on the VPS (WSL build then swap), no new REST (Connect only), never print secrets.
