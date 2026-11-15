@@ -3816,8 +3816,8 @@ async fn persona_prompt(req: Request) -> Response {
         )
         .await
         {
-            if let Some(i) = db.items.first() {
-                hints.push(format!("today's headline: {}", i.title));
+            if let Some(h) = persona::pick_headline(&db.items.iter().map(|i| (i.title.as_str(), i.snippet.as_str())).collect::<Vec<_>>()) {
+                hints.push(format!("today's news: {h}"));
             }
         }
     }

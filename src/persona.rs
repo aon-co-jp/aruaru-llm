@@ -68,3 +68,33 @@ pub fn build(req: &PersonaRequest, topic_hints: Vec<String>) -> Option<PersonaRe
         source_ja: "参考: PRESIDENT Online「訪日客に人気な秋葉原のメイドカフェ、カタコトでも単語を軸に話しかけ」(要点のみ言い換え)",
     })
 }
+
+/// ニュースの(タイトル, 抜粋)から、話題に使える短い1文を選ぶ。
+/// タイトルが「一覧」「Top ... News」のような一覧ページ名のときは、抜粋の中身(先頭の日時を除く)を使う。
+pub fn pick_headline(items: &[(&str, &str)]) -> Option<String> {
+    let generic = |t: &str| {
+        let l = t.to_lowercase();
+        t.contains("一覧") || t.contains("トップ") || l.contains("top ") || l.contains("latest") || l.contains("news today") || t.chars().count() < 8
+    };
+    for (title, snippet) in items {
+        if !generic(title) {
+            return Some(title.chars().take(100).collect());
+        }
+        // 抜粋の「11/14(土) 21:40.」のような日時の接頭辞を落として最初の文を使う
+        let body = snippet.trim_start_matches(|c: char| c.is_ascii_digit() || "/():. 月火水木金土日曜".contains(c));
+        let first = body.split(|c| c == '.' || c == '。').map(str::trim).find(|s| s.chars().count() >= 8)?;
+        return Some(first.chars().take(100).collect());
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pick_headline;
+    #[test]
+    fn uses_snippet_when_title_is_a_listing_page() {
+        let h = pick_headline(&[("主要トピックス一覧 - Yahoo!ニュース", "11/14(土) 21:40. 日本 兵の墓が無縁化 解消に法の壁. 11/14(土) 21:32. x")]).unwrap();
+        assert!(h.contains("兵の墓"), "{h}");
+        assert_eq!(pick_headline(&[("Typhoon hits Okinawa coast", "x")]).unwrap(), "Typhoon hits Okinawa coast");
+    }
+}
