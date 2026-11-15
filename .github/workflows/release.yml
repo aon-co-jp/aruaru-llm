@@ -49,6 +49,8 @@ jobs:
           git clone --depth=1 https://github.com/aon-co-jp/open-web-server.git ../open-web-server
           git clone --depth=1 https://github.com/aon-co-jp/RS-SmartTCP.git ../RS-SmartTCP
           git clone --depth=1 https://github.com/aon-co-jp/open-raid-z.git ../open-raid-z
+      - name: Install glslc (open-cuda's opencuda-shader-build compiles Vulkan shaders at build time)
+        run: sudo apt-get update && sudo apt-get install -y glslc
       - name: Build
         run: cargo build --release --bin aruaru-llm
       - name: Package
@@ -83,6 +85,12 @@ jobs:
           git clone --depth=1 https://github.com/aon-co-jp/open-web-server.git ../open-web-server
           git clone --depth=1 https://github.com/aon-co-jp/RS-SmartTCP.git ../RS-SmartTCP
           git clone --depth=1 https://github.com/aon-co-jp/open-raid-z.git ../open-raid-z
+      - name: Install glslc (open-cuda's opencuda-shader-build compiles Vulkan shaders at build time)
+        shell: pwsh
+        run: |
+          choco install vulkan-sdk -y --no-progress
+          $bin = Get-ChildItem 'C:\VulkanSDK' -Directory | Sort-Object Name -Descending | Select-Object -First 1
+          "$($bin.FullName)\Bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
       - name: Build (default, CPU-only)
         run: cargo build --release --bin aruaru-llm
       - name: Package portable zip (aruaru-llm-windows-x86_64.zip)
