@@ -275,4 +275,17 @@ mod tests {
         assert!(last["site-b"] * 10 < last["site-a"] * 7 && last["site-c"] * 10 < last["site-a"] * 7);
         assert_eq!(g.snapshot(), (0, 0));
     }
+
+    #[test]
+    fn tenant_of_prefers_x_tenant_then_forwarded_host_and_sanitizes() {
+        let mut h = hyper::HeaderMap::new();
+        assert_eq!(tenant_of(&h), "anonymous");
+        h.insert("x-forwarded-host", "Site.Example".parse().unwrap());
+        assert_eq!(tenant_of(&h), "site.example");
+        h.insert("x-tenant", "Aruaru-IME".parse().unwrap());
+        assert_eq!(tenant_of(&h), "aruaru-ime");
+        h.insert("x-tenant", "a b/c<>".parse().unwrap());
+        assert_eq!(tenant_of(&h), "abc");
+    }
+
 }
