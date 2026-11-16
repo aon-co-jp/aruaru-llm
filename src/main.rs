@@ -1546,13 +1546,13 @@ async fn translate(req: Request, device: Arc<dyn GpuDevice>, registry: Arc<Tenan
     // (`nllb::translate_with_nllb`は`nllb-translate`feature無効時は常に
     // `Err`を返す設計のため、この分岐はfeature無効ビルドでも無条件に
     // GPT-2流用実装のパスを通り、既存動作を一切変えない)。
-    if let Ok(translation) = nllb::translate_with_nllb(&req.text, &req.target_lang, req.source_lang.as_deref()) {
+    if let Ok(translation) = nllb::translate_with_nllb(&req.text, &req.target_lang, req.source_lang.as_deref()).await {
         return json_response(
             StatusCode::OK,
             &TranslateResponse {
                 translation,
-                engine: "m2m100-rust-bert-v0".to_string(),
-                disclosure: "This translation was produced by a dedicated open-source translation model (M2M100 via rust-bert), \
+                engine: "m2m100-ctranslate2-worker-v0".to_string(),
+                disclosure: "This translation was produced by a dedicated open-source translation model (M2M100 via the CTranslate2 translate worker), \
                     not the GPT-2 fallback. Quality is substantially better but still not guaranteed to be publication-ready for \
                     all language pairs; spot-check before publishing."
                     .to_string(),
@@ -1579,10 +1579,10 @@ async fn translate(req: Request, device: Arc<dyn GpuDevice>, registry: Arc<Tenan
                     non-English source/target language pairs; always spot-check output before publishing it. \
                     {}",
                     if nllb::is_available() {
-                        "(nllb-translate feature IS compiled into this build but failed to produce a translation for this request — \
-                        check target_lang is a supported language name, or see server logs for the underlying M2M100 load/inference error.)"
+                        "(a translate worker is configured but failed to produce a translation for this request — \
+                        check target_lang is a supported language name and that the worker is running.)"
                     } else {
-                        "(This build was compiled WITHOUT the nllb-translate feature; rebuild with --features nllb-translate to use \
+                        "(No translate worker is configured; set ARUARU_TRANSLATE_URL to use \
                         the dedicated M2M100 translation model instead of this GPT-2 fallback.)"
                     }
                 ),
@@ -3924,9 +3924,9 @@ async fn main() -> anyhow::Result<()> {
     // ユーザー指示「翻訳部分だけプラグインという形にして、必要な人だけ
     // インストール/アンインストールできるように」への対応)。
     if nllb::is_available() {
-        tracing::info!("translation plugin: ENABLED (M2M100 via rust-bert) — built with --features nllb-translate");
+        tracing::info!("translation plugin: ENABLED (M2M100 via CTranslate2 worker, ARUARU_TRANSLATE_URL set)");
     } else {
-        tracing::info!("translation plugin: not installed (GPT-2 fallback only) — rebuild with --features nllb-translate to install it");
+        tracing::info!("translation plugin: not configured (GPT-2 fallback only) — set ARUARU_TRANSLATE_URL to the translate worker");
     }
 
     // コールドスタート対策(2026-07-22追記、CLAUDE.md HANDOFF参照):
