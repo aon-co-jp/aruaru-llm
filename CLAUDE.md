@@ -4916,3 +4916,9 @@ Heavy Connect calls (Generate*/Translate/Transcribe/Ocr*) pass `src/admission.rs
 **Pitfalls**: never build on the VPS (build in WSL, check glibc <= 2.39, scp, back up, restart, auto-rollback). Without `ARUARU_LLM_GPT2_DIR=models/gpt2` the model fails to load. A bare `wait` in a shell script also waits for a background server.
 **Paste-ready resume message**:
 > Read "Shared-base admission control" in `F:\aruaru-llm/CLAUDE.md` and the 2026-11-09 section at the end of `F:\runo/API-REST-REMAINING-20261106.md`, then resume at open item (1): verify on the real front server that `x-tenant` is set. Do not build on the VPS (WSL build then swap), no new REST (Connect only), never print secrets.
+
+## 翻訳を rust-bert から別プロセスのワーカーへ(2026-11-16、ブランチ `translate-worker`)
+- **理由**: `rust-bert` 0.23(最新・更新停止、`tch ^0.17` 固定)が `protobuf 2`・`zip 0.6`・`zstd-safe 5`・`h2 0.3` を引き、RUSTSEC-2024-0437/2026-0258/0367〜0369/0403 が直せなかった。`nllb-translate` feature・`rust-bert`・`tch` を削除し、`Cargo.lock` から5つの crate が消えたことを確認(`h2` は 0.4.20 のみ)。
+- **新構成**: `src/nllb.rs` は `ARUARU_TRANSLATE_URL`(未設定なら無効)の翻訳ワーカーを Connect(`POST /aruaru_translate.v1.Translate/Translate`、JSON)で呼ぶ。失敗・未設定は従来の GPT-2 流用へフォールバック(動作は従来どおり)。ワーカーは `tools/translate-worker`(Rust、CTranslate2/`ct2rs`、M2M100 418M INT8、127.0.0.1 のみ待受)。手順は同フォルダの README。
+- **実測(WSL)**: `cargo test` 190件合格。ワーカー実起動で日英・仏日の往復、不正入力(言語コード・JSON)の拒否を確認。常駐メモリ約670MB、1文あたり約1.5〜2.6秒(初回含む)。
+- **正直な注意**: 品質は GPT-2 流用より実用的だが誤訳はある(例: dependencies→依存度/依存症)。`source_lang` 省略時は英語と見なす。M2M100 の重みのライセンス(MIT と認識)は採用前にモデルカードで要確認。**未了**: VPS(RAM約3.6GB)での実測・配置(systemd ユニット、モデルの置き場)、本体と実接続した `/v1/translate` の通し確認、main へのマージ(他セッションが作業中のためブランチのまま)。
