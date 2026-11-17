@@ -64,6 +64,32 @@ jobs:
           name: aruaru-llm-linux-x86_64
           path: aruaru-llm-linux-x86_64.tar.gz
 
+  build-windows-arm:
+    # Windows ARM64(Snapdragon)。実機が無くCI上のビルドのみ。必須にはしない(releaseのneedsに含めない)
+    name: Windows (ARM64, experimental)
+    runs-on: windows-11-arm
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout sibling path dependencies
+        shell: bash
+        run: |
+          for r in open-cuda open-cpu RPoem RS-JSON open-web-server RS-SmartTCP open-raid-z; do
+            git clone --depth=1 https://github.com/aon-co-jp/$r.git ../$r
+          done
+      - name: Install glslc (Vulkan shaders compiled at build time)
+        shell: pwsh
+        run: |
+          choco install vulkan-sdk -y --no-progress
+          $bin = Get-ChildItem 'C:\VulkanSDK' -Directory | Sort-Object Name -Descending | Select-Object -First 1
+          "$($bin.FullName)\Bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+      - name: Build (default, CPU-only)
+        run: cargo build --release --bin aruaru-llm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aruaru-llm-windows-arm64
+          path: target/release/aruaru-llm.exe
+
   build-windows:
     name: Windows (x86_64)
     runs-on: windows-latest
