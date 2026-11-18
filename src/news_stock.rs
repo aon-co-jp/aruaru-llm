@@ -134,10 +134,13 @@ pub fn context_for(query: &str) -> Option<String> {
     if hits.is_empty() {
         return None;
     }
-    Some(format!(
-        "Recent news (shared stock): {}",
-        hits.iter().map(|(c, d, t)| format!("[{c} {d}] {t}")).collect::<Vec<_>>().join(" | ")
-    ))
+    // 知識文脈と同じ理由で、1件と全体の長さに上限を付ける。
+    let joined = hits
+        .iter()
+        .map(|(c, d, t)| crate::knowledge::clip_chars(&format!("[{c} {d}] {t}"), 160))
+        .collect::<Vec<_>>()
+        .join(" | ");
+    Some(format!("Recent news (shared stock): {}", crate::knowledge::clip_chars(&joined, 400)))
 }
 
 /// 年間ダイジェスト用: ストックしている国別ニュース検索の索引を月ごとにまとめたもの。

@@ -747,10 +747,24 @@ pub fn default_repetition_penalty() -> f32 {
 /// GPT-2実重み・実トークナイザが読み込めない場合はエラーを返す(黙って
 /// 別経路にフォールバックしない、意図分類とは別軸のためbag-of-words的な
 /// 代替は存在しない)。
+/// GPT-2 系の生成に渡すプロンプトの最大トークン数。
+pub const MAX_PROMPT_TOKENS: usize = 64;
+
+/// プロンプトが長すぎるとき、末尾から`MAX_PROMPT_TOKENS`個だけ残す。
+pub fn trim_prompt_ids(mut ids: Vec<u32>) -> Vec<u32> {
+    if ids.len() > MAX_PROMPT_TOKENS {
+        ids.drain(..ids.len() - MAX_PROMPT_TOKENS);
+    }
+    ids
+}
+
 pub fn generate(device: &Arc<dyn GpuDevice>, prompt: &str, max_new_tokens: usize) -> Result<String> {
     let loaded = active_or_load_default().map_err(|e| anyhow::anyhow!(e))?;
     let prompt_ids = loaded.tokenizer.encode(prompt).context("open-cuda-llm tokenizer encode failed")?;
     anyhow::ensure!(!prompt_ids.is_empty(), "prompt encoded to zero tokens");
+    // 長すぎるプロンプトはプレフィルが長さの2乗で重くなり、生成が止まったように見える。
+    // 末尾(質問側)を残し、先頭(前置きの文脈)から切り捨てる。
+    let prompt_ids = trim_prompt_ids(prompt_ids);
     let generated_ids = loaded
         .model
         .generate_with_repetition_penalty(device, &prompt_ids, max_new_tokens, default_repetition_penalty())
@@ -1242,5 +1256,30 @@ mod tests {
     fn rand_suffix() -> u64 {
         use std::time::{SystemTime, UNIX_EPOCH};
         SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.subsec_nanos() as u64).unwrap_or(0)
+    }
+}
+
+#[cfg(test)]
+mod prompt_cap_tests {
+    use super::*;
+
+    #[test]
+    fn trim_keeps_the_tail_when_too_long() {
+        let ids: Vec<u32> = (0..(MAX_PROMPT_TOKENS as u32 + 100)).collect();
+        let t = trim_prompt_ids(ids.clone());
+        assert_eq!(t.len(), MAX_PROMPT_TOKENS);
+        assert_eq!(t.last(), ids.last());
+    }
+
+    #[test]
+    fn trim_leaves_short_prompts_alone() {
+        let ids: Vec<u32> = vec![1, 2, 3];
+        assert_eq!(trim_prompt_ids(ids.clone()), ids);
+    }
+
+    #[test]
+    fn clip_chars_respects_char_boundaries() {
+        assert_eq!(crate::knowledge::clip_chars("あいうえお", 3), "あいう");
+        assert_eq!(crate::knowledge::clip_chars("abc", 10), "abc");
     }
 }

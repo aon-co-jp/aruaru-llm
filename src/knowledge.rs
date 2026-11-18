@@ -21,6 +21,18 @@ use serde::{Deserialize, Serialize};
 
 const KEEP_SNAPSHOTS: usize = 10;
 const MAX_TEXT_CHARS: usize = 2000;
+/// 生成プロンプトへ足す知識文脈の長さの上限(1件あたり / 全体、文字数)。
+const CONTEXT_ITEM_CHARS: usize = 240;
+const CONTEXT_TOTAL_CHARS: usize = 600;
+
+/// 先頭から`max`文字だけ残す(文字境界を守る)。
+pub fn clip_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        s.chars().take(max).collect()
+    }
+}
 static LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -300,7 +312,10 @@ pub fn context_for(query: &str) -> Option<String> {
     if hits.is_empty() {
         return None;
     }
-    Some(format!("Known facts: {}", hits.iter().map(|e| e.text.as_str()).collect::<Vec<_>>().join(" | ")))
+    // GPT-2 の文脈長は小さく、プレフィルは長さの2乗で重くなる。1件最大2000字×3件を丸ごと足すと
+    // 生成が数分止まるため、1件と全体の長さに上限を付ける(超えた分は切り捨てる)。
+    let joined = hits.iter().map(|e| clip_chars(&e.text, CONTEXT_ITEM_CHARS)).collect::<Vec<_>>().join(" | ");
+    Some(format!("Known facts: {}", clip_chars(&joined, CONTEXT_TOTAL_CHARS)))
 }
 
 /// 生成プロンプト全体から(最後の`Student:`以降、無ければ全体を検索語として)文脈を作る。
