@@ -157,6 +157,7 @@ async fn run_governed(h: Handler, req: Request, p: Params) -> Response {
         Ok(Ok(r)) => r,
         Ok(Err(_)) => error(StatusCode::INTERNAL_SERVER_ERROR, "handler task failed"),
         Err(_) => {
+            gov.record_exec_timeout(&tenant);
             tracing::warn!("admission: execution exceeded {limit:?} tenant={tenant} path={path}");
             error(StatusCode::GATEWAY_TIMEOUT, "request timed out while processing")
         }

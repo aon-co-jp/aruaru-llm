@@ -4267,6 +4267,7 @@ async fn main() -> anyhow::Result<()> {
                 async move { runtime_info(pool).await }
             }), None))
 
+        .at(&connect::path("AdmissionStats"), cx_post(plain(|| Box::pin(async { json_response(StatusCode::OK, &admission::stats_json()) }))))
         .at(&connect::path("Accelerators"), cx_get(plain(|| Box::pin(accelerators_info())), None))
 
         .at(&connect::path("BackgroundFoldStatus"), cx_get(plain(|| Box::pin(background_fold_status())), None))

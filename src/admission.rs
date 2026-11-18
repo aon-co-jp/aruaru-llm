@@ -50,8 +50,24 @@ struct Entry {
     tx: oneshot::Sender<Permit>,
 }
 
+/// サイト別の累計(本文・秘密は持たない。サイト名は `tenant_of` で整形済みの短い文字列のみ)。
+#[derive(Default, Clone, Debug, PartialEq, Eq)]
+pub struct TenantStats {
+    pub admitted: u64,
+    pub queued: u64,
+    pub rejected_overloaded: u64,
+    pub rejected_queue_timeout: u64,
+    pub exec_timeouts: u64,
+    pub running: usize,
+    pub waiting: usize,
+}
+
+/// 記録するサイト名の上限(偽装名での無制限増殖を防ぐ)。超過分は `other` に合算。
+const MAX_TRACKED_TENANTS: usize = 256;
+
 #[derive(Default)]
 struct State {
+    stats: HashMap<String, TenantStats>,
     running: usize,
     waiting: usize,
     next_id: u64,
@@ -66,6 +82,7 @@ pub struct Governor {
 
 pub struct Permit {
     gov: Arc<Governor>,
+    tenant: String,
 }
 
 impl Drop for Permit {
@@ -73,6 +90,9 @@ impl Drop for Permit {
         let granted = {
             let mut st = self.gov.st.lock().unwrap();
             st.running -= 1;
+            if let Some(x) = st.stats.get_mut(&self.tenant) {
+                x.running = x.running.saturating_sub(1);
+            }
             self.gov.pick(&mut st)
         };
         for (tx, p) in granted {
@@ -85,6 +105,32 @@ impl Drop for Permit {
 impl Governor {
     pub fn new(cfg: Config) -> Arc<Self> {
         Arc::new(Governor { cfg, st: Mutex::new(State::default()) })
+    }
+
+    fn stat<'a>(st: &'a mut State, tenant: &str) -> &'a mut TenantStats {
+        let key = if st.stats.contains_key(tenant) || st.stats.len() < MAX_TRACKED_TENANTS { tenant } else { "other" };
+        st.stats.entry(key.to_string()).or_default()
+    }
+
+    pub fn record_exec_timeout(&self, tenant: &str) {
+        let mut st = self.st.lock().unwrap();
+        Self::stat(&mut st, tenant).exec_timeouts += 1;
+    }
+
+    /// サイト別の統計(名前順)。running/waiting は現在値。
+    pub fn tenant_stats(&self) -> Vec<(String, TenantStats)> {
+        let st = self.st.lock().unwrap();
+        let mut v: Vec<_> = st.stats.iter().map(|(k, x)| {
+            let mut x = x.clone();
+            x.waiting = st.queues.get(k).map_or(0, |q| q.len());
+            (k.clone(), x)
+        }).collect();
+        v.sort_by(|a, b| a.0.cmp(&b.0));
+        v
+    }
+
+    pub fn limits(&self) -> (usize, usize, usize) {
+        (self.cfg.max_running, self.cfg.max_queue_total, self.cfg.max_queue_per_tenant)
     }
 
     /// 空き枠がある限り、サイトのラウンドロビンで待ち行列から取り出す(ロック内)。
@@ -101,10 +147,12 @@ impl Governor {
             if q.is_empty() {
                 st.queues.remove(&t);
             } else {
-                st.order.push_back(t);
+                st.order.push_back(t.clone());
             }
             st.running += 1;
-            out.push((e.tx, Permit { gov: Arc::clone(self) }));
+            Self::stat(st, &t).running += 1;
+            let key = if st.stats.contains_key(&t) { t } else { "other".to_string() };
+            out.push((e.tx, Permit { gov: Arc::clone(self), tenant: key }));
         }
         out
     }
@@ -114,11 +162,21 @@ impl Governor {
             let mut st = self.st.lock().unwrap();
             if st.running < self.cfg.max_running && st.waiting == 0 {
                 st.running += 1;
-                return Ok(Permit { gov: Arc::clone(self) });
+                let x = Self::stat(&mut st, tenant);
+                x.admitted += 1;
+                x.running += 1;
+                let key = if st.stats.contains_key(tenant) { tenant.to_string() } else { "other".to_string() };
+                return Ok(Permit { gov: Arc::clone(self), tenant: key });
             }
             let tq = st.queues.get(tenant).map_or(0, |q| q.len());
             if st.waiting >= self.cfg.max_queue_total || tq >= self.cfg.max_queue_per_tenant {
+                Self::stat(&mut st, tenant).rejected_overloaded += 1;
                 return Err(Reject::Overloaded);
+            }
+            {
+                let x = Self::stat(&mut st, tenant);
+                x.queued += 1;
+                x.admitted += 1;
             }
             let (tx, rx) = oneshot::channel();
             let id = st.next_id;
@@ -135,6 +193,12 @@ impl Governor {
             _ => {
                 // タイムアウト: まだ並んでいれば取り除く。既に付与済みなら受け取れなかっただけ(Drop で返る)。
                 let mut st = self.st.lock().unwrap();
+                let removed = st.queues.get(tenant).map_or(false, |q| q.iter().any(|e| e.id == id));
+                if removed {
+                    let x = Self::stat(&mut st, tenant);
+                    x.admitted = x.admitted.saturating_sub(1);
+                    x.rejected_queue_timeout += 1;
+                }
                 if let Some(q) = st.queues.get_mut(tenant) {
                     if let Some(pos) = q.iter().position(|e| e.id == id) {
                         q.remove(pos);
@@ -174,6 +238,22 @@ pub fn is_heavy(path: &str) -> bool {
         "Generate" | "GenerateSpeculative" | "GenerateWithSearch" | "GenerateQwen" | "GenerateDeepseek"
             | "Translate" | "Transcribe" | "Ocr" | "OcrCorrect" | "OcrGlyphRank" | "OcrScan" | "OcrPropose" | "OcrFill"
     )
+}
+
+/// 読み取り専用の統計を JSON にする(`AdmissionStats`)。サイト名と件数だけ。本文・秘密は含めない。
+pub fn stats_json() -> serde_json::Value {
+    let g = global();
+    let (running, waiting) = g.snapshot();
+    let (mr, mq, mqt) = g.limits();
+    let tenants: Vec<_> = g.tenant_stats().into_iter().map(|(k, x)| serde_json::json!({
+        "tenant": k, "admitted": x.admitted, "queued": x.queued,
+        "rejected_429": x.rejected_overloaded, "rejected_503": x.rejected_queue_timeout,
+        "timeout_504": x.exec_timeouts, "running": x.running, "waiting": x.waiting,
+    })).collect();
+    serde_json::json!({
+        "limits": {"max_concurrent": mr, "max_queue": mq, "max_queue_per_tenant": mqt},
+        "running": running, "waiting": waiting, "tenants": tenants,
+    })
 }
 
 /// ヘッダからサイトを識別する(長さ・文字を制限)。
@@ -274,6 +354,27 @@ mod tests {
         println!("LOADTEST last-finish ms: a={} b={} c={}", last["site-a"], last["site-b"], last["site-c"]);
         assert!(last["site-b"] * 10 < last["site-a"] * 7 && last["site-c"] * 10 < last["site-a"] * 7);
         assert_eq!(g.snapshot(), (0, 0));
+    }
+
+    #[tokio::test]
+    async fn per_tenant_stats_count_admit_queue_reject() {
+        let g = gov(1, 2, 1, 80);
+        let p = g.acquire("a").await.unwrap();
+        assert_eq!(g.acquire("b").await.err(), Some(Reject::QueueTimeout));
+        let g2 = Arc::clone(&g);
+        let w = tokio::spawn(async move { g2.acquire("b").await.map(|_| ()) });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(g.acquire("b").await.err(), Some(Reject::Overloaded));
+        let _ = w.await;
+        g.record_exec_timeout("a");
+        let m: HashMap<_, _> = g.tenant_stats().into_iter().collect();
+        assert_eq!(m["a"].admitted, 1);
+        assert_eq!(m["a"].running, 1);
+        assert_eq!(m["a"].exec_timeouts, 1);
+        assert_eq!(m["b"].rejected_overloaded, 1);
+        assert_eq!(m["b"].rejected_queue_timeout, 2);
+        drop(p);
+        assert_eq!(g.tenant_stats().into_iter().find(|x| x.0 == "a").unwrap().1.running, 0);
     }
 
     #[test]
