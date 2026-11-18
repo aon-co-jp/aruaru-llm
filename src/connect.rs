@@ -7,7 +7,7 @@
 //! JSON の読み込みは RS-JSON の `parse_secure`(サイズ・深さ・重複キーの上限つき)。
 //!
 //! REST のまま残すのは、規格や配布の都合が形を決めるものだけ: `/healthz`、`/`(案内ページ)、
-//! `/v1/ocr/fonts/:name`(フォントの静的ファイル配信)、`/api/docs`(型駆動の文書)。
+//! `/api/docs`(型駆動の文書)。フォント配信は `OcrFont`(Connect)へ移した。
 
 use http_body_util::BodyExt;
 use hyper::StatusCode;

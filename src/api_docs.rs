@@ -107,7 +107,7 @@ pub fn spec() -> Spec {
         .op(post_t::<OcrScanResponse>("/aruaru_llm.v1.Llm/OcrScan", "不自然な文字の走査", "ocr").body::<OcrScanRequest>())
         .op(post_t::<OcrProposeResponse>("/aruaru_llm.v1.Llm/OcrPropose", "候補の提案", "ocr").body::<OcrProposeRequest>())
         .op(post_t::<OcrFillResponse>("/aruaru_llm.v1.Llm/OcrFill", "文脈による補完", "ocr").body::<OcrFillRequest>())
-        .op(get("/v1/ocr/fonts/:name", "OCR用フォントの取得", "ocr"));
+        .op(post_t::<OcrFontResponse>("/aruaru_llm.v1.Llm/OcrFont", "OCR用フォントの取得", "ocr").body::<OcrFontRequest>());
     // --- モデル管理 ---
     let s = s
         .op(get_t::<CatalogResponse>("/aruaru_llm.v1.Llm/ModelsCatalog", "モデルカタログ", "models"))
@@ -228,6 +228,13 @@ pub(crate) struct PruneResponse {
 pub(crate) struct KnowledgeItems {
     pub(crate) count: u64,
     pub(crate) items: Vec<crate::knowledge::Entry>,
+}
+#[derive(Serialize, JsonSchema)]
+pub(crate) struct OcrFontResponse {
+    pub(crate) name: String,
+    pub(crate) content_type: String,
+    pub(crate) sha256: String,
+    pub(crate) data_base64: String,
 }
 #[derive(Serialize, JsonSchema)]
 pub(crate) struct CharsetResponse {

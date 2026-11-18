@@ -2161,10 +2161,21 @@ async fn ocr_prepare(req: Request) -> Response {
     }
 }
 
-/// `GET /v1/ocr/fonts/:name` — 書体フォントを返す(必要な時に取得してキャッシュ)。
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct OcrFontRequest {
+    /// フォントのファイル名(例: `NotoSansJP-VF.ttf`)。
+    name: String,
+}
+
+/// `POST /aruaru_llm.v1.Llm/OcrFont` — 書体フォントを返す(必要な時に取得してキャッシュ)。
 /// アプリは PDF にフォントを埋め込むために使う(OFL ライセンスのフォントのみ)。
-async fn ocr_font(params: Params) -> Response {
-    let name = PathParams::from(params).get("name").unwrap_or("").to_string();
+/// 本文は JSON(`data_base64` に TTF のバイト列、`sha256` は復号後のバイト列の16進)。
+async fn ocr_font(req: Request) -> Response {
+    let Json(req): Json<OcrFontRequest> = match Json::from_body(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let name = req.name;
     if !ocr_data::is_known_font(&name) {
         return ocr_err(StatusCode::NOT_FOUND, "unknown font");
     }
@@ -2173,11 +2184,19 @@ async fn ocr_font(params: Params) -> Response {
         Err(e) => return ocr_err(StatusCode::SERVICE_UNAVAILABLE, e),
     };
     match std::fs::read(&path) {
-        Ok(bytes) => hyper::Response::builder()
-            .status(StatusCode::OK)
-            .header("content-type", "application/octet-stream")
-            .body(fixed_body(Bytes::from(bytes)))
-            .expect("static headers are valid"),
+        Ok(bytes) => {
+            use sha2::Digest as _;
+            let sha256 = sha2::Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect::<String>();
+            json_response(
+                StatusCode::OK,
+                &crate::api_docs::OcrFontResponse {
+                    name,
+                    content_type: "font/ttf".to_string(),
+                    sha256,
+                    data_base64: base64::engine::general_purpose::STANDARD.encode(&bytes),
+                },
+            )
+        }
         Err(e) => ocr_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
@@ -4126,7 +4145,7 @@ async fn main() -> anyhow::Result<()> {
                 async move { ocr_fill_endpoint(req, device).await }
             })))
 
-        .at("/v1/ocr/fonts/:name", get(handler_fn(move |_req, p| async move { ocr_font(p).await })))
+        .at(&connect::path("OcrFont"), cx_post(handler_fn(move |req, _p| async move { ocr_font(req).await })))
         .at(&connect::path("ModelsCatalog"), cx_get(plain(|| Box::pin(list_model_catalog())), None))
 
         .at(&connect::path("GeoRandom"), cx_get(plain(|| Box::pin(geo_random())), None))
