@@ -300,7 +300,29 @@ pub fn context_for(query: &str) -> Option<String> {
     if hits.is_empty() {
         return None;
     }
-    Some(format!("Known facts: {}", hits.iter().map(|e| e.text.as_str()).collect::<Vec<_>>().join(" | ")))
+    Some(format!("Known facts: {}", hits.iter().map(|e| clip_bytes(e.text.as_str(), MAX_ITEM_BYTES)).collect::<Vec<_>>().join(" | ")))
+}
+
+/// 文脈1件あたりの最大バイト数。GPT-2のBPEはバイト単位なので、日本語(1文字3バイト)は
+/// 1文字が2〜3トークンになる。CPU推論はプロンプト長に対して重く(プリフィルが長さの約2.5乗で伸びる)、
+/// 日本語のニュース見出しを足した文脈で8トークンの生成が100秒を超えた
+/// (2026-11-18、本番・手元WSLの両方で再現。英語だけの同じ長さなら約10秒)。
+const MAX_ITEM_BYTES: usize = 100;
+/// 文脈全体(知識+ニュース)の最大バイト数。
+const MAX_CONTEXT_BYTES: usize = 300;
+
+/// 文字境界を守って先頭`max`バイト以内に切り詰める(超えたら末尾に`…`)。
+fn clip_bytes(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        return s.to_string();
+    }
+    let mut end = max;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut out = s[..end].to_string();
+    out.push('…');
+    out
 }
 
 /// 生成プロンプト全体から(最後の`Student:`以降、無ければ全体を検索語として)文脈を作る。
@@ -311,11 +333,12 @@ pub fn context_for_prompt(prompt: &str) -> Option<String> {
     }
     let query = prompt.rsplit_once("Student:").map(|(_, s)| s).unwrap_or(prompt);
     // 共有ニュースストック(news_stock.rs)も足す。realdata.proもopen-englishも同じ入口を通る。
-    match (context_for(query), crate::news_stock::context_for(query)) {
+    let ctx = match (context_for(query), crate::news_stock::context_for(query)) {
         (Some(k), Some(n)) => Some(format!("{k}
 {n}")),
         (k, n) => k.or(n),
-    }
+    };
+    ctx.map(|c| clip_bytes(&c, MAX_CONTEXT_BYTES))
 }
 
 /// モデル切替の直前に呼ぶ世代バックアップ(失敗してもモデル切替は止めない)。
@@ -475,5 +498,20 @@ mod bench_remote {
             best * 1000.0
         };
         println!("{} KB: OLD {:.1} ms -> NEW {:.1} ms", body.len() / 1024, time(&old), time(&new));
+    }
+}
+
+#[cfg(test)]
+mod clip_tests {
+    use super::*;
+
+    #[test]
+    fn clip_keeps_short_and_cuts_long_on_char_boundary() {
+        assert_eq!(clip_bytes("abc", 5), "abc");
+        let long = "あ".repeat(500);
+        let c = clip_bytes(&long, 150);
+        assert!(c.len() <= 150 + '…'.len_utf8());
+        assert!(c.ends_with('…'));
+        assert!(c.is_char_boundary(c.len() - '…'.len_utf8()));
     }
 }
