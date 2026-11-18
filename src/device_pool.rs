@@ -38,7 +38,18 @@ impl DevicePool {
     /// の場合は常に同じデバイスを返す(既存の単一デバイス動作と同じ)。
     pub fn next_device(&self) -> Arc<dyn GpuDevice> {
         let i = self.next.fetch_add(1, Ordering::Relaxed) % self.devices.len();
-        Arc::clone(&self.devices[i])
+        let picked = &self.devices[i];
+        // 実バグ対策(2026-11-18): SPIR-V(`matmul.spv`)の配線に失敗している
+        // (例: 相対パス`../open-cuda/...`がカレントディレクトリ違いで解決
+        // できない)間にVulkanデバイスを選ぶと、opencuda-blasのsgemmが
+        // "no spirv bytes were provided"で失敗する。配線が成功するまで
+        // SPIR-V対応デバイスは選ばず、CPUデバイスへ安全側にフォールバックする。
+        if picked.supports_spirv() && !crate::generation::matmul_spirv_wired() {
+            if let Some(cpu) = self.devices.iter().find(|d| !d.supports_spirv()) {
+                return Arc::clone(cpu);
+            }
+        }
+        Arc::clone(picked)
     }
 
     pub fn device_names(&self) -> Vec<String> {
