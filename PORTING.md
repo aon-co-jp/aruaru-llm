@@ -641,3 +641,17 @@ Heavy Connect calls (Generate*/Translate/Transcribe/Ocr*) pass `src/admission.rs
 **Pitfalls**: never build on the VPS (build in WSL, check glibc <= 2.39, scp, back up, restart, auto-rollback). Without `ARUARU_LLM_GPT2_DIR=models/gpt2` the model fails to load. A bare `wait` in a shell script also waits for a background server.
 **Paste-ready resume message**:
 > Read "Shared-base admission control" in `F:\aruaru-llm/CLAUDE.md` and the 2026-11-09 section at the end of `F:\runo/API-REST-REMAINING-20261106.md`, then resume at open item (1): verify on the real front server that `x-tenant` is set. Do not build on the VPS (WSL build then swap), no new REST (Connect only), never print secrets.
+
+## 2026-11-18 OCRフォント配信のConnect化(別アカウントでの再開用)
+
+**日本語**: `GET /v1/ocr/fonts/:name` を廃止し、`POST /aruaru_llm.v1.Llm/OcrFont`(JSON `{name}` → `{name, content_type, sha256, data_base64}`)へ移した。呼び出し側は RPoem の `open-runo-pdf-ocr`(`client.rs`の`font()`、sha256を照合)の1か所のみ。手元で新200・不明名404・旧404を実測、RPoem `open-runo-pdf-ocr` は22件+スモーク1件成功。
+- ブランチ(push済み、**mainへ未マージ**): aruaru-llm `ocr-font-connect`(`0de391b`系、`94a9eab`)・RPoem `ocr-font-connect`(`345149a`)。
+- **本番は未反映**。VPSの`/root/repository/aruaru-llm`は`c4c94d0`(`28007df`の翻訳ワーカー化より前)なので、`origin/main`をそのまま入れずに、`c4c94d0`へフォント修正だけを載せた`ocr-font-deploy`(`b42fc8c`、ローカルworktree `F:\_work\llm-deploy`、未push)をWSLでリリースビルド中だった(`F:\_workb4.sh`、出力`F:\_workb4.out`)。
+- 未了: (1)ビルド成果物をVPSの`/root/aruaru-llm/target/release/aruaru-llm`へバックアップ付きで差し替え(旧は`*.before-*`で残す)、再起動後に`/healthz`・`OcrFont`200・旧404を確認、(2)aruaru-llmとRPoemの`main`へマージ、(3)`version-control`の`exceptions.toml`に入れた`/v1/ocr/fonts/:name`の例外(`879f619`)を戻す、(4)古い版のPDF変換クライアントはフォント取得が失敗する旨の告知。
+- 注意: VPSではビルドしない(WSLでビルド→差し替え)。秘密は表示しない。REST新設は不可(Connectのみ)。
+
+**English**: `GET /v1/ocr/fonts/:name` was removed and replaced by `POST /aruaru_llm.v1.Llm/OcrFont` (JSON `{name}` -> `{name, content_type, sha256, data_base64}`). The only caller is RPoem's `open-runo-pdf-ocr` (`font()` in `client.rs`, which verifies sha256). Verified locally: new 200, unknown name 404, old route 404; `open-runo-pdf-ocr` passes 22 tests + 1 smoke test.
+- Branches (pushed, **not merged to main**): aruaru-llm `ocr-font-connect` (on `0de391b`, `94a9eab`), RPoem `ocr-font-connect` (`345149a`).
+- **Production is not updated.** The VPS clone is at `c4c94d0` (before the `28007df` translate-worker change), so do not deploy `origin/main` as is; a branch `ocr-font-deploy` (`b42fc8c`, local worktree `F:\_work\llm-deploy`, unpushed) carries only the font fix on top of `c4c94d0` and was being release-built in WSL (`F:\_workb4.sh`, output `F:\_workb4.out`).
+- Open: (1) swap the build into `/root/aruaru-llm/target/release/aruaru-llm` on the VPS with a backup (keep the old one as `*.before-*`), restart, check `/healthz`, `OcrFont` 200 and old route 404; (2) merge to `main` in aruaru-llm and RPoem; (3) revert the exception entry for `/v1/ocr/fonts/:name` added to `version-control`'s `exceptions.toml` (`879f619`); (4) tell users that old PDF-converter clients can no longer fetch fonts.
+- Notes: never build on the VPS (WSL build, then swap); never print secrets; no new REST (Connect only).

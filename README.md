@@ -863,3 +863,6 @@ sudo ./install.sh
 
 ## 再開 / Resume
 再開用メッセージは`CLAUDE.md`末尾「2026-11-15 再開用メッセージ」(日英)。The resume message (JA/EN) is at the end of `CLAUDE.md`.
+
+## 2026-11-18 OCRフォント配信のConnect化 / OCR font delivery moved to Connect
+`GET /v1/ocr/fonts/:name` → `POST /aruaru_llm.v1.Llm/OcrFont`。本番未反映・mainへ未マージ。詳細は`PORTING.md`末尾(日英)。 / Production not updated, not merged to main; see the end of `PORTING.md` (JA/EN).
