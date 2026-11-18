@@ -4787,7 +4787,7 @@ Reading into `serde_json::Value` gives almost no speed-up even with SIMD (188 ms
 
 ## REST全廃→Connect移行 (2026-11-04、ブランチ `connect-migration`)
 - 81ルートを `POST /aruaru_llm.v1.Llm/<Method>`(JSON)へ移行、旧経路は削除(`src/connect.rs`)。もとGETは本文の項目をクエリに直して既存ハンドラへ渡す。エラーは `{"code","message"}`(旧クライアント互換で `error` も同値)。
-- 例外(REST のまま): `/healthz`、`/`(案内)、`/v1/ocr/fonts/:name`(静的フォント)、`/api/docs`。OpenAI互換の受け口はこのサーバーに無い。
+- 例外(REST のまま): `/healthz`、`/`(案内)、`/api/docs`(フォントは Connect の `OcrFont`、旧 `/v1/ocr/fonts/:name` は削除)。OpenAI互換の受け口はこのサーバーに無い。
 - **未了**: 呼び出し元(open-english・aruaru-IME・aruaru-search・audiocafe-tokyo・open-cg-cad・open-backup・360-speaker・e-gov・open-easy-web ほか)の同時修正と、main へのマージ・VPS反映。呼び出し元を直す前にマージ・配備しないこと。一覧は引き継ぎメモを参照。
 - `/admin/tenants` 系(RegisterTenant/ListTenants/RemoveTenant)は元から無認証。別途対応が必要。
 ## API 方針の補足: 用語の整理と使い分け (2026-11-04)
