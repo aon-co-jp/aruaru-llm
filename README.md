@@ -866,3 +866,9 @@ sudo ./install.sh
 
 ## 2026-11-18 OCRフォント配信のConnect化 / OCR font delivery moved to Connect
 `GET /v1/ocr/fonts/:name` → `POST /aruaru_llm.v1.Llm/OcrFont`。本番未反映・mainへ未マージ。詳細は`PORTING.md`末尾(日英)。 / Production not updated, not merged to main; see the end of `PORTING.md` (JA/EN).
+
+### 2026-11-18 Generate遅延の原因と対策・本番の状態(日本語)
+- **原因(ローカルWSLで再現)**: CPU経路のprefillは長さのおよそ2.5乗で遅くなる。GPT-2のBPEはバイト単位で、日本語は1文字あたり2〜3トークン。知識・ニュース文脈でプロンプトが長くなり、8トークンの生成に100秒超かかった(文脈を外すと0.6秒)。スレッド競合ではない(`RAYON_NUM_THREADS`を減らしても変わらず)。
+- **対策**: (1)`main`の`4805563`=プロンプト上限64トークン+知識/ニュース文脈の長さ制限、(2)open-cuda `480718f`=小さな行列積・softmaxのrayonオーバーヘッドを避ける直列化。ocr-font-deployの`cd83d8d`(バイト予算のクリップ)は`4805563`と同等のためmainへは取り込まない。
+- **本番VPSのバイナリ**: 2つのセッションが同じ日にバイナリを差し替えた。最終的に`main`系(他セッションのビルド)へ戻し、Generate 8トークン5秒・`OcrFont`200・旧経路404・`Runtime`200・active を実測。私のビルドは`aruaru-llm.mine-ctxclip-20261118`、ほかのバックアップ=`.before-font-` / `.before-ctxclip-` / `.before-fastgen-` / `.before-gemmfix-20261118`。
+- **次回**: `origin/main`からクリーンビルドして差し替え、Generateを再測定する(未実施)。

@@ -658,3 +658,9 @@ Heavy Connect calls (Generate*/Translate/Transcribe/Ocr*) pass `src/admission.rs
 
 **2026-11-18 追記(完了)**: aruaru-llm は `ocr-font-deploy`(`b42fc8c`)のビルドで本番へ差し替え済み(旧バイナリ `/root/aruaru-llm/target/release/aruaru-llm.before-font-20261118`)。本番で `OcrFont` 200・旧経路404・`Runtime` 200・3サービスactiveを実測。上の「本番は未反映」「mainへ未マージ」は解消済み(両リポジトリとも`main`へ取り込み、`version-control`の例外追記も戻した)。残りは古い版のPDF変換クライアントへの告知のみ。
 **Update (done)**: aruaru-llm was swapped on the VPS with the `ocr-font-deploy` build (`b42fc8c`; old binary `aruaru-llm.before-font-20261118`). Verified in production: `OcrFont` 200, old route 404, `Runtime` 200, 3 services active. The 'production not updated' / 'not merged' notes above are resolved (both repos merged to `main`, the `version-control` exception entry reverted). Only the notice to old PDF-converter clients remains.
+
+## 2026-11-18 Generate遅延の原因と対策・本番の状態(日本語)
+- **原因(ローカルWSLで再現)**: CPU経路のprefillは長さのおよそ2.5乗で遅くなる。GPT-2のBPEはバイト単位で、日本語は1文字あたり2〜3トークン。知識・ニュース文脈でプロンプトが長くなり、8トークンの生成に100秒超かかった(文脈を外すと0.6秒)。スレッド競合ではない(`RAYON_NUM_THREADS`を減らしても変わらず)。
+- **対策**: (1)`main`の`4805563`=プロンプト上限64トークン+知識/ニュース文脈の長さ制限、(2)open-cuda `480718f`=小さな行列積・softmaxのrayonオーバーヘッドを避ける直列化。ocr-font-deployの`cd83d8d`(バイト予算のクリップ)は`4805563`と同等のためmainへは取り込まない。
+- **本番VPSのバイナリ**: 2つのセッションが同じ日にバイナリを差し替えた。最終的に`main`系(他セッションのビルド)へ戻し、Generate 8トークン5秒・`OcrFont`200・旧経路404・`Runtime`200・active を実測。私のビルドは`aruaru-llm.mine-ctxclip-20261118`、ほかのバックアップ=`.before-font-` / `.before-ctxclip-` / `.before-fastgen-` / `.before-gemmfix-20261118`。
+- **次回**: `origin/main`からクリーンビルドして差し替え、Generateを再測定する(未実施)。
