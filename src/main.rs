@@ -44,6 +44,7 @@ mod google_search_fallback_health;
 mod idle_background_fold;
 mod intrusion_detection;
 mod model_catalog;
+mod model_fit;
 mod qwen_generation;
 mod deepseek_generation;
 mod news_geo;
@@ -3984,6 +3985,7 @@ async fn main() -> anyhow::Result<()> {
     // 一切妨げない。詳細・正直な開示はidle_background_fold.rsのモジュール
     // docおよびCLAUDE.mdのHANDOFF(2026-08-19)参照。
     idle_background_fold::spawn();
+    model_fit::spawn_hardware_change_check();
 
     // open-english予備パス(訪問者自身のGoogle Custom Searchキー)の毎朝の
     // 自己点検(2026-09-27新設、`google_search_fallback_health.rs`参照)。
@@ -4148,6 +4150,7 @@ async fn main() -> anyhow::Result<()> {
 
         .at(&connect::path("OcrFont"), cx_post(handler_fn(move |req, _p| async move { ocr_font(req).await })))
         .at(&connect::path("ModelsCatalog"), cx_get(plain(|| Box::pin(list_model_catalog())), None))
+        .at(&connect::path("ModelsCompatible"), cx_get(plain(|| Box::pin(async { json_response(StatusCode::OK, &model_fit::compatible()) })), None))
 
         .at(&connect::path("GeoRandom"), cx_get(plain(|| Box::pin(geo_random())), None))
 

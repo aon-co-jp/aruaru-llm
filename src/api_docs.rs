@@ -111,6 +111,7 @@ pub fn spec() -> Spec {
     // --- モデル管理 ---
     let s = s
         .op(get_t::<CatalogResponse>("/aruaru_llm.v1.Llm/ModelsCatalog", "モデルカタログ", "models"))
+        .op(get_t::<crate::model_fit::CompatibleResponse>("/aruaru_llm.v1.Llm/ModelsCompatible", "この機械に入るモデルの一覧", "models"))
         .op(post_t::<crate::cache_optimizer::CacheOptimizationResult>("/aruaru_llm.v1.Llm/ModelsOptimizeCache", "キャッシュ最適化", "models").body::<OptimizeCacheRequest>())
         .op(post_t::<InstallModelResponse>("/aruaru_llm.v1.Llm/ModelsInstall", "モデルを導入", "models").body::<InstallModelRequest>())
         .op(post_t::<SelectModelResponse>("/aruaru_llm.v1.Llm/ModelsSelect", "モデルを選択", "models").body::<SelectModelRequest>())
