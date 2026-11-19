@@ -664,3 +664,17 @@ Heavy Connect calls (Generate*/Translate/Transcribe/Ocr*) pass `src/admission.rs
 - **対策**: (1)`main`の`4805563`=プロンプト上限64トークン+知識/ニュース文脈の長さ制限、(2)open-cuda `480718f`=小さな行列積・softmaxのrayonオーバーヘッドを避ける直列化。ocr-font-deployの`cd83d8d`(バイト予算のクリップ)は`4805563`と同等のためmainへは取り込まない。
 - **本番VPSのバイナリ**: 2つのセッションが同じ日にバイナリを差し替えた。最終的に`main`系(他セッションのビルド)へ戻し、Generate 8トークン5秒・`OcrFont`200・旧経路404・`Runtime`200・active を実測。私のビルドは`aruaru-llm.mine-ctxclip-20261118`、ほかのバックアップ=`.before-font-` / `.before-ctxclip-` / `.before-fastgen-` / `.before-gemmfix-20261118`。
 - **次回**: `origin/main`からクリーンビルドして差し替え、Generateを再測定する(未実施)。
+
+## 引っ越し・再開メモ(2026-11-19) / Moving and resuming
+
+**日本語**
+- 作業は兄弟リポジトリ(`../RPoem`・`../open-cuda`・`../open-cpu`)が横にある場所で行う(例: `F:\aruaru-llm-auto`)。`F:\_work` の下ではビルドできない。
+- ビルド: `cargo build --release`(Windows)。VPSへ入れるにはWSL(Ubuntu、glibc 2.39)でビルドし、バックアップを取ってから差し替える。
+- 動作確認: `ARUARU_LLM_BIND=127.0.0.1:18199` で起動し、`POST /aruaru_llm.v1.Llm/ModelsCompatible` と、トップ画面の一覧を見る。
+- 再開の最初の一手: GPUを替えた機械で起動して、お勧めモデルが自動で入るか確かめる。
+
+**English**
+- Work in a place where the sibling repositories (`../RPoem`, `../open-cuda`, `../open-cpu`) sit next to this one (for example `F:\aruaru-llm-auto`). It does not build under `F:\_work`.
+- Build with `cargo build --release` on Windows. For the VPS, build in WSL (Ubuntu, glibc 2.39), take a backup, then swap the binary.
+- Check it: start with `ARUARU_LLM_BIND=127.0.0.1:18199`, call `POST /aruaru_llm.v1.Llm/ModelsCompatible`, and open the list on the top page.
+- First step when resuming: start it on a machine with a different GPU and see whether the recommended model installs by itself.

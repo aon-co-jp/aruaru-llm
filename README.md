@@ -872,3 +872,19 @@ sudo ./install.sh
 - **対策**: (1)`main`の`4805563`=プロンプト上限64トークン+知識/ニュース文脈の長さ制限、(2)open-cuda `480718f`=小さな行列積・softmaxのrayonオーバーヘッドを避ける直列化。ocr-font-deployの`cd83d8d`(バイト予算のクリップ)は`4805563`と同等のためmainへは取り込まない。
 - **本番VPSのバイナリ**: 2つのセッションが同じ日にバイナリを差し替えた。最終的に`main`系(他セッションのビルド)へ戻し、Generate 8トークン5秒・`OcrFont`200・旧経路404・`Runtime`200・active を実測。私のビルドは`aruaru-llm.mine-ctxclip-20261118`、ほかのバックアップ=`.before-font-` / `.before-ctxclip-` / `.before-fastgen-` / `.before-gemmfix-20261118`。
 - **次回**: `origin/main`からクリーンビルドして差し替え、Generateを再測定する(未実施)。
+
+## あなたの機械に合うAIモデルを選べます(2026-11-19) / Pick an AI model that fits your machine
+
+**日本語**
+- トップ画面の「この機械で動かせるモデル」で、パソコン・タブレット・スマホ・サーバーのメモリに入りそうなAIモデルの一覧が見られます。
+- 「導入」を押すと、モデルをダウンロードして切り替えます。説明は10か国語から選べます。
+- グラフィックボードを替えたり、入れ直したりすると、次の起動で合うモデルを自動で入れます(止めるには環境変数 `ARUARU_LLM_AUTO_MODEL=0`)。初めての起動では、何もダウンロードしません。
+- 「入る」は目安です。いまの文章生成はCPUで動くので、判定にはメモリ(RAM)を使っています。
+- インストーラーの既定の場所は `C:\aon-co-jp\open-easy-web\` です。ドライブとフォルダーは選べます。
+
+**English**
+- On the top page, "Models for this machine" shows the AI models that should fit the memory of your PC, tablet, phone or server.
+- Press "Install" and the model is downloaded and switched on. You can read the explanation in 10 languages.
+- If you change your graphics card or reinstall, a model that fits is installed for you the next time it starts. To turn this off, set `ARUARU_LLM_AUTO_MODEL=0`. The very first start downloads nothing.
+- "Fits" is only a rough guide. Text generation runs on the CPU today, so the check uses your memory (RAM).
+- The installer puts files in `C:\aon-co-jp\open-easy-web\` by default. You can pick another drive and folder.
