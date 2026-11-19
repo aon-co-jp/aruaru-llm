@@ -4976,3 +4976,63 @@ Heavy Connect calls (Generate*/Translate/Transcribe/Ocr*) pass `src/admission.rs
 - At start-up a fingerprint (GPU name, VRAM, RAM, cores) is written to `models/.hw-fingerprint`. If it differs from last time, the recommended model is installed in the background. The first run only records. `ARUARU_LLM_AUTO_MODEL=0` stops it.
 - The screen is `static/index.html`. It was deployed to the VPS on 2026-11-19 (backup `aruaru-llm.before-modelfit-20261119`).
 - Open: a real GPU-swap test, a real Android device, GPU inference (generation still runs on the CPU).
+
+## 他の言語 / Other languages (2026-11-19)
+
+### 简体中文
+
+- 新增 `src/model_fit.rs`。Connect 接口 `POST /aruaru_llm.v1.Llm/ModelsCompatible` 返回 GPT-2 和 Qwen 系列模型,并标注“可能适合 / 已安装 / 推荐”,附 10 种语言的说明(AI 翻译)。
+- 判断依据是内存(RAM):所需量 = 文件大小 × 加载系数(GPT-2=1,Qwen=2)× 1.25 + 1GB,不超过 RAM 的 85% 即为“适合”。参考了日、英、德、俄语的网络调查(权重 + KV 缓存 + 15〜40% 余量)。
+- 启动时把 GPU 名称、显存、内存、核心数写入 `models/.hw-fingerprint`;与上次不同就在后台安装推荐模型。首次只记录。`ARUARU_LLM_AUTO_MODEL=0` 可关闭。
+- 界面为 `static/index.html`,已于 2026-11-19 部署到 VPS(备份 `aruaru-llm.before-modelfit-20261119`)。未完成:更换 GPU 的实机验证、Android 实机、GPU 推理(生成仍在 CPU)。
+
+### 繁體中文(台灣)
+
+- 新增 `src/model_fit.rs`。Connect 介面 `POST /aruaru_llm.v1.Llm/ModelsCompatible` 回傳 GPT-2 與 Qwen 系列模型,並標註「可能適合 / 已安裝 / 推薦」,附 10 種語言的說明(AI 翻譯)。
+- 判斷依據是記憶體(RAM):所需量 = 檔案大小 × 載入係數(GPT-2=1,Qwen=2)× 1.25 + 1GB,不超過 RAM 的 85% 即為「適合」。參考了日、英、德、俄語的網路調查(權重 + KV 快取 + 15〜40% 餘裕)。
+- 啟動時把 GPU 名稱、顯示記憶體、記憶體、核心數寫入 `models/.hw-fingerprint`;與上次不同就在背景安裝推薦模型。第一次只記錄。`ARUARU_LLM_AUTO_MODEL=0` 可關閉。
+- 介面為 `static/index.html`,已於 2026-11-19 部署到 VPS(備份 `aruaru-llm.before-modelfit-20261119`)。未完成:更換 GPU 的實機驗證、Android 實機、GPU 推論(生成仍在 CPU)。
+
+### 한국어
+
+- `src/model_fit.rs`를 추가했습니다. Connect 호출 `POST /aruaru_llm.v1.Llm/ModelsCompatible`가 GPT-2와 Qwen 계열 모델을 "들어갈 듯함 / 설치됨 / 추천" 표시와 10개 언어 설명(AI 번역)과 함께 돌려줍니다.
+- 판단은 메모리(RAM) 기준입니다. 필요량 = 파일 크기 × 로드 계수(GPT-2=1, Qwen=2) × 1.25 + 1GB 가 RAM의 85% 이내면 "맞음"입니다. 일본어·영어·독일어·러시아어 웹 조사(가중치 + KV 캐시 + 여유 15〜40%)에 맞췄습니다.
+- 시작할 때 GPU 이름, VRAM, RAM, 코어 수를 `models/.hw-fingerprint`에 기록하고, 지난번과 다르면 백그라운드에서 추천 모델을 설치합니다. 처음에는 기록만 합니다. `ARUARU_LLM_AUTO_MODEL=0`으로 끌 수 있습니다.
+- 화면은 `static/index.html`이며 2026-11-19에 VPS에 반영했습니다(백업 `aruaru-llm.before-modelfit-20261119`). 남은 일: GPU 교체 실기 확인, Android 실기, GPU 추론(생성은 아직 CPU).
+
+### Deutsch
+
+- `src/model_fit.rs` ist neu. Der Connect-Aufruf `POST /aruaru_llm.v1.Llm/ModelsCompatible` liefert die GPT-2- und Qwen-Modelle mit den Kennzeichen „passt wohl“, „installiert“ und „empfohlen“ sowie einer Erklärung in 10 Sprachen (KI-Übersetzung).
+- Geprüft wird gegen den Arbeitsspeicher (RAM): Bedarf = Dateigröße × Ladefaktor (GPT-2 = 1, Qwen = 2) × 1,25 + 1 GB; liegt er innerhalb von 85 % des RAM, gilt das Modell als passend. Grundlage ist eine Web-Recherche auf Japanisch, Englisch, Deutsch und Russisch (Gewichte + KV-Cache + 15–40 % Reserve).
+- Beim Start werden GPU-Name, VRAM, RAM und Kernzahl in `models/.hw-fingerprint` gespeichert. Weicht der Wert vom letzten Mal ab, wird das empfohlene Modell im Hintergrund installiert. Beim ersten Start wird nur gespeichert. Abschalten mit `ARUARU_LLM_AUTO_MODEL=0`.
+- Die Oberfläche ist `static/index.html`; sie wurde am 2026-11-19 auf den VPS gebracht (Sicherung `aruaru-llm.before-modelfit-20261119`). Offen: echter GPU-Wechseltest, echtes Android-Gerät, GPU-Inferenz (die Generierung läuft weiter auf der CPU).
+
+### Français
+
+- Ajout de `src/model_fit.rs`. L'appel Connect `POST /aruaru_llm.v1.Llm/ModelsCompatible` renvoie les modèles GPT-2 et Qwen avec les indicateurs « tient probablement », « installé » et « recommandé », plus une explication en 10 langues (traduite par IA).
+- Le test porte sur la mémoire (RAM) : besoin = taille du fichier × facteur de chargement (GPT-2 = 1, Qwen = 2) × 1,25 + 1 Go ; si c'est dans les 85 % de la RAM, le modèle « convient ». Cela suit une recherche web en japonais, anglais, allemand et russe (poids + cache KV + marge de 15 à 40 %).
+- Au démarrage, une empreinte (nom du GPU, VRAM, RAM, cœurs) est écrite dans `models/.hw-fingerprint`. Si elle diffère de la précédente, le modèle recommandé est installé en arrière-plan. Au premier démarrage, on enregistre seulement. `ARUARU_LLM_AUTO_MODEL=0` désactive.
+- L'interface est `static/index.html`, déployée sur le VPS le 2026-11-19 (sauvegarde `aruaru-llm.before-modelfit-20261119`). Reste à faire : test réel avec changement de GPU, appareil Android réel, inférence GPU (la génération reste sur le processeur).
+
+### Español
+
+- Se añadió `src/model_fit.rs`. La llamada Connect `POST /aruaru_llm.v1.Llm/ModelsCompatible` devuelve los modelos GPT-2 y Qwen con las marcas «probablemente cabe», «instalado» y «recomendado», y una explicación en 10 idiomas (traducida por IA).
+- La comprobación usa la memoria (RAM): necesidad = tamaño del archivo × factor de carga (GPT-2 = 1, Qwen = 2) × 1,25 + 1 GB; si cabe en el 85 % de la RAM, «cabe». Sigue una búsqueda web en japonés, inglés, alemán y ruso (pesos + caché KV + margen del 15 al 40 %).
+- Al arrancar se guarda una huella (nombre de GPU, VRAM, RAM, núcleos) en `models/.hw-fingerprint`. Si difiere de la anterior, el modelo recomendado se instala en segundo plano. En el primer arranque solo se registra. `ARUARU_LLM_AUTO_MODEL=0` lo desactiva.
+- La interfaz es `static/index.html`, desplegada en el VPS el 2026-11-19 (copia `aruaru-llm.before-modelfit-20261119`). Pendiente: prueba real con cambio de GPU, dispositivo Android real, inferencia en GPU (la generación sigue en la CPU).
+
+### Português (BR)
+
+- Foi adicionado `src/model_fit.rs`. A chamada Connect `POST /aruaru_llm.v1.Llm/ModelsCompatible` devolve os modelos GPT-2 e Qwen com as marcas "provavelmente cabe", "instalado" e "recomendado", e uma explicação em 10 idiomas (tradução por IA).
+- A checagem usa a memória (RAM): necessário = tamanho do arquivo × fator de carga (GPT-2 = 1, Qwen = 2) × 1,25 + 1 GB; se couber em 85% da RAM, "cabe". Segue uma pesquisa na web em japonês, inglês, alemão e russo (pesos + cache KV + margem de 15 a 40%).
+- Na inicialização, uma impressão digital (nome da GPU, VRAM, RAM, núcleos) é gravada em `models/.hw-fingerprint`. Se for diferente da anterior, o modelo recomendado é instalado em segundo plano. Na primeira vez só registra. `ARUARU_LLM_AUTO_MODEL=0` desativa.
+- A interface é `static/index.html`, implantada no VPS em 2026-11-19 (backup `aruaru-llm.before-modelfit-20261119`). Pendente: teste real com troca de GPU, aparelho Android real, inferência em GPU (a geração continua na CPU).
+
+### Русский
+
+- Добавлен `src/model_fit.rs`. Вызов Connect `POST /aruaru_llm.v1.Llm/ModelsCompatible` возвращает модели GPT-2 и Qwen с пометками «вероятно подходит», «установлена», «рекомендуется» и пояснением на 10 языках (перевод ИИ).
+- Проверка идёт по оперативной памяти (RAM): нужно = размер файла × коэффициент загрузки (GPT-2 = 1, Qwen = 2) × 1,25 + 1 ГБ; если это не более 85 % RAM, модель «подходит». Основа — веб-поиск на японском, английском, немецком и русском (веса + KV-кэш + запас 15–40 %).
+- При запуске отпечаток (имя GPU, VRAM, RAM, число ядер) записывается в `models/.hw-fingerprint`; если он изменился, рекомендуемая модель устанавливается в фоне. При первом запуске только запись. Отключить: `ARUARU_LLM_AUTO_MODEL=0`.
+- Интерфейс — `static/index.html`, развёрнут на VPS 2026-11-19 (резервная копия `aruaru-llm.before-modelfit-20261119`). Не сделано: реальная проверка со сменой GPU, реальное Android-устройство, вывод на GPU (генерация пока на процессоре).
+
+(简体中文: AI 翻译,尚未经母语者确认。; 繁體中文(台灣): AI 翻譯,尚未經母語者確認。; 한국어: AI 번역이며 원어민 확인 전입니다.; Deutsch: KI-Übersetzung, noch nicht von Muttersprachlern geprüft.; Français: Traduction par IA, pas encore relue par des locuteurs natifs.; Español: Traducción por IA, aún sin revisión de hablantes nativos.; Português (BR): Tradução por IA, ainda sem revisão de falantes nativos.; Русский: Перевод выполнен ИИ, носителями языка пока не проверен.)

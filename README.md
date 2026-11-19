@@ -888,3 +888,63 @@ sudo ./install.sh
 - If you change your graphics card or reinstall, a model that fits is installed for you the next time it starts. To turn this off, set `ARUARU_LLM_AUTO_MODEL=0`. The very first start downloads nothing.
 - "Fits" is only a rough guide. Text generation runs on the CPU today, so the check uses your memory (RAM).
 - The installer puts files in `C:\aon-co-jp\open-easy-web\` by default. You can pick another drive and folder.
+
+## 他の言語 / Other languages (2026-11-19)
+
+### 简体中文
+
+- 在首页的“本机可运行的模型”中,可以看到适合你的电脑、平板、手机或服务器内存的 AI 模型列表。
+- 点“安装”就会下载模型并切换过去。说明可选 10 种语言。
+- 更换显卡或重装后,下次启动时会自动安装合适的模型(用环境变量 `ARUARU_LLM_AUTO_MODEL=0` 可关闭)。第一次启动不会下载任何东西。
+- “适合”只是大致参考。目前文本生成在 CPU 上运行,所以判断依据是内存(RAM)。安装程序默认位置是 `C:\aon-co-jp\open-easy-web\`,可自行选择磁盘和文件夹。
+
+### 繁體中文(台灣)
+
+- 在首頁的「本機可執行的模型」中,可以看到適合你的電腦、平板、手機或伺服器記憶體的 AI 模型清單。
+- 按「安裝」就會下載模型並切換過去。說明可選 10 種語言。
+- 更換顯示卡或重新安裝後,下次啟動時會自動安裝合適的模型(用環境變數 `ARUARU_LLM_AUTO_MODEL=0` 可關閉)。第一次啟動不會下載任何東西。
+- 「適合」只是大略的參考。目前文字生成是在 CPU 上執行,所以判斷依據是記憶體(RAM)。安裝程式預設位置是 `C:\aon-co-jp\open-easy-web\`,可自行選擇磁碟與資料夾。
+
+### 한국어
+
+- 첫 화면의 "이 기기에서 돌릴 수 있는 모델"에서 PC, 태블릿, 스마트폰, 서버의 메모리에 들어갈 만한 AI 모델 목록을 볼 수 있습니다.
+- "설치"를 누르면 모델을 내려받아 바로 바꿉니다. 설명은 10개 언어 중에서 고를 수 있습니다.
+- 그래픽 카드를 바꾸거나 다시 설치하면 다음 실행 때 맞는 모델이 자동으로 설치됩니다(끄려면 환경 변수 `ARUARU_LLM_AUTO_MODEL=0`). 처음 실행할 때는 아무것도 내려받지 않습니다.
+- "맞음"은 대략적인 기준입니다. 지금은 문장 생성이 CPU에서 돌아가므로 메모리(RAM)로 판단합니다. 설치 프로그램의 기본 위치는 `C:\aon-co-jp\open-easy-web\`이며, 드라이브와 폴더를 고를 수 있습니다.
+
+### Deutsch
+
+- Auf der Startseite zeigt „Modelle für diesen Rechner“ die KI-Modelle, die voraussichtlich in den Speicher Ihres PCs, Tablets, Smartphones oder Servers passen.
+- Mit „Installieren“ wird das Modell heruntergeladen und gleich umgeschaltet. Die Erklärung gibt es in 10 Sprachen.
+- Wenn Sie die Grafikkarte wechseln oder neu installieren, wird beim nächsten Start automatisch ein passendes Modell installiert (abschaltbar mit `ARUARU_LLM_AUTO_MODEL=0`). Beim allerersten Start wird nichts heruntergeladen.
+- „Passt“ ist nur eine grobe Orientierung. Die Textgenerierung läuft derzeit auf der CPU, deshalb zählt der Arbeitsspeicher (RAM). Der Installer nutzt standardmäßig `C:\aon-co-jp\open-easy-web\`; Laufwerk und Ordner sind wählbar.
+
+### Français
+
+- Sur la page d'accueil, « Modèles pour cette machine » affiche les modèles d'IA qui devraient tenir dans la mémoire de votre PC, tablette, smartphone ou serveur.
+- Appuyez sur « Installer » : le modèle est téléchargé puis activé. L'explication existe en 10 langues.
+- Si vous changez de carte graphique ou réinstallez, un modèle adapté est installé automatiquement au prochain démarrage (désactivable avec `ARUARU_LLM_AUTO_MODEL=0`). Le tout premier démarrage ne télécharge rien.
+- « Convient » n'est qu'une indication approximative. La génération de texte tourne aujourd'hui sur le processeur, donc on se base sur la mémoire (RAM). L'installateur utilise par défaut `C:\aon-co-jp\open-easy-web\` ; vous pouvez choisir un autre lecteur et dossier.
+
+### Español
+
+- En la página principal, «Modelos para esta máquina» muestra los modelos de IA que deberían caber en la memoria de tu PC, tableta, móvil o servidor.
+- Pulsa «Instalar» y el modelo se descarga y se activa. La explicación está en 10 idiomas.
+- Si cambias la tarjeta gráfica o reinstalas, en el siguiente inicio se instala automáticamente un modelo adecuado (se desactiva con `ARUARU_LLM_AUTO_MODEL=0`). El primer inicio no descarga nada.
+- «Cabe» es solo una guía aproximada. Hoy la generación de texto se ejecuta en la CPU, así que se usa la memoria (RAM). El instalador usa por defecto `C:\aon-co-jp\open-easy-web\`; puedes elegir otra unidad y carpeta.
+
+### Português (BR)
+
+- Na página inicial, "Modelos para esta máquina" mostra os modelos de IA que devem caber na memória do seu PC, tablet, celular ou servidor.
+- Toque em "Instalar" e o modelo é baixado e ativado. A explicação está em 10 idiomas.
+- Se você trocar a placa de vídeo ou reinstalar, um modelo adequado é instalado automaticamente na próxima inicialização (desative com `ARUARU_LLM_AUTO_MODEL=0`). A primeira inicialização não baixa nada.
+- "Cabe" é apenas uma estimativa. Hoje a geração de texto roda na CPU, por isso usamos a memória (RAM). O instalador usa por padrão `C:\aon-co-jp\open-easy-web\`; você pode escolher outra unidade e pasta.
+
+### Русский
+
+- На главной странице раздел «Модели для этого устройства» показывает ИИ-модели, которые, скорее всего, поместятся в память вашего ПК, планшета, телефона или сервера.
+- Нажмите «Установить» — модель скачается и сразу включится. Пояснение есть на 10 языках.
+- Если сменить видеокарту или переустановить систему, при следующем запуске подходящая модель установится сама (отключить: `ARUARU_LLM_AUTO_MODEL=0`). При самом первом запуске ничего не скачивается.
+- «Подходит» — лишь примерная оценка. Сейчас текст генерируется на процессоре, поэтому учитывается оперативная память (RAM). Установщик по умолчанию использует `C:\aon-co-jp\open-easy-web\`; диск и папку можно выбрать.
+
+(简体中文: AI 翻译,尚未经母语者确认。; 繁體中文(台灣): AI 翻譯,尚未經母語者確認。; 한국어: AI 번역이며 원어민 확인 전입니다.; Deutsch: KI-Übersetzung, noch nicht von Muttersprachlern geprüft.; Français: Traduction par IA, pas encore relue par des locuteurs natifs.; Español: Traducción por IA, aún sin revisión de hablantes nativos.; Português (BR): Tradução por IA, ainda sem revisão de falantes nativos.; Русский: Перевод выполнен ИИ, носителями языка пока не проверен.)

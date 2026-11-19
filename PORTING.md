@@ -678,3 +678,55 @@ Heavy Connect calls (Generate*/Translate/Transcribe/Ocr*) pass `src/admission.rs
 - Build with `cargo build --release` on Windows. For the VPS, build in WSL (Ubuntu, glibc 2.39), take a backup, then swap the binary.
 - Check it: start with `ARUARU_LLM_BIND=127.0.0.1:18199`, call `POST /aruaru_llm.v1.Llm/ModelsCompatible`, and open the list on the top page.
 - First step when resuming: start it on a machine with a different GPU and see whether the recommended model installs by itself.
+
+## 他の言語 / Other languages (2026-11-19)
+
+### 简体中文
+
+- 请在兄弟仓库(`../RPoem`、`../open-cuda`、`../open-cpu`)就在旁边的位置工作(例如 `F:\aruaru-llm-auto`)。在 `F:\_work` 下无法构建。
+- Windows 上用 `cargo build --release` 构建。要部署到 VPS,请在 WSL(Ubuntu,glibc 2.39)中构建,先备份再替换二进制文件。
+- 验证:用 `ARUARU_LLM_BIND=127.0.0.1:18199` 启动,调用 `POST /aruaru_llm.v1.Llm/ModelsCompatible`,并查看首页的列表。恢复工作时第一步:在更换了 GPU 的机器上启动,看推荐模型能否自动安装。
+
+### 繁體中文(台灣)
+
+- 請在兄弟儲存庫(`../RPoem`、`../open-cuda`、`../open-cpu`)就在旁邊的位置作業(例如 `F:\aruaru-llm-auto`)。在 `F:\_work` 底下無法建置。
+- Windows 上用 `cargo build --release` 建置。要部署到 VPS,請在 WSL(Ubuntu,glibc 2.39)中建置,先備份再替換執行檔。
+- 驗證:用 `ARUARU_LLM_BIND=127.0.0.1:18199` 啟動,呼叫 `POST /aruaru_llm.v1.Llm/ModelsCompatible`,並查看首頁的清單。恢復工作時第一步:在更換了 GPU 的機器上啟動,看推薦模型能否自動安裝。
+
+### 한국어
+
+- 형제 저장소(`../RPoem`, `../open-cuda`, `../open-cpu`)가 바로 옆에 있는 곳에서 작업하세요(예: `F:\aruaru-llm-auto`). `F:\_work` 아래에서는 빌드되지 않습니다.
+- Windows에서는 `cargo build --release`로 빌드합니다. VPS에 넣을 때는 WSL(Ubuntu, glibc 2.39)에서 빌드하고, 백업을 만든 뒤 바이너리를 교체합니다.
+- 확인: `ARUARU_LLM_BIND=127.0.0.1:18199`로 실행해 `POST /aruaru_llm.v1.Llm/ModelsCompatible`를 호출하고 첫 화면의 목록을 봅니다. 작업을 이어받을 때 첫걸음: GPU를 바꾼 기기에서 실행해 추천 모델이 자동으로 설치되는지 확인합니다.
+
+### Deutsch
+
+- Arbeiten Sie dort, wo die Schwester-Repositories (`../RPoem`, `../open-cuda`, `../open-cpu`) direkt daneben liegen (z. B. `F:\aruaru-llm-auto`). Unter `F:\_work` lässt es sich nicht bauen.
+- Unter Windows mit `cargo build --release` bauen. Für den VPS in WSL (Ubuntu, glibc 2.39) bauen, eine Sicherung anlegen und dann die Binärdatei austauschen.
+- Prüfen: mit `ARUARU_LLM_BIND=127.0.0.1:18199` starten, `POST /aruaru_llm.v1.Llm/ModelsCompatible` aufrufen und die Liste auf der Startseite ansehen. Erster Schritt beim Weitermachen: auf einem Rechner mit anderer GPU starten und prüfen, ob sich das empfohlene Modell von selbst installiert.
+
+### Français
+
+- Travaillez à un endroit où les dépôts voisins (`../RPoem`, `../open-cuda`, `../open-cpu`) sont juste à côté (par exemple `F:\aruaru-llm-auto`). Cela ne se compile pas sous `F:\_work`.
+- Sous Windows : `cargo build --release`. Pour le VPS, compilez dans WSL (Ubuntu, glibc 2.39), faites une sauvegarde, puis remplacez le binaire.
+- Vérification : lancez avec `ARUARU_LLM_BIND=127.0.0.1:18199`, appelez `POST /aruaru_llm.v1.Llm/ModelsCompatible` et regardez la liste sur la page d'accueil. Premier pas à la reprise : démarrer sur une machine avec un autre GPU et voir si le modèle recommandé s'installe tout seul.
+
+### Español
+
+- Trabaja en un lugar donde los repositorios hermanos (`../RPoem`, `../open-cuda`, `../open-cpu`) estén justo al lado (por ejemplo `F:\aruaru-llm-auto`). No compila bajo `F:\_work`.
+- En Windows: `cargo build --release`. Para el VPS, compila en WSL (Ubuntu, glibc 2.39), haz una copia de seguridad y luego sustituye el binario.
+- Comprobación: arranca con `ARUARU_LLM_BIND=127.0.0.1:18199`, llama a `POST /aruaru_llm.v1.Llm/ModelsCompatible` y mira la lista de la página principal. Primer paso al retomar: arrancar en una máquina con otra GPU y ver si el modelo recomendado se instala solo.
+
+### Português (BR)
+
+- Trabalhe num lugar onde os repositórios irmãos (`../RPoem`, `../open-cuda`, `../open-cpu`) estejam ao lado (por exemplo `F:\aruaru-llm-auto`). Não compila em `F:\_work`.
+- No Windows: `cargo build --release`. Para o VPS, compile no WSL (Ubuntu, glibc 2.39), faça um backup e então troque o binário.
+- Verificação: inicie com `ARUARU_LLM_BIND=127.0.0.1:18199`, chame `POST /aruaru_llm.v1.Llm/ModelsCompatible` e veja a lista na página inicial. Primeiro passo ao retomar: iniciar numa máquina com outra GPU e ver se o modelo recomendado se instala sozinho.
+
+### Русский
+
+- Работайте там, где рядом лежат соседние репозитории (`../RPoem`, `../open-cuda`, `../open-cpu`), например `F:\aruaru-llm-auto`. Под `F:\_work` проект не собирается.
+- В Windows: `cargo build --release`. Для VPS собирайте в WSL (Ubuntu, glibc 2.39), сделайте резервную копию и затем замените бинарный файл.
+- Проверка: запустите с `ARUARU_LLM_BIND=127.0.0.1:18199`, вызовите `POST /aruaru_llm.v1.Llm/ModelsCompatible` и посмотрите список на главной странице. Первый шаг при возобновлении: запустить на машине с другим GPU и проверить, ставится ли рекомендуемая модель сама.
+
+(简体中文: AI 翻译,尚未经母语者确认。; 繁體中文(台灣): AI 翻譯,尚未經母語者確認。; 한국어: AI 번역이며 원어민 확인 전입니다.; Deutsch: KI-Übersetzung, noch nicht von Muttersprachlern geprüft.; Français: Traduction par IA, pas encore relue par des locuteurs natifs.; Español: Traducción por IA, aún sin revisión de hablantes nativos.; Português (BR): Tradução por IA, ainda sem revisão de falantes nativos.; Русский: Перевод выполнен ИИ, носителями языка пока не проверен.)
