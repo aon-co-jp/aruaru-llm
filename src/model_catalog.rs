@@ -206,7 +206,7 @@ pub fn installed_qwen_ids(models_root: &Path) -> Vec<&'static str> {
         .iter()
         .filter(|e| {
             let dir = models_root.join(e.id);
-            REQUIRED_FILES.iter().all(|f| dir.join(f).exists())
+            files_present(&dir)
         })
         .map(|e| e.id)
         .collect()
@@ -286,26 +286,93 @@ async fn install_from_base_url(entry: &CatalogEntry, dest_dir: &Path, base_url: 
             _ => entry.hf_repo,
         };
         let url = resolve_url(base_url, source_repo, filename);
-        tracing::info!(model = entry.id, file = filename, url = %url, "downloading");
-
-        let response = client
-            .get(&url)
-            .send()
-            .await
-            .with_context(|| format!("request failed for {url}"))?
-            .error_for_status()
-            .with_context(|| format!("non-success HTTP status for {url}"))?;
-
-        let tmp_path = dest.with_extension(format!("{}.part", filename.rsplit('.').next().unwrap_or("part")));
-        let bytes = response.bytes().await.with_context(|| format!("failed to read response body for {url}"))?;
-        tokio::fs::write(&tmp_path, &bytes).await.with_context(|| format!("failed to write {tmp_path:?}"))?;
-        tokio::fs::rename(&tmp_path, &dest)
-            .await
-            .with_context(|| format!("failed to move {tmp_path:?} to {dest:?}"))?;
-        tracing::info!(model = entry.id, file = filename, bytes = bytes.len(), "download complete");
+        // 単一ファイルの`model.safetensors`が無いモデル(Qwen2.5-3B等、重みが
+        // 複数ファイルに分割されている)は404になる。その場合だけ
+        // `model.safetensors.index.json`経由の分割取得へ切り替える(2026-11-19)。
+        if *filename == "model.safetensors" {
+            let resp = client.get(&url).send().await.with_context(|| format!("request failed for {url}"))?;
+            if resp.status() == reqwest::StatusCode::NOT_FOUND {
+                install_sharded(entry, dest_dir, base_url, &client).await?;
+                continue;
+            }
+            let resp = resp.error_for_status().with_context(|| format!("non-success HTTP status for {url}"))?;
+            stream_to_file(resp, &dest, entry.id, filename).await?;
+            continue;
+        }
+        download_file(&client, &url, &dest, entry.id, filename).await?;
     }
 
     Ok(())
+}
+
+/// 応答本文をチャンクごとに`.part`へ書き、完了後にアトミックに置き換える
+/// (数GBの重みを丸ごとメモリへ載せない)。
+async fn stream_to_file(mut response: reqwest::Response, dest: &Path, model: &str, filename: &str) -> Result<()> {
+    use tokio::io::AsyncWriteExt;
+    let tmp_path = dest.with_file_name(format!("{}.part", dest.file_name().and_then(|n| n.to_str()).unwrap_or("download")));
+    let mut f = tokio::fs::File::create(&tmp_path).await.with_context(|| format!("failed to create {tmp_path:?}"))?;
+    let mut total: u64 = 0;
+    while let Some(chunk) = response.chunk().await.with_context(|| format!("failed to read response body for {filename}"))? {
+        f.write_all(&chunk).await.with_context(|| format!("failed to write {tmp_path:?}"))?;
+        total += chunk.len() as u64;
+    }
+    f.flush().await.ok();
+    drop(f);
+    tokio::fs::rename(&tmp_path, dest).await.with_context(|| format!("failed to move {tmp_path:?} to {dest:?}"))?;
+    tracing::info!(model, file = filename, bytes = total, "download complete");
+    Ok(())
+}
+
+async fn download_file(client: &reqwest::Client, url: &str, dest: &Path, model: &str, filename: &str) -> Result<()> {
+    tracing::info!(model, file = filename, url = %url, "downloading");
+    let response = client.get(url).send().await.with_context(|| format!("request failed for {url}"))?.error_for_status().with_context(|| format!("non-success HTTP status for {url}"))?;
+    stream_to_file(response, dest, model, filename).await
+}
+
+#[derive(serde::Deserialize)]
+struct WeightIndex {
+    weight_map: std::collections::HashMap<String, String>,
+}
+
+/// `model.safetensors.index.json`を取得し、参照される全シャードを順に取得する。
+async fn install_sharded(entry: &CatalogEntry, dest_dir: &Path, base_url: &str, client: &reqwest::Client) -> Result<()> {
+    let index_dest = dest_dir.join("model.safetensors.index.json");
+    if !index_dest.exists() {
+        let url = resolve_url(base_url, entry.hf_repo, "model.safetensors.index.json");
+        download_file(client, &url, &index_dest, entry.id, "model.safetensors.index.json").await?;
+    }
+    let bytes = tokio::fs::read(&index_dest).await.with_context(|| format!("failed to read {index_dest:?}"))?;
+    let index: WeightIndex = sonic_rs::from_slice(&bytes).context("failed to parse model.safetensors.index.json")?;
+    let mut shards: Vec<String> = index.weight_map.into_values().collect();
+    shards.sort();
+    shards.dedup();
+    anyhow::ensure!(!shards.is_empty(), "model.safetensors.index.json has an empty weight_map");
+    for shard in &shards {
+        // ディレクトリ外へ書かれないよう、パス区切りを含む名前は拒否する。
+        anyhow::ensure!(!shard.contains('/') && !shard.contains('\\') && !shard.contains(".."), "unsafe shard file name {shard:?}");
+        let dest = dest_dir.join(shard);
+        if dest.exists() {
+            tracing::info!(model = entry.id, file = %shard, "shard already present, skipping download");
+            continue;
+        }
+        let url = resolve_url(base_url, entry.hf_repo, shard);
+        download_file(client, &url, &dest, entry.id, shard).await?;
+    }
+    Ok(())
+}
+
+/// 重みが揃っているか(単一ファイル、または分割+index.jsonの全シャード)。
+pub fn weights_present(dir: &Path) -> bool {
+    if dir.join("model.safetensors").exists() {
+        return true;
+    }
+    let Ok(bytes) = std::fs::read(dir.join("model.safetensors.index.json")) else { return false };
+    let Ok(index) = sonic_rs::from_slice::<WeightIndex>(&bytes) else { return false };
+    !index.weight_map.is_empty() && index.weight_map.values().all(|f| dir.join(f).exists())
+}
+
+fn files_present(dir: &Path) -> bool {
+    REQUIRED_FILES.iter().all(|f| if *f == "model.safetensors" { weights_present(dir) } else { dir.join(f).exists() })
 }
 
 /// `models_root`配下で、カタログの各エントリが既にインストール済み
@@ -315,7 +382,7 @@ pub fn installed_ids(models_root: &Path) -> Vec<&'static str> {
         .iter()
         .filter(|e| {
             let dir = models_root.join(e.id);
-            REQUIRED_FILES.iter().all(|f| dir.join(f).exists())
+            files_present(&dir)
         })
         .map(|e| e.id)
         .collect()
@@ -444,5 +511,42 @@ mod tests {
         // 再度リクエストせず(mockitoの各モックは1回だけ期待、Drop時に
         // 呼び出し回数を検証する)成功すること。
         install_from_base_url(&entry, &dest, &server.url()).await.expect("re-running install on an already-complete directory should be a no-op success");
+    }
+
+    /// 単一ファイルが404の分割モデルを、index.json経由で全シャード取得できること(実HFへは接続しない)。
+    #[tokio::test]
+    async fn install_falls_back_to_sharded_download_when_single_file_is_404() {
+        let mut server = mockito::Server::new_async().await;
+        let base = "/mock-org/mock-sharded/resolve/main";
+        let _c = server.mock("GET", format!("{base}/config.json").as_str()).with_status(200).with_body("{}").create_async().await;
+        let _t = server.mock("GET", format!("{base}/tokenizer.json").as_str()).with_status(200).with_body("{}").create_async().await;
+        let _s = server.mock("GET", format!("{base}/model.safetensors").as_str()).with_status(404).create_async().await;
+        let _i = server
+            .mock("GET", format!("{base}/model.safetensors.index.json").as_str())
+            .with_status(200)
+            .with_body(r#"{"weight_map":{"a":"model-00001-of-00002.safetensors","b":"model-00002-of-00002.safetensors","c":"model-00001-of-00002.safetensors"}}"#)
+            .create_async()
+            .await;
+        let _p1 = server.mock("GET", format!("{base}/model-00001-of-00002.safetensors").as_str()).with_status(200).with_body("shard-one").expect(1).create_async().await;
+        let _p2 = server.mock("GET", format!("{base}/model-00002-of-00002.safetensors").as_str()).with_status(200).with_body("shard-two").expect(1).create_async().await;
+        let entry = CatalogEntry {
+            id: "mock-sharded",
+            display_name_ja: "テスト用",
+            display_name_en: "test",
+            hf_repo: "mock-org/mock-sharded",
+            tokenizer_hf_repo: None,
+            approx_size_mb: 0,
+            license_note_ja: "テスト専用。",
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("mock-sharded");
+        assert!(!weights_present(&dest));
+        install_from_base_url(&entry, &dest, &server.url()).await.expect("sharded install should succeed");
+        assert_eq!(std::fs::read(dest.join("model-00002-of-00002.safetensors")).unwrap(), b"shard-two");
+        assert!(weights_present(&dest) && files_present(&dest));
+        // 再実行は何も取得しない(各シャードのモックは1回だけ許可)。
+        install_from_base_url(&entry, &dest, &server.url()).await.expect("re-run should be a no-op");
+        std::fs::remove_file(dest.join("model-00001-of-00002.safetensors")).unwrap();
+        assert!(!weights_present(&dest), "missing shard must count as not installed");
     }
 }
