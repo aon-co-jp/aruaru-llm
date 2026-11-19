@@ -124,5 +124,54 @@ genBtn.addEventListener('click', async () => {
   }
 });
 </script>
+
+<h2>この機械で動かせるモデル / Models for this machine</h2>
+<p>
+  <select id="fitLang"></select>
+  <button id="fitBtn">一覧を表示 / Show list</button>
+</p>
+<p class="disclosure" id="fitExplain"></p>
+<table id="fitTable" style="border-collapse:collapse"></table>
+<div id="fitStatus"></div>
+<script>
+(function(){
+  const sel = document.getElementById('fitLang'), btn = document.getElementById('fitBtn');
+  const exp = document.getElementById('fitExplain'), tbl = document.getElementById('fitTable'), st = document.getElementById('fitStatus');
+  let data = null;
+  const call = async (m, body) => { const r = await fetch('/aruaru_llm.v1.Llm/' + m, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) }); return [r.ok, await r.json()]; };
+  const show = () => { if (!data) return; const e = data.explanation.find(x => x[0] === sel.value); exp.textContent = e ? e[1] : ''; };
+  const render = () => {
+    tbl.textContent = '';
+    data.models.forEach(m => {
+      const tr = tbl.insertRow();
+      [m.display_name_ja, (m.approx_size_mb / 1024).toFixed(1) + ' GB',
+       m.fits ? '入る見込み / likely fits' : '重い / too heavy',
+       (m.installed ? '導入済み / installed ' : '') + (m.recommended ? '★お勧め / recommended' : '')].forEach(t => { const td = tr.insertCell(); td.textContent = t; td.style.padding = '2px 8px'; td.style.border = '1px solid #8884'; });
+      const td = tr.insertCell(); td.style.padding = '2px 8px';
+      const b = document.createElement('button'); b.textContent = m.installed ? '使う / Use' : '導入 / Install';
+      b.onclick = async () => {
+        b.disabled = true; st.textContent = '処理中... / Working...';
+        const fam = m.family === 'qwen' ? 'Qwen' : 'Models';
+        if (!m.installed) { const [ok, d] = await call(fam + 'Install', { id: m.id }); if (!ok) { st.textContent = 'エラー: ' + (d.error || ''); b.disabled = false; return; } }
+        const [ok2, d2] = await call(fam + 'Select', { id: m.id });
+        st.textContent = ok2 ? '切り替えました / Switched: ' + m.id : 'エラー: ' + (d2.error || '');
+        b.disabled = false;
+      };
+      td.appendChild(b);
+    });
+  };
+  btn.onclick = async () => {
+    btn.disabled = true;
+    const [ok, d] = await call('ModelsCompatible');
+    btn.disabled = false;
+    if (!ok) { st.textContent = 'エラー'; return; }
+    data = d;
+    sel.textContent = '';
+    d.explanation.forEach(x => { const o = document.createElement('option'); o.value = x[0]; o.textContent = x[0]; sel.appendChild(o); });
+    sel.value = (navigator.language || 'en').startsWith('ja') ? 'ja' : 'en';
+    sel.onchange = show; show(); render();
+  };
+})();
+</script>
 </body>
 </html>
