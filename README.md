@@ -948,3 +948,43 @@ sudo ./install.sh
 - «Подходит» — лишь примерная оценка. Сейчас текст генерируется на процессоре, поэтому учитывается оперативная память (RAM). Установщик по умолчанию использует `C:\aon-co-jp\open-easy-web\`; диск и папку можно выбрать.
 
 (简体中文: AI 翻译,尚未经母语者确认。; 繁體中文(台灣): AI 翻譯,尚未經母語者確認。; 한국어: AI 번역이며 원어민 확인 전입니다.; Deutsch: KI-Übersetzung, noch nicht von Muttersprachlern geprüft.; Français: Traduction par IA, pas encore relue par des locuteurs natifs.; Español: Traducción por IA, aún sin revisión de hablantes nativos.; Português (BR): Tradução por IA, ainda sem revisão de falantes nativos.; Русский: Перевод выполнен ИИ, носителями языка пока не проверен.)
+
+## 2026-11-19 大きなAIモデルを動かす取り組みの現状 / Running bigger AI models: status and plan
+
+### 日本語(やさしい説明)
+**いまできること**
+- 大きなAIモデルは、重さが1つのファイルでなく「いくつかに分かれたファイル」で配られることがあります。これを**自動で全部ダウンロードして、読み込める**ようになりました(`aruaru-llm` と `open-cuda`)。
+- 本物の Qwen2.5-3B(約6GB、2つに分割)を、このパソコン(メモリ32GB、GPUなし)で**実際に読み込んで文章を作れる**ことを確かめました。読み込み約48秒、文章づくりは1秒に約0.6語(遅いけれど動きます)。
+- 読み込みは「ファイルを丸ごとメモリに入れず、必要な所だけ読む」やり方に変えたので、メモリの使いすぎが減りました。
+
+**調べて分かったこと**
+- 東芝の「シミュレーテッド分岐」や富士通の「デジタルアニーラ」は、「たくさんの選択肢から一番よい組み合わせを探す」道具です。AIの文章づくりを直接速くする道具ではありません。使うなら「どの部品をどこに置くか」「どの部分を何ビットに縮めるか」を決める所です(研究論文はまだ少ない)。
+- 「折り畳み(Model Folding)」は、似た部分をまとめてモデルを小さくする方法です。DeepSeek の MLA(記憶の圧縮)・MoE(専門家を必要な分だけ使う)・FP8(数を小さく表す)も同じ仲間の工夫です。
+- 実験: 学習済みの Qwen に後からMLA圧縮をかけると、記憶を25%減らしただけで品質が落ち(迷い度 7.1→12.7)、50%減らすと文が壊れました。**後付けのMLAは使えない**と分かりました(DeepSeekは最初からその形で学習しています)。
+
+**これから作るもの(確認なしで順に進めます)**
+1. 重みを小さい数(f16や量子化)のまま使って、7B級(約12GB)もこのパソコンで動かす。
+2. 層ごと・専門家ごとに「何ビットにするか」を自動で決める(まずは普通の計算、あとで焼きなましやSBも試す)。
+3. 似た層をまとめる「折り畳み」を試し、品質と速さを必ず測る。
+4. 速さの測定を毎回記録し、実用になるまで作る・試す・直すを何度も繰り返す。
+
+**約束**: 未了の作業は、危険でない限り**いちいち確認せず進めます**。ただし、取り返しのつかない削除や、秘密の公開はしません。結果が悪かったときは、悪かったと正直に書きます。
+
+### English (plain words, easy to read)
+**What works now**
+- Big AI models are often shipped as **several files** instead of one. The program can now **download all the parts and load them** (`aruaru-llm` and `open-cuda`).
+- We loaded the real Qwen2.5-3B model (about 6 GB, 2 parts) on this PC (32 GB memory, no GPU) and **it wrote text**. Loading took about 48 seconds; writing was about 0.6 words per second (slow, but it works).
+- Loading now reads only the parts it needs instead of copying whole files into memory, so it uses less memory.
+
+**What we learned**
+- Toshiba's "Simulated Bifurcation" and Fujitsu's "Digital Annealer" help **pick the best combination from many choices**. They do not make an AI write faster by themselves. They could help decide where to put each part, or how many bits each part gets (papers on this are still few).
+- "Model folding" means merging similar parts to make a model smaller. DeepSeek's MLA (memory compression), MoE (use only the needed experts) and FP8 (small numbers) are cousins of this idea.
+- Our test: adding MLA compression to an already-trained Qwen cut memory by 25% but made quality worse (perplexity 7.1 to 12.7), and a 50% cut broke the text. **Adding MLA afterwards does not work** (DeepSeek trains with it from the start).
+
+**What we will build next (we go on without asking)**
+1. Keep weights in small numbers (f16 or quantized) so 7B-size models (about 12 GB) can run on this PC.
+2. Choose bits per layer and per expert automatically (plain math first, annealing or SB later).
+3. Try "folding" similar layers, and always measure quality and speed.
+4. Record every speed test, then build, test and fix again and again until it is truly useful.
+
+**Promise**: for unfinished work we **go on without asking each time**, unless it is dangerous. We never do irreversible deletes or publish secrets. If a result is bad, we say so honestly.
