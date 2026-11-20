@@ -484,3 +484,9 @@ Reading into `serde_json::Value` gives almost no speed-up even with SIMD (188 ms
 **Adoption**: in `Cargo.toml`, `rust-json = { path = "../RS-JSON", features = ["fast"] }`. Example in `RS-JSON/README.md`.
 
 **Status in this repository**: `knowledge::sync_from_remote` (outside import) already uses `parse_secure`. Everything else is not yet applied (policy only). Next targets: search indexes and JSON loaded at start-up.
+
+## 2026-11-21 Automatic precision selection and low memory (open-cuda, aruaru-llm)
+- **Weight precision**: on a CPU-only 32 GB machine, INT8 weights are the practical choice (about 4x faster than FP8; 7B runs at roughly 2 seconds per token). INT4 on the middle layers is possible but was about 17% worse on held-out text. FP8 is slow, so it is not the default.
+- **Automatic choice**: `PrecisionTable::auto_for_memory` picks the first table that fits 70% of free RAM, in the order f32, all-INT8, INT4 on middle layers. In `aruaru-llm`, set the environment variable `ARUARU_LLM_PRECISION` (unset = f32, `auto`, or a table such as `int8,1:f32`).
+- **INT8 KV cache**: `QWEN_KV_INT8=1` only simulates the rounding; perplexity got about 1% worse. Memory is not reduced yet.
+- **Open**: actually storing the KV cache as INT8, and an end-to-end run of `auto` on a real server. Translations are AI-made and not yet checked by native speakers.

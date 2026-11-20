@@ -57,3 +57,9 @@ Autres langues : [日本語 (original, détails complets)](PORTING.md) ·
 [Deutsch](PORTING-German.md) · [Italiano](PORTING-Italian.md) ·
 [Русский](PORTING-Russian.md) · [Українська](PORTING-Ukrainian.md) ·
 [עברית](PORTING-Hebrew.md) · [فارسی](PORTING-Persian.md) · [العربية](PORTING-Arabic.md)
+
+## 21/11/2026 Choix automatique de la précision et faible mémoire (open-cuda, aruaru-llm)
+- **Précision des poids** : sur une machine de 32 Go sans GPU, garder les poids en INT8 est le choix pratique (environ 4 fois plus rapide que le FP8 ; un modèle 7B produit un jeton en 2 secondes environ). On peut aussi passer seulement les couches centrales en INT4, mais la qualité a baissé d'environ 17 % sur un autre texte. Le FP8 est lent, donc il n'est pas le choix par défaut.
+- **Choix automatique** : `PrecisionTable::auto_for_memory` retient, dans l'ordre f32, tout en INT8, INT4 sur les couches centrales, la première table qui tient dans 70 % de la RAM libre. Dans `aruaru-llm`, on l'indique avec la variable d'environnement `ARUARU_LLM_PRECISION` (non définie = f32, `auto`, ou une table comme `int8,1:f32`).
+- **Cache KV en INT8** : `QWEN_KV_INT8=1` ne simule que l'effet de l'arrondi ; la perplexité s'est dégradée d'environ 1 %. La mémoire n'est pas encore réduite.
+- **À faire** : stocker réellement le cache KV en INT8, et exécuter `auto` de bout en bout sur un vrai serveur. Les traductions sont faites par une IA et n'ont pas encore été relues par des locuteurs natifs.
