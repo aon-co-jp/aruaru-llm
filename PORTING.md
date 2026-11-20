@@ -979,3 +979,15 @@ Heavy Connect calls (Generate*/Translate/Transcribe/Ocr*) pass `src/admission.rs
 - FP8 weights got faster: on 1.5B, writing went from 69 s to 32.6 s (the normal way takes 25 s). Quality is unchanged (7.27) and memory stays at about a quarter.
 - The installer-update workflow had been failing because the Vulkan tool (glslc) was missing. Fixed in `5e06048`; the next run will confirm it.
 - Next: per-layer bit allocation and more FP8 speed. We go on without asking.
+
+## 2026-11-20 追記: 混合精度(大事な層だけf32) / Mixed precision (keep key layers f32)
+
+### 日本語
+- 環境変数 `QWEN_KEEP_F32="1,24,26"` で、大事な層(層飛ばし実験で壊れやすかった1・24・26番)だけ元の精度のまま、ほかをFP8にできます(`open-cuda` `d05d897`)。1.5Bで迷い度が 7.267→7.096(元は7.08)に戻り、文章づくりは27.8秒(ふつうの方法25秒)で、速さは変わりません。メモリはFP8のままほぼ4分の1です。
+- FP8の速さは、ふつうの方法の約1.1倍の時間まで縮まったので、SIMDでの追加の高速化は効果が小さいと判断し、今回は見送りました(1語ずつ作る処理はメモリ速度で決まるため)。
+- 層ごとの自動選択(焼きなまし・SB)は、層が28個の小さな問題では貪欲法と差が出なかったため、より大きなモデルで再度試します。
+
+### English
+- With the env var `QWEN_KEEP_F32="1,24,26"`, the sensitive layers (1, 24 and 26, fragile in the layer-skip test) keep full precision while the rest use FP8 (`open-cuda` `d05d897`). On 1.5B perplexity returns from 7.267 to 7.096 (original 7.08), writing takes 27.8 s (normal way 25 s), and memory stays near a quarter.
+- FP8 now takes about 1.1x the time of the normal way, so extra SIMD work would gain little (single-token decoding is bound by memory speed); we skipped it for now.
+- Automatic per-layer choice (annealing/SB) showed no edge over greedy on a 28-layer problem; we will retry on larger models.
