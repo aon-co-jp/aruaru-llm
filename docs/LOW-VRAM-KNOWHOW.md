@@ -71,3 +71,7 @@
 3. `F64Ref`オラクルを試験に追加(小さい行列で、FP8/INT8/INT4の誤差の上限を自動検査)。
 4. 起動時にRAM/VRAMを調べ、モデル・精度表・同時実行数を自動選択(`ModelsCompatible`を拡張)。
 5. スマホ(Android)で0.5Bを実機測定。
+
+## 実測追記 2026-11-20: INT8/INT4 重み / Measured: INT8/INT4 weights
+日本語: Qwen2.5-1.5B・CPUのみ。迷い度(評価文/別の文)・生成秒: f32 7.08/–/25、FP8 7.27/12.17/29.8、INT8 7.37/12.94/27.2、INT4(128グループ) 10.55/15.37/29.0。INT4を1行1グループにすると26.4に悪化。除算を畳み込む前のINT8は81秒だった。メモリは重みがINT8で約1/4、INT4で約1/8。`QWEN_PRECISION="int4,1:f32"`で層ごとに指定(open-cuda 1b1f1b4)。3B/7Bは未測定。
+English: Qwen2.5-1.5B, CPU only. Perplexity (eval / held-out) and generation seconds: f32 7.08/–/25, FP8 7.27/12.17/29.8, INT8 7.37/12.94/27.2, INT4 (128-element groups) 10.55/15.37/29.0. One group per row made INT4 much worse (26.4). INT8 took 81 s before the per-element division was folded away. Weight memory is about 1/4 (INT8) and 1/8 (INT4). Set per layer with `QWEN_PRECISION="int4,1:f32"` (open-cuda 1b1f1b4). 3B/7B not measured yet.
