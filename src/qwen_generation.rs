@@ -40,7 +40,35 @@ static ACTIVE_QWEN: std::sync::RwLock<Option<Arc<LoadedQwen>>> = std::sync::RwLo
 /// 設計)。
 pub fn select_qwen_model(dir: PathBuf) -> Result<()> {
     let tokenizer = GptTokenizer::load(&dir).with_context(|| format!("failed to load tokenizer.json from {dir:?}"))?;
-    let model = QwenModel::load(&dir).with_context(|| format!("failed to load Qwen weights from {dir:?}"))?;
+    // 任意: ARUARU_LLM_PRECISION=auto なら空きRAMから精度を自動選択、"int8,1:f32" 形式なら指定の精度表で読む。
+    // 未設定なら従来どおりf32(挙動を変えない)。
+    let model = match std::env::var("ARUARU_LLM_PRECISION").ok().filter(|s| !s.trim().is_empty()) {
+        None => QwenModel::load(&dir),
+        Some(spec) => {
+            let spec = spec.trim().to_string();
+            let device = opencuda_cpu::CpuDevice::new(0);
+            let table = if spec == "auto" {
+                // 重みはbf16/f16配布が多いので、f32換算はファイル合計の2倍と近似する。
+                let file_bytes: u64 = std::fs::read_dir(&dir)
+                    .map(|rd| rd.filter_map(|e| e.ok()).filter(|e| e.path().extension().is_some_and(|x| x == "safetensors")).filter_map(|e| e.metadata().ok()).map(|m| m.len()).sum())
+                    .unwrap_or(0);
+                let n_layers = std::fs::read_to_string(dir.join("config.json"))
+                    .ok()
+                    .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+                    .and_then(|v| v.get("num_hidden_layers").and_then(|x| x.as_u64()))
+                    .unwrap_or(28) as usize;
+                let ram = crate::model_fit::total_ram_bytes().unwrap_or(8 << 30);
+                // 総RAMの8割を「使える空き」とみなす(正確な空きは取れないため保守的に)。
+                let t = open_cuda_llm::PrecisionTable::auto_for_memory(file_bytes * 2, ram / 10 * 8, n_layers)?;
+                tracing::info!("ARUARU_LLM_PRECISION=auto -> default {:?}, {} int4 layers", t.default, t.overrides.len());
+                t
+            } else {
+                open_cuda_llm::PrecisionTable::parse(&spec)?
+            };
+            QwenModel::load_precision(&dir, device.as_ref(), &table)
+        }
+    }
+    .with_context(|| format!("failed to load Qwen weights from {dir:?}"))?;
     *ACTIVE_QWEN.write().expect("qwen active model lock poisoned") = Some(Arc::new(LoadedQwen { model, tokenizer, dir }));
     Ok(())
 }
