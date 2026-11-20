@@ -45,3 +45,29 @@
 | version-control / aruaru-search | LLM要約は`llm_timeout_secs`内に収まる高速な推論先へ。収まらなければ要約を省いて動作継続 / skip summaries on timeout | 実装済み(VPSは遅いので要約は実用外) |
 | 共通 / All | 重い試験は手元PC(WSL)、VPSは配備と確認だけ。数字は実測して記録 / measure locally | 常時 |
 再設計の優先順 / Redesign order: (1) 起動時にRAM/VRAMを調べ、モデル・精度(f32/FP8/混合)・同時実行数を自動選択する共通部品(`aruaru-llm`の`ModelsCompatible`を拡張)、(2) 4/8bit整数とKV量子化、(3) MoE遅延読み込みの実チェックポイント通し、(4) 大きなモデルでのビット配分の自動探索(焼きなまし/SB)。
+
+## 6. 精度の階段(FP8〜大きな桁、整数)と、端末ごとの使い分け / Precision ladder and device tiers (2026-11-20)
+
+### 6.1 正直な見立て / Honest assessment
+- **メモリが足りない環境(VRAM無しのVPS・PC・タブレット・スマホ)で効くのは「桁を減らす」方向**: FP8(実測済み)→ INT8 → INT4(4bit)。FP16/BF16は「FP8にすると品質が落ちる層」の保護先として使う。 / On memory-poor devices the gain comes from **fewer** bits: FP8 (measured) -> INT8 -> INT4; FP16/BF16 protect layers that FP8 hurts.
+- **FP32は基準(今のf32経路)。FP64・FP128・FP256…FP4096は推論の品質をほとんど上げず、メモリと時間が桁違いに増える**(FP64で重みが2倍、FP128で4倍…。ハードウェア非対応でソフトウェア演算になり数十〜数千倍遅い)。そのため**推論の本番経路には使わない**。 / FP32 is the baseline. FP64 and wider do not improve inference quality noticeably but cost 2x-100x+ memory/time (software-emulated beyond FP64), so **never in production inference**.
+- **広い桁が役に立つ所**: (1) 試験の「正解(オラクル)」: 同じ行列積をFP64/FP128で計算し、FP8/INT4/f32との誤差を測る。(2) 総和(累積)だけを広くする(FP8の重みでも累積はf32、長い文脈ではKahan/ペア和)。(3) 数値の不安定な所(softmax・RMSNormの分散)のみ必要時にFP64。 / Wide formats are useful as **test oracles**, for **wide accumulation only**, and for unstable spots (softmax, norm variance) when needed.
+- 「大きなLLMでも活かす」=重みを小さい桁で持ち、**層ごとに桁を変える**(混合精度)方向で広げる。大きいモデルほどFP8/INT4の恩恵が大きい(7Bが32GB機に載った実績)。 / For big LLMs the lever is per-layer bit width, not wider floats.
+
+### 6.2 共通の「精度の型」にする設計(未了・再設計) / Design: one precision enum (open)
+`Precision = F64Ref | F32 | F16 | BF16 | Fp8E4M3 | Fp8E5M2 | Int8 | Int4`。層ごと・エキスパートごとに1つ選ぶ。`F64Ref`は試験専用(本番では選べない)。選び方は、(a) 感度測定(層を1つずつ低精度にしてppl変化を測る)→(b) 貪欲法/整数計画で「メモリ予算の中で品質最大」→(c) 大きなモデルでは焼きなまし/SB。実装は`QWEN_KEEP_F32`(済み)を一般化する形で、`open-cuda-llm`と`opencuda-blas`に置く。
+
+### 6.3 端末ごとの目安 / Device tiers (measured only for the first two rows)
+| 端末 / Device | 目安 / Guide | 状態 / Status |
+|---|---|---|
+| VRAM無しVPS(4コア・3.6GB) | 0.5B〜1.5B、FP8、プロンプト64トークン、同時実行1〜2、タイムアウト必須 / small models, FP8, caps | 実測済み |
+| VRAM無しPC(32GB) | 〜3Bはf32/FP8、7BはFP8(約15GB)で動作(遅い) / up to 7B in FP8 | 実測済み |
+| タブレット・スマホ | 0.5B〜1.5BのINT4/INT8が現実的。メモリが足りなければ自動で小さいモデルへ / INT4/INT8 small models, auto-downgrade | **未実装・未測定**(Androidは`librporea_ffi.so`の起動のみ実機確認) |
+| 共有基盤VPS | 1回だけ設置、サイトは呼ぶだけ、公平キュー / install once | 実装済み |
+
+### 6.4 次に作る順(確認なしで進める) / Next steps
+1. `Precision`型と、層ごとの精度表(JSON、RS-JSONで読み書き)を`open-cuda-llm`に追加。`QWEN_KEEP_F32`をその一例にする。
+2. INT8(行ごとスケール)・INT4(ブロックスケール)重みのGEMMをCPUで実装し、FP8と同じ手順(ppl・速さ・メモリ)で実測。
+3. `F64Ref`オラクルを試験に追加(小さい行列で、FP8/INT8/INT4の誤差の上限を自動検査)。
+4. 起動時にRAM/VRAMを調べ、モデル・精度表・同時実行数を自動選択(`ModelsCompatible`を拡張)。
+5. スマホ(Android)で0.5Bを実機測定。
