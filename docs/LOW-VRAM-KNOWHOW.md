@@ -33,3 +33,15 @@
 - MoE(DeepSeek)の実チェックポイントでの遅延読み込み通し(`deepseek_arch.rs`は実装済み、実物は未確認)。
 - 7BのFP8を高速カーネルで再測定(約8秒/語は旧カーネルの値)。
 - 量子化(4/8ビット整数)・KV量子化の検討、`pl2pl llm setup`での分割モデル選択の通し確認。
+
+## 5. どのリポジトリで何に使うか(展開・応用・再設計の入口) / Where to apply (rollout map)
+| リポジトリ / Repo | 使う技術 / Apply | 状態 / Status |
+|---|---|---|
+| aruaru-llm | 分割重み・FP8・混合精度・プロンプト上限・同時実行上限 / all | 実装済み(v0.2.6)。FP8を既定の選択肢にする設計は未了 / FP8 as a selectable default: open |
+| open-cuda / open-cpu | FP8 GEMM・小行列直列化・mmap。VRAM無しの既定経路(CPU)を最優先に保つ / CPU path first | 実装済み。4/8bit整数・KV量子化は未了 |
+| pl2pl | `llm setup`でRAMに合わせて3B/1.5B/0.5Bを選ぶ(分割モデル対応版を取得)。FP8/混合精度の選択を追加する / pick model by RAM | 3B候補は既にあり。FP8選択は未了 |
+| open-english / maid-cafe-english / maid-cafe-tokyo | 答えられないときの補完や要約は、短い文脈・上限・タイムアウト必須。VPSで重い推論を直接回さない / short context, timeouts, no heavy VPS inference | 方針。補完機能は未着手 |
+| pdf-r2l-rs / aruaru-IME / open-media | 端末側の推論は小さいモデル+FP8/mmap。メモリが足りなければ自動で小さいモデルへ下げる / auto-downgrade | 方針(各リポジトリで実装時に参照) |
+| version-control / aruaru-search | LLM要約は`llm_timeout_secs`内に収まる高速な推論先へ。収まらなければ要約を省いて動作継続 / skip summaries on timeout | 実装済み(VPSは遅いので要約は実用外) |
+| 共通 / All | 重い試験は手元PC(WSL)、VPSは配備と確認だけ。数字は実測して記録 / measure locally | 常時 |
+再設計の優先順 / Redesign order: (1) 起動時にRAM/VRAMを調べ、モデル・精度(f32/FP8/混合)・同時実行数を自動選択する共通部品(`aruaru-llm`の`ModelsCompatible`を拡張)、(2) 4/8bit整数とKV量子化、(3) MoE遅延読み込みの実チェックポイント通し、(4) 大きなモデルでのビット配分の自動探索(焼きなまし/SB)。
