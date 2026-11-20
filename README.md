@@ -1131,3 +1131,7 @@ sudo ./install.sh
 - **Final result for layer skipping ("folding")**: Choosing layers to skip from a single sentence got worse on other sentences (skipping layers 5, 12 and 15 was about 15% worse on other sentences, and skipping five was worse still). The speed gain is at most about 14%. **Without retraining, the practical gain is small.** On this small problem, greedy search and annealing made little difference.
 - **About `pl2pl llm setup`**: Sharded-model support is now on `main` in `aruaru-llm`. The released build that `pl2pl` uses (v0.2.5) does not have it yet, so until a new release, 3B still falls back to a smaller model as before. After the new release, 3B and 7B can be chosen.
 - **Next (we go on without asking)**: make FP8 faster (SIMD and more), publish a new release, and check the survey document requested from the cloud.
+
+## 環境変数 `ARUARU_LLM_PRECISION` / Environment variable (2026-11-21)
+日本語: Qwenモデルの読み込み精度を選ぶ。未設定=f32(従来どおり)、`auto`=総RAMの8割から自動選択、`int8,1:f32`のような指定表も可。
+English: Selects the Qwen load precision. Unset = f32 (as before), `auto` = pick from 80% of total RAM, or an explicit table such as `int8,1:f32`.
