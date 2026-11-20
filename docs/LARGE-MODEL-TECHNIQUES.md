@@ -20,3 +20,8 @@
 - **効いたもの / What worked**: 分割重み対応、mmap、FP8重み(メモリ1/4)。 / sharded weights, mmap, FP8 weights (1/4 memory).
 - **効かなかったもの / What did not**: 後付けMLA、学び直し無しの層スキップ。 / post-hoc MLA, layer skipping without retraining.
 - **次に試す / Next**: 混合精度ビット配分、FP8のCPU高速化。 / mixed-precision bit allocation, faster FP8 on CPU.
+
+## 追記 2026-11-20: 層スキップの探索(Qwen2.5-1.5B、28層) / Layer-skip search
+- 5層スキップ: 貪欲法 {15,12,5,16,14} ppl 7.753、焼きなまし {10,11,14,18,27} ppl 8.653(同じ125回の評価)。3層では 7.187 対 7.438。**どちらも貪欲法が勝ち、焼きなましは優位なし。** 元は 7.08。
+- 1文だけで選ぶと別の文で悪化する(上記)。SB/焼きなましは、層数が多い大型モデルやビット配分で再検証する価値はあるが、この規模では不要。
+- Greedy beat annealing at both k=3 (7.187 vs 7.438) and k=5 (7.753 vs 8.653) with equal evaluation budgets (baseline 7.08). Annealing/SB remain untested on larger models and bit allocation.
