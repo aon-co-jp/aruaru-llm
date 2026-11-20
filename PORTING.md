@@ -965,3 +965,17 @@ Heavy Connect calls (Generate*/Translate/Transcribe/Ocr*) pass `src/admission.rs
 - **Final result for layer skipping ("folding")**: Choosing layers to skip from a single sentence got worse on other sentences (skipping layers 5, 12 and 15 was about 15% worse on other sentences, and skipping five was worse still). The speed gain is at most about 14%. **Without retraining, the practical gain is small.** On this small problem, greedy search and annealing made little difference.
 - **About `pl2pl llm setup`**: Sharded-model support is now on `main` in `aruaru-llm`. The released build that `pl2pl` uses (v0.2.5) does not have it yet, so until a new release, 3B still falls back to a smaller model as before. After the new release, 3B and 7B can be chosen.
 - **Next (we go on without asking)**: make FP8 faster (SIMD and more), publish a new release, and check the survey document requested from the cloud.
+
+## 2026-11-20 追記: v0.2.6公開・FP8が速くなった / v0.2.6 released, FP8 is faster
+
+### 日本語(やさしい説明)
+- `aruaru-llm` v0.2.6を公開しました(Linux版・Windows版の配布物つき)。分けて配られる大きなAIも、自動でぜんぶ取ってきて読めます。`pl2pl llm setup`は最初から3Bを候補にしているので、この版が最新になれば3Bが選ばれます。
+- FP8(重みを小さい数で持つ方法)がさらに速くなりました。1.5Bで文章づくりが69秒→32.6秒(ふつうの方法は25秒)。品質の目安は変わらず(7.27)、メモリは約4分の1のままです。
+- インストーラーを自動で作る仕組みが以前から失敗していた原因は、Vulkanの道具(glslc)が入っていないことでした。直しました(`5e06048`)。結果は次の実行で確認します。
+- これから: 層ごとにビット数を変える方法、FP8のさらなる高速化。確認せず進めます。
+
+### English
+- `aruaru-llm` v0.2.6 is released (with Linux and Windows assets). Models shipped in several files are downloaded and loaded automatically. `pl2pl llm setup` already lists 3B first, so once this version is the latest, 3B is chosen.
+- FP8 weights got faster: on 1.5B, writing went from 69 s to 32.6 s (the normal way takes 25 s). Quality is unchanged (7.27) and memory stays at about a quarter.
+- The installer-update workflow had been failing because the Vulkan tool (glslc) was missing. Fixed in `5e06048`; the next run will confirm it.
+- Next: per-layer bit allocation and more FP8 speed. We go on without asking.
