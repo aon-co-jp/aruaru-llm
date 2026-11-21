@@ -490,3 +490,7 @@ Reading into `serde_json::Value` gives almost no speed-up even with SIMD (188 ms
 - **Automatic choice**: `PrecisionTable::auto_for_memory` picks the first table that fits 70% of free RAM, in the order f32, all-INT8, INT4 on middle layers. In `aruaru-llm`, set the environment variable `ARUARU_LLM_PRECISION` (unset = f32, `auto`, or a table such as `int8,1:f32`).
 - **INT8 KV cache**: `QWEN_KV_INT8=1` only simulates the rounding; perplexity got about 1% worse. Memory is not reduced yet.
 - **Open**: actually storing the KV cache as INT8, and an end-to-end run of `auto` on a real server. Translations are AI-made and not yet checked by native speakers.
+
+## 2026-11-21 Update: KV cache really stored as INT8
+- With `QWEN_KV_INT8=1` the KV cache is now **actually stored** as INT8 with one scale per head per token (`open-cuda` 2ba4b5f). On Qwen2.5-1.5B perplexity went 7.079 to 7.159 (about +1%); on other text 12.1 to 11.8 (within noise). KV memory is about 1/4 of f32 (a head_dim 64 test shows more than a 3x reduction).
+- Still open: an end-to-end run of `ARUARU_LLM_PRECISION=auto` on a real server. Translations are AI-made and not yet checked by native speakers.

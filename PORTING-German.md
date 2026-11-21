@@ -61,3 +61,7 @@ Weitere Sprachen: [日本語 (Original, vollständige Details)](PORTING.md) ·
 - **Automatische Wahl**: `PrecisionTable::auto_for_memory` nimmt in der Reihenfolge f32, alles INT8, INT4 in den mittleren Schichten die erste Tabelle, die in 70 % des freien Arbeitsspeichers passt. In `aruaru-llm` steuert man das über die Umgebungsvariable `ARUARU_LLM_PRECISION` (nicht gesetzt = f32, `auto` oder eine Tabelle wie `int8,1:f32`).
 - **INT8-KV-Cache**: `QWEN_KV_INT8=1` simuliert nur die Rundung; die Perplexität wurde etwa 1 % schlechter. Der Speicherbedarf sinkt dadurch noch nicht.
 - **Offen**: den KV-Cache tatsächlich als INT8 speichern und `auto` auf einem echten Server vollständig durchlaufen lassen. Die Übersetzungen stammen von einer KI und wurden noch nicht von Muttersprachlern geprüft.
+
+## 21.11.2026 Nachtrag: KV-Cache wird wirklich als INT8 gespeichert
+- Mit `QWEN_KV_INT8=1` wird der KV-Cache jetzt **tatsächlich** als INT8 mit einem Skalierungswert pro Kopf und Token gespeichert (`open-cuda` 2ba4b5f). Bei Qwen2.5-1.5B stieg die Perplexität von 7,079 auf 7,159 (etwa +1 %); bei anderem Text sank sie von 12,1 auf 11,8 (im Rauschen). Der KV-Speicher beträgt etwa ein Viertel von f32 (ein Test mit head_dim 64 zeigt mehr als dreifache Verkleinerung).
+- Offen: ein vollständiger Lauf von `ARUARU_LLM_PRECISION=auto` auf einem echten Server. Die Übersetzungen stammen von einer KI und wurden noch nicht von Muttersprachlern geprüft.

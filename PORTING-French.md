@@ -63,3 +63,7 @@ Autres langues : [日本語 (original, détails complets)](PORTING.md) ·
 - **Choix automatique** : `PrecisionTable::auto_for_memory` retient, dans l'ordre f32, tout en INT8, INT4 sur les couches centrales, la première table qui tient dans 70 % de la RAM libre. Dans `aruaru-llm`, on l'indique avec la variable d'environnement `ARUARU_LLM_PRECISION` (non définie = f32, `auto`, ou une table comme `int8,1:f32`).
 - **Cache KV en INT8** : `QWEN_KV_INT8=1` ne simule que l'effet de l'arrondi ; la perplexité s'est dégradée d'environ 1 %. La mémoire n'est pas encore réduite.
 - **À faire** : stocker réellement le cache KV en INT8, et exécuter `auto` de bout en bout sur un vrai serveur. Les traductions sont faites par une IA et n'ont pas encore été relues par des locuteurs natifs.
+
+## 21/11/2026 Mise à jour : le cache KV est vraiment stocké en INT8
+- Avec `QWEN_KV_INT8=1`, le cache KV est désormais **réellement stocké** en INT8, avec un facteur d'échelle par tête et par jeton (`open-cuda` 2ba4b5f). Sur Qwen2.5-1.5B, la perplexité passe de 7,079 à 7,159 (environ +1 %) ; sur un autre texte, de 12,1 à 11,8 (dans le bruit). La mémoire du cache KV représente environ le quart de celle du f32 (un test avec head_dim 64 montre une réduction de plus de 3 fois).
+- À faire : un essai complet de `ARUARU_LLM_PRECISION=auto` sur un vrai serveur. Les traductions sont faites par une IA et n'ont pas encore été relues par des locuteurs natifs.

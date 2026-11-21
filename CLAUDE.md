@@ -5268,3 +5268,7 @@ English: Techniques for running AI stably and fast on machines with no or little
 - **Escolha automática**: `PrecisionTable::auto_for_memory` escolhe, na ordem f32, tudo em INT8, INT4 nas camadas do meio, a primeira tabela que cabe em 70 % da RAM livre. No `aruaru-llm`, indica-se com a variável de ambiente `ARUARU_LLM_PRECISION` (não definida = f32, `auto`, ou uma tabela como `int8,1:f32`).
 - **Cache KV em INT8**: `QWEN_KV_INT8=1` apenas simula o efeito do arredondamento; a perplexidade piorou cerca de 1 %. A memória ainda não diminui.
 - **Pendente**: guardar de fato o cache KV em INT8 e executar o `auto` de ponta a ponta num servidor real. As traduções foram feitas por uma IA e ainda não foram revistas por falantes nativos.
+
+## 2026-11-21 追記: KVキャッシュを実際にINT8で保持
+- `QWEN_KV_INT8=1` で、KVキャッシュを1ヘッド1トークンごとのスケール付きINT8として**実際に保持**するようにした(`open-cuda` 2ba4b5f)。Qwen2.5-1.5Bで迷い度は7.079→7.159(約+1%)、別の文では12.1→11.8(誤差の範囲)。KVのメモリはf32の約1/4(head_dim 64の試験で3倍以上の縮小を確認)。
+- 未了: `ARUARU_LLM_PRECISION=auto` を実サーバーで通して確認すること。翻訳はAIが作成し、ネイティブ話者による確認は未了。
