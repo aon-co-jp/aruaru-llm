@@ -38,6 +38,34 @@ pub fn strip_special(tokens: Vec<String>) -> Vec<String> {
     tokens.into_iter().filter(|t| t != "</s>" && t != "<s>" && !(t.starts_with("__") && t.ends_with("__") && t.len() <= 7)).collect()
 }
 
+/// 文ごとに分ける(長い1文のまとめ訳で前半が落ちる/意味が逆になる問題の対策)。
+/// 。！？!?改行は常に区切り、`.` は後ろが空白のときだけ区切る(小数点・略語を壊さない)。
+pub fn split_sentences(text: &str) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    for (i, &c) in chars.iter().enumerate() {
+        cur.push(c);
+        let end = match c {
+            '。' | '！' | '？' | '!' | '?' | '\n' => true,
+            '.' => chars.get(i + 1).map_or(true, |n| n.is_whitespace()),
+            _ => false,
+        };
+        if end {
+            let t = cur.trim();
+            if !t.is_empty() {
+                out.push(t.to_string());
+            }
+            cur.clear();
+        }
+    }
+    let t = cur.trim();
+    if !t.is_empty() {
+        out.push(t.to_string());
+    }
+    out
+}
+
 struct M2mTokenizer {
     spm: SentencePieceProcessor,
 }
@@ -73,11 +101,19 @@ fn translate(tr: &Mutex<Translator<M2mTokenizer>>, v: &serde_json::Value) -> Res
         return Err(anyhow!("language codes must be 2-3 lowercase letters"));
     }
     let opts = TranslationOptions::<String, String> { beam_size: 2, max_decoding_length: 256, ..Default::default() };
+    let sentences = split_sentences(text);
+    if sentences.is_empty() {
+        return Err(anyhow!("empty translation"));
+    }
+    let inputs: Vec<String> = sentences.iter().map(|t| wrap_source(source, t)).collect();
+    let prefixes: Vec<Vec<String>> = sentences.iter().map(|_| vec![lang_token(target)]).collect();
     let out = tr
         .lock()
         .map_err(|_| anyhow!("model lock poisoned"))?
-        .translate_batch_with_target_prefix(&[wrap_source(source, text)], &vec![vec![lang_token(target)]], &opts, None)?;
-    out.into_iter().next().map(|(s, _)| s).filter(|s| !s.trim().is_empty()).ok_or_else(|| anyhow!("empty translation"))
+        .translate_batch_with_target_prefix(&inputs, &prefixes, &opts, None)?;
+    let sep = if matches!(target, "ja" | "zh") { "" } else { " " };
+    let joined = out.into_iter().map(|(s, _)| s.trim().to_string()).filter(|s| !s.is_empty()).collect::<Vec<_>>().join(sep);
+    if joined.is_empty() { Err(anyhow!("empty translation")) } else { Ok(joined) }
 }
 
 fn main() -> Result<()> {
@@ -133,6 +169,14 @@ mod tests {
     fn language_codes_are_restricted() {
         assert!(valid_lang("ja") && valid_lang("fil"));
         assert!(!valid_lang("J") && !valid_lang("ja-JP") && !valid_lang("日本") && !valid_lang(""));
+    }
+
+    #[test]
+    fn sentences_are_split() {
+        assert_eq!(split_sentences("Hello. How are you? Fine!"), vec!["Hello.", "How are you?", "Fine!"]);
+        assert_eq!(split_sentences("今日は晴れ。散歩しよう！"), vec!["今日は晴れ。", "散歩しよう！"]);
+        assert_eq!(split_sentences("Pi is 3.14 ok"), vec!["Pi is 3.14 ok"]);
+        assert!(split_sentences("  \n ").is_empty());
     }
 
     #[test]
