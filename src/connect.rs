@@ -1,6 +1,6 @@
 //! Connect の「単純呼び出し(unary)」で受ける API の入口(2026-11-04新設、REST 全廃方針)。
 //!
-//! 形式は `POST /aruaru_llm.v1.Llm/<Method>`、本文は JSON(`content-type: application/json`)。
+//! 形式は `POST /aruaru_llm.Llm/<Method>`、本文は JSON(`content-type: application/json`)。
 //! すべて POST。以前 GET だった呼び出し(引数は URL のクエリ)は、JSON 本文の各項目をクエリに直して
 //! 既存のハンドラへ渡す(`cx_get`)。以前 POST だったものは本文をそのまま渡す(`cx_post`)。
 //! エラーは Connect の形式 `{"code": "...", "message": "..."}`(HTTP ステータスは Connect 仕様の対応表)。
@@ -15,7 +15,7 @@ use open_runo_poem_compat::hyper_compat::{json_response, Params};
 use open_runo_poem_compat::{handler_fn, post, Handler, MethodRouter, Request, Response};
 use std::collections::HashMap;
 
-pub const PREFIX: &str = "/aruaru_llm.v1.Llm/";
+pub const PREFIX: &str = "/aruaru_llm.Llm/";
 /// 引数だけの呼び出し(以前の GET)の本文の上限。
 const QUERY_BODY_MAX: usize = 64 * 1024;
 
@@ -210,4 +210,14 @@ pub fn cx_get(h: Handler, path_param: Option<&'static str>) -> MethodRouter {
 /// `/v1/ocr/prepare` → `OcrPrepare` のように、旧パスから Connect のメソッド名を作る。
 pub fn path(method: &str) -> String {
     format!("{PREFIX}{method}")
+}
+
+#[cfg(test)]
+mod versionless_tests {
+    /// 版つき(`.v1`)は即削除済み。経路は版なしだけで作られる。
+    #[test]
+    fn path_is_versionless_only() {
+        assert_eq!(super::path("Generate"), "/aruaru_llm.Llm/Generate");
+        assert!(!super::PREFIX.contains(".v1"));
+    }
 }

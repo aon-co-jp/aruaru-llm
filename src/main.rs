@@ -2169,7 +2169,7 @@ struct OcrFontRequest {
     name: String,
 }
 
-/// `POST /aruaru_llm.v1.Llm/OcrFont` — 書体フォントを返す(必要な時に取得してキャッシュ)。
+/// `POST /aruaru_llm.Llm/OcrFont` — 書体フォントを返す(必要な時に取得してキャッシュ)。
 /// アプリは PDF にフォントを埋め込むために使う(OFL ライセンスのフォントのみ)。
 /// 本文は JSON(`data_base64` に TTF のバイト列、`sha256` は復号後のバイト列の16進)。
 async fn ocr_font(req: Request) -> Response {

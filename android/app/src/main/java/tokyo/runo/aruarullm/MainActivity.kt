@@ -134,7 +134,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun sendChatMessage(serverUrl: String, message: String): String {
         return try {
-            val url = URL("$serverUrl/aruaru_llm.v1.Llm/Chat")
+            val url = URL("$serverUrl/aruaru_llm.Llm/Chat")
             val conn = url.openConnection() as HttpURLConnection
             conn.requestMethod = "POST"
             conn.doOutput = true
