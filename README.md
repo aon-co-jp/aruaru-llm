@@ -1183,3 +1183,8 @@ English: Selects the Qwen load precision. Unset = f32 (as before), `auto` = pick
 ## 2026-11-21 追記: KVキャッシュを実際にINT8で保持
 - `QWEN_KV_INT8=1` で、KVキャッシュを1ヘッド1トークンごとのスケール付きINT8として**実際に保持**するようにした(`open-cuda` 2ba4b5f)。Qwen2.5-1.5Bで迷い度は7.079→7.159(約+1%)、別の文では12.1→11.8(誤差の範囲)。KVのメモリはf32の約1/4(head_dim 64の試験で3倍以上の縮小を確認)。
 - 未了: `ARUARU_LLM_PRECISION=auto` を実サーバーで通して確認すること。翻訳はAIが作成し、ネイティブ話者による確認は未了。
+
+
+## 2026-11-26 x-tenant と呼び出し側のConnect化 / x-tenant and Connect callers
+**日本語**: 呼び出し側の `x-tenant` 対応: open-koumuten(`fbc0487`)・sftp-git(`aa38af1`)・open-cg-cad(`17d6eda`、本番反映済み)。aruaru-jobs は GitHub main と VPS とも既に Connect 化済み(以前の記録を訂正)。本番 `AdmissionStats` で open-english・realdata-pro・aruaru-search・`x-forwarded-host` 由来・`anonymous` がサイト別に計上されることを確認済み。**未確認**: 新版(open-english・open-cg-cad)の実トラフィックでの計上、前面 open-web-server が `x-forwarded-host` を付けるか、上限値(2/32/8)の調整。
+**English**: Callers now send `x-tenant`: open-koumuten (`fbc0487`), sftp-git (`aa38af1`), open-cg-cad (`17d6eda`, deployed). aruaru-jobs was already on Connect in GitHub main and on the VPS (earlier note corrected). Production `AdmissionStats` shows per-site counts for open-english, realdata-pro, aruaru-search, forwarded-host and `anonymous`. **Unverified**: real-traffic counting from the new open-english / open-cg-cad builds, whether the front open-web-server sets `x-forwarded-host`, and tuning the limits (2/32/8).
