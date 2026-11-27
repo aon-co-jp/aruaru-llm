@@ -170,16 +170,16 @@ Japanese and English are always the newest. Other languages are not translated e
 
 ## PORTING.md
 
-- 日本語 / ja: 2026-11-26 (latest)
-- English / en: 2026-11-20 (older than 2026-11-26)
-- 简体中文 / zh-Hans: 2026-11-19 (older than 2026-11-26)
-- 繁體中文 / zh-Hant: 2026-11-19 (older than 2026-11-26)
-- 한국어 / ko: 2026-11-19 (older than 2026-11-26)
-- Deutsch / de: 2026-11-19 (older than 2026-11-26)
-- Français / fr: 2026-11-19 (older than 2026-11-26)
-- Español / es: 2026-11-19 (older than 2026-11-26)
-- Português / pt: 2026-11-19 (older than 2026-11-26)
-- Русский / ru: 2026-11-19 (older than 2026-11-26)
+- 日本語 / ja: 2026-11-27 (latest)
+- English / en: 2026-11-20 (older than 2026-11-27)
+- 简体中文 / zh-Hans: 2026-11-19 (older than 2026-11-27)
+- 繁體中文 / zh-Hant: 2026-11-19 (older than 2026-11-27)
+- 한국어 / ko: 2026-11-19 (older than 2026-11-27)
+- Deutsch / de: 2026-11-19 (older than 2026-11-27)
+- Français / fr: 2026-11-19 (older than 2026-11-27)
+- Español / es: 2026-11-19 (older than 2026-11-27)
+- Português / pt: 2026-11-19 (older than 2026-11-27)
+- Русский / ru: 2026-11-19 (older than 2026-11-27)
 - العربية / ar: not yet / まだ
 - فارسی / fa: not yet / まだ
 
