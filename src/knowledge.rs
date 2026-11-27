@@ -208,7 +208,7 @@ fn sync_urls() -> Vec<String> {
         Ok(v) if !v.trim().is_empty() => v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
         _ => vec![
             // 公開WEB(Connect形式。REST全廃後の経路)→GitHub(改名前後の両リポジトリ)の順
-            "https://maid-cafe.tokyo/openenglish.v1.Knowledge/Export".to_string(),
+            "https://maid-cafe.tokyo/openenglish.Knowledge/Export".to_string(),
             "https://raw.githubusercontent.com/aon-co-jp/open-english/master/data/knowledge/knowledge.json".to_string(),
             "https://raw.githubusercontent.com/aon-co-jp/maid-cafe-english/master/data/knowledge/knowledge.json".to_string(),
         ],
