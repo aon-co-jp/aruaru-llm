@@ -66,6 +66,44 @@ pub fn split_sentences(text: &str) -> Vec<String> {
     out
 }
 
+/// 短い決まり文句(あいさつ)は M2M100 が誤訳しやすい(実測: 418M で "Good morning" → 「こんばんは」)。
+/// 完全一致(大文字小文字・末尾の句読点は無視)したときだけ辞書の訳を使い、それ以外はモデルに任せる。
+const FIXED: &[(&str, &str, &str, &str)] = &[
+    ("en", "ja", "good morning", "おはようございます"),
+    ("en", "ja", "good afternoon", "こんにちは"),
+    ("en", "ja", "good evening", "こんばんは"),
+    ("en", "ja", "good night", "おやすみなさい"),
+    ("en", "ja", "hello", "こんにちは"),
+    ("en", "ja", "thank you", "ありがとうございます"),
+    ("en", "ja", "thanks", "ありがとう"),
+    ("en", "ja", "goodbye", "さようなら"),
+    ("en", "ja", "nice to meet you", "はじめまして"),
+    ("ja", "en", "おはようございます", "Good morning"),
+    ("ja", "en", "おはよう", "Good morning"),
+    ("ja", "en", "こんにちは", "Hello"),
+    ("ja", "en", "こんばんは", "Good evening"),
+    ("ja", "en", "おやすみなさい", "Good night"),
+    ("ja", "en", "ありがとうございます", "Thank you"),
+    ("ja", "en", "ありがとう", "Thank you"),
+    ("ja", "en", "さようなら", "Goodbye"),
+    ("ja", "en", "はじめまして", "Nice to meet you"),
+];
+
+/// 文1つを決まり文句の辞書で引く。末尾の句読点は訳の後ろへそのまま付け直す。
+pub fn fixed_phrase(source: &str, target: &str, sentence: &str) -> Option<String> {
+    let t = sentence.trim();
+    let core = t.trim_end_matches(|c: char| matches!(c, '.' | '!' | '?' | '。' | '！' | '？'));
+    let tail = &t[core.len()..];
+    let key = core.trim().to_lowercase();
+    let (_, _, _, out) = FIXED.iter().find(|(s, g, k, _)| *s == source && *g == target && *k == key)?;
+    let tail = if target == "ja" {
+        tail.replace('.', "。").replace('!', "！").replace('?', "？")
+    } else {
+        tail.replace('。', ".").replace('！', "!").replace('？', "?")
+    };
+    Some(format!("{out}{tail}"))
+}
+
 struct M2mTokenizer {
     spm: SentencePieceProcessor,
 }
@@ -105,14 +143,21 @@ fn translate(tr: &Mutex<Translator<M2mTokenizer>>, v: &serde_json::Value) -> Res
     if sentences.is_empty() {
         return Err(anyhow!("empty translation"));
     }
-    let inputs: Vec<String> = sentences.iter().map(|t| wrap_source(source, t)).collect();
-    let prefixes: Vec<Vec<String>> = sentences.iter().map(|_| vec![lang_token(target)]).collect();
-    let out = tr
-        .lock()
-        .map_err(|_| anyhow!("model lock poisoned"))?
-        .translate_batch_with_target_prefix(&inputs, &prefixes, &opts, None)?;
+    let mut results: Vec<Option<String>> = sentences.iter().map(|t| fixed_phrase(source, target, t)).collect();
+    let todo: Vec<usize> = (0..sentences.len()).filter(|&i| results[i].is_none()).collect();
+    if !todo.is_empty() {
+        let inputs: Vec<String> = todo.iter().map(|&i| wrap_source(source, &sentences[i])).collect();
+        let prefixes: Vec<Vec<String>> = todo.iter().map(|_| vec![lang_token(target)]).collect();
+        let out = tr
+            .lock()
+            .map_err(|_| anyhow!("model lock poisoned"))?
+            .translate_batch_with_target_prefix(&inputs, &prefixes, &opts, None)?;
+        for (&i, (s, _)) in todo.iter().zip(out) {
+            results[i] = Some(s);
+        }
+    }
     let sep = if matches!(target, "ja" | "zh") { "" } else { " " };
-    let joined = out.into_iter().map(|(s, _)| s.trim().to_string()).filter(|s| !s.is_empty()).collect::<Vec<_>>().join(sep);
+    let joined = results.into_iter().flatten().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect::<Vec<_>>().join(sep);
     if joined.is_empty() { Err(anyhow!("empty translation")) } else { Ok(joined) }
 }
 
@@ -177,6 +222,15 @@ mod tests {
         assert_eq!(split_sentences("今日は晴れ。散歩しよう！"), vec!["今日は晴れ。", "散歩しよう！"]);
         assert_eq!(split_sentences("Pi is 3.14 ok"), vec!["Pi is 3.14 ok"]);
         assert!(split_sentences("  \n ").is_empty());
+    }
+
+    #[test]
+    fn fixed_phrases_override_known_mistranslations() {
+        assert_eq!(fixed_phrase("en", "ja", "Good morning").as_deref(), Some("おはようございます"));
+        assert_eq!(fixed_phrase("en", "ja", "good morning!").as_deref(), Some("おはようございます！"));
+        assert_eq!(fixed_phrase("ja", "en", "おはようございます。").as_deref(), Some("Good morning."));
+        assert_eq!(fixed_phrase("en", "ja", "Good morning, everyone"), None);
+        assert_eq!(fixed_phrase("en", "fr", "Good morning"), None);
     }
 
     #[test]
