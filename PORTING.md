@@ -1075,3 +1075,7 @@ Heavy Connect calls (Generate*/Translate/Transcribe/Ocr*) pass `src/admission.rs
 ## 2026-11-27 翻訳: あいさつの誤訳対策 / Translation: fixed greetings
 **日本語**: M2M100 418M は短いあいさつを誤訳する(実測: 「Good morning」→「こんばんは」、1.2B でも「こんばんは朝」)。`translate-worker` に、決まったあいさつ(英⇔日、大文字小文字と末尾の句読点は無視して完全一致)だけ辞書で訳し、それ以外はモデルに任せる処理を追加(`65f52b8`、試験5件成功)。本番(`aruaru-translate.service`)へ入れ替え、「Good morning」→「おはようございます」を実測。旧版は `/root/translate-worker/translate-worker.before-fixed-20261127`。未了=辞書にない短文の質、他言語の組み合わせ。
 **English**: M2M100 418M mistranslates short greetings (measured: "Good morning" -> "こんばんは"; 1.2B gives "こんばんは朝"). `translate-worker` now looks up fixed greetings (en<->ja, exact match ignoring case and trailing punctuation) and leaves everything else to the model (`65f52b8`, 5 tests pass). Deployed to production (`aruaru-translate.service`); "Good morning" now returns "おはようございます". Old binary: `/root/translate-worker/translate-worker.before-fixed-20261127`. Open: quality of other short phrases, other language pairs.
+
+## 2026-11-28 url 2.5.9 (RUSTSEC-2026-0592)
+**日本語**: Cargo.lock の url を 2.5.9 に更新(API変更なし)。cargo check 成功。VPSは再ビルド未実施。
+**English**: Bumped url to 2.5.9 in Cargo.lock (no API change). cargo check passes. VPS not rebuilt.
